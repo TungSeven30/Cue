@@ -38,6 +38,7 @@ struct TranscriptionService {
         return try await withTaskCancellationHandler {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.environment = ProcessEnvironment.withToolPaths()
             process.arguments = [
                 "python3",
                 scriptURL.path,
@@ -83,8 +84,16 @@ struct TranscriptionService {
             }
 
             guard terminationStatus == 0 else {
+                // stderr carries both JSON progress events and the real error
+                // text; drop the progress lines so the message is legible.
+                let errorText = stderrText
+                    .split(separator: "\n", omittingEmptySubsequences: true)
+                    .map(String.init)
+                    .filter { !$0.hasPrefix("{") }
+                    .joined(separator: "\n")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
                 throw TranscriptionServiceError.pythonFailed(
-                    stderrText.isEmpty ? "The Python helper exited with status \(terminationStatus)." : stderrText
+                    errorText.isEmpty ? "The Python helper exited with status \(terminationStatus)." : errorText
                 )
             }
 

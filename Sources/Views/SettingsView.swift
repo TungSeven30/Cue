@@ -5,27 +5,33 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("Whisper") {
+            Section {
                 Picker("Backend", selection: $settings.whisperBackend) {
                     ForEach(WhisperBackend.allCases) { backend in
                         Text(backend.label).tag(backend)
                     }
                 }
-                TextField("Source language (auto, ja, zh, ko...)", text: $settings.sourceLanguage)
-                TextField("Preferred Whisper model", text: $settings.whisperModel)
+                TextField("Source language", text: $settings.sourceLanguage)
+                TextField("Preferred model", text: $settings.whisperModel)
+            } header: {
+                Label("Transcription", systemImage: "waveform")
+            } footer: {
+                Text("Use a language code like `ja`, `zh`, or `ko`, or `auto` to detect it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
-            Section("Translation") {
+            Section {
                 TextField("OpenAI model", text: $settings.openAIModel)
                 SecureField("OpenAI API key", text: $settings.openAIAPIKey)
-            }
-
-            Section("Notes") {
-                Text("Recommended setup for Apple Silicon is ffmpeg plus the `mlx-whisper` Python package. Translation uses the OpenAI Responses API with your configured model.")
+            } header: {
+                Label("Translation", systemImage: "character.bubble")
+            } footer: {
+                Text("The API key is stored securely in your macOS Keychain.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-        .padding()
     }
 }

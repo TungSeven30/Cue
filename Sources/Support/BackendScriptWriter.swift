@@ -114,10 +114,23 @@ def main() -> int:
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
+    input_path = Path(args.input_file)
+    if not input_path.exists():
+        print(f"File not found: {input_path}", file=sys.stderr)
+        return 1
+
     with tempfile.TemporaryDirectory(prefix="whisperdesk_") as temp_dir:
         emit("preflight", "Preparing transcription helper.", 0.02)
         audio_path = Path(temp_dir) / "audio.wav"
-        extract_audio(Path(args.input_file), audio_path)
+        try:
+            extract_audio(input_path, audio_path)
+        except FileNotFoundError:
+            print("ffmpeg was not found. Install ffmpeg and make sure it is on your PATH.", file=sys.stderr)
+            return 1
+        except Exception as exc:
+            print(f"Could not extract audio with ffmpeg: {exc}", file=sys.stderr)
+            return 1
+
         errors = []
         ordered_backends = ["mlx-whisper", "faster-whisper"] if args.backend == "auto" else [args.backend]
 
@@ -132,12 +145,16 @@ def main() -> int:
                 json.dump({"backend": used_backend, "segments": segments}, sys.stdout, ensure_ascii=False)
                 sys.stdout.write("\n")
                 return 0
+            except ModuleNotFoundError as exc:
+                errors.append(f"{backend} is not installed (pip install {backend}).")
             except Exception as exc:  # pragma: no cover
-                errors.append(f"{backend}: {exc}")
+                errors.append(f"{backend} failed: {exc}")
 
+    label = " or ".join(ordered_backends)
     print(
-        "Unable to transcribe. Install ffmpeg plus either mlx-whisper or faster-whisper.\n"
-        + "\n".join(errors),
+        f"Transcription failed using {label}.\n"
+        + "\n".join(errors)
+        + "\nInstall mlx-whisper (recommended on Apple Silicon) or faster-whisper, then try again.",
         file=sys.stderr,
     )
     return 1

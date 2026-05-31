@@ -83,6 +83,7 @@ private func runProcess(_ command: [String]) -> ProcessProbeResult {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: command[0])
     process.arguments = Array(command.dropFirst())
+    process.environment = ProcessEnvironment.withToolPaths()
 
     let outputPipe = Pipe()
     let errorPipe = Pipe()

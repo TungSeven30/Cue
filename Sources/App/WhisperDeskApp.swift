@@ -57,7 +57,7 @@ struct WhisperDeskApp: App {
 
         Settings {
             SettingsView(settings: model.settings)
-                .frame(width: 560, height: 420)
+                .frame(width: 480, height: 380)
         }
     }
 }

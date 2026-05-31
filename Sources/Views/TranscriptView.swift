@@ -1,45 +1,33 @@
 import SwiftUI
 
 struct TranscriptView: View {
-    let title: String
     let segments: [TranscriptionSegment]
     let warnings: [SubtitleQualityWarning]
     let onEdit: (TranscriptionSegment, String) -> Void
 
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text(title)
-                        .font(.headline)
-                    Spacer()
-                    Text(summary)
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("^[\(segments.count) segment](inflect: true)")
+                    .font(.callout.weight(.medium))
+                if !warnings.isEmpty {
+                    Label("^[\(warnings.count) warning](inflect: true)", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                 }
+                Spacer()
+            }
 
-                if segments.isEmpty {
-                    Text("Nothing here yet.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(segments) { segment in
-                            SegmentEditorRow(
-                                segment: segment,
-                                warnings: warningsBySegment[segment.id] ?? [],
-                                onEdit: onEdit
-                            )
-                        }
-                    }
+            LazyVStack(alignment: .leading, spacing: 8) {
+                ForEach(segments) { segment in
+                    SegmentEditorRow(
+                        segment: segment,
+                        warnings: warningsBySegment[segment.id] ?? [],
+                        onEdit: onEdit
+                    )
                 }
             }
         }
-    }
-
-    private var summary: String {
-        if warnings.isEmpty {
-            return "\(segments.count) segments"
-        }
-        return "\(segments.count) segments, \(warnings.count) warnings"
     }
 
     private var warningsBySegment: [Int: [SubtitleQualityWarning]] {
@@ -54,17 +42,24 @@ private struct SegmentEditorRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("#\(segment.id)")
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("\(segment.id)")
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 22)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.quaternary, in: Capsule())
+
+                Label("\(formatted(segment.start)) – \(formatted(segment.end))", systemImage: "clock")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
-                    .frame(width: 42, alignment: .leading)
-                Text("\(formatted(segment.start)) - \(formatted(segment.end))")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .labelStyle(.titleAndIcon)
+
                 Spacer()
+
                 if !warnings.isEmpty {
-                    Text(warnings.map(\.message).joined(separator: ", "))
+                    Text(warnings.map(\.message).joined(separator: " · "))
                         .font(.caption)
                         .foregroundStyle(.orange)
                         .lineLimit(1)
@@ -79,12 +74,16 @@ private struct SegmentEditorRow: View {
             )
             .font(.body)
             .scrollContentBackground(.hidden)
-            .frame(minHeight: 48)
-            .padding(6)
-            .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
+            .frame(minHeight: 46)
+            .padding(8)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.bottom, 6)
+        .padding(12)
+        .background(.background.secondary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(warnings.isEmpty ? Color.clear : Color.orange.opacity(0.4), lineWidth: 1)
+        )
     }
 
     private func formatted(_ seconds: Double) -> String {

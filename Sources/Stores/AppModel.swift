@@ -120,12 +120,27 @@ final class AppModel: ObservableObject {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
-            var job = TranscriptionJob(sourceURL: url, settings: settings)
-            job.log = "Selected \(url.path(percentEncoded: false)).\n"
-            jobs.insert(job, at: 0)
-            selectedJobID = job.id
-            persistJobs()
+            addVideo(url: url)
         }
+    }
+
+    /// Adds a video as a new job. Used by the file picker and drag-and-drop.
+    func addVideo(url: URL) {
+        guard !isBusy else { return }
+        var job = TranscriptionJob(sourceURL: url, settings: settings)
+        job.log = "Selected \(url.path(percentEncoded: false)).\n"
+        jobs.insert(job, at: 0)
+        selectedJobID = job.id
+        persistJobs()
+    }
+
+    func deleteJob(_ id: UUID) {
+        guard !isBusy else { return }
+        jobs.removeAll { $0.id == id }
+        if selectedJobID == id {
+            selectedJobID = jobs.first?.id
+        }
+        persistJobs()
     }
 
     func runDiagnostics() {

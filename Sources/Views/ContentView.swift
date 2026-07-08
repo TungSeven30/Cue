@@ -11,15 +11,21 @@ struct ContentView: View {
             DetailView(model: model)
                 .toolbar { toolbarContent }
         }
+        .sheet(isPresented: $model.isShowingExportSheet) {
+            ExportOptionsView(model: model)
+        }
     }
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
+            // The primary action shows its title so the workflow step is
+            // always readable, not guessed from an icon.
             Button {
                 model.performPrimaryAction()
             } label: {
                 Label(model.primaryActionTitle, systemImage: model.primaryActionSystemImage)
+                    .labelStyle(.titleAndIcon)
             }
             .disabled(!model.canPerformPrimaryAction)
             .help(model.primaryActionTitle)
@@ -39,40 +45,13 @@ struct ContentView: View {
             .disabled(!model.canTranscribe)
             .help("Run transcription again")
 
-            Menu {
-                Menu("Original Transcript") {
-                    exportFormatButtons { format in
-                        model.exportTranscript(format: format)
-                    }
-                }
-                .disabled(model.transcriptSegments.isEmpty)
-
-                Menu(model.translationExportTitle) {
-                    exportFormatButtons { format in
-                        model.exportTranslation(format: format)
-                    }
-                }
-                .disabled(model.translatedSegments.isEmpty)
-
-                Menu(model.bilingualExportTitle) {
-                    exportFormatButtons { format in
-                        model.exportBilingual(format: format)
-                    }
-                }
-                .disabled(model.translatedSegments.isEmpty)
-
-                Divider()
-
-                Button("Export All…") { model.exportAll() }
-                    .disabled(model.transcriptSegments.isEmpty)
-                Button("Export Log…") { model.exportLog() }
-                    .disabled(model.currentJob == nil)
+            Button {
+                model.isShowingExportSheet = true
             } label: {
                 Label("Export", systemImage: "square.and.arrow.up")
             }
-            .menuIndicator(.hidden)
             .disabled(model.transcriptSegments.isEmpty)
-            .help("Export subtitles and logs")
+            .help("Choose documents, formats, and file name to export")
 
             if model.canCancel {
                 Button(role: .destructive) {
@@ -82,13 +61,6 @@ struct ContentView: View {
                 }
                 .help("Cancel the running job")
             }
-        }
-    }
-
-    @ViewBuilder
-    private func exportFormatButtons(action: @escaping (SubtitleExportFormat) -> Void) -> some View {
-        ForEach(SubtitleExportFormat.allCases) { format in
-            Button(format.label) { action(format) }
         }
     }
 }

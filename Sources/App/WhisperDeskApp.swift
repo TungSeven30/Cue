@@ -59,9 +59,10 @@ struct WhisperDeskApp: App {
                 }
                 .disabled(model.translatedSegments.isEmpty)
 
-                Button("Export All...") {
-                    model.exportAll()
+                Button("Export...") {
+                    model.isShowingExportSheet = true
                 }
+                .keyboardShortcut("e")
                 .disabled(model.transcriptSegments.isEmpty)
 
                 Button("Export Log...") {

@@ -10,6 +10,7 @@ final class AppModel: ObservableObject {
     @Published var selectedJobID: UUID?
     @Published var diagnostics: [EnvironmentDiagnostic] = []
     @Published var isRunningDiagnostics = false
+    @Published var isShowingExportSheet = false
 
     private let transcriptionService = TranscriptionService()
     private let translationService = TranslationService()
@@ -110,7 +111,7 @@ final class AppModel: ObservableObject {
         if currentJob == nil { return "Open Video" }
         if transcriptSegments.isEmpty { return "Transcribe" }
         if translatedSegments.isEmpty { return "Translate to \(translationTargetLabel)" }
-        return "Export All"
+        return "Export…"
     }
 
     var primaryActionSystemImage: String {
@@ -174,7 +175,7 @@ final class AppModel: ObservableObject {
         } else if translatedSegments.isEmpty {
             startTranslation()
         } else {
-            exportAll()
+            isShowingExportSheet = true
         }
     }
 
@@ -356,81 +357,83 @@ final class AppModel: ObservableObject {
 
     func exportBilingual(format: SubtitleExportFormat = .srt) {
         guard !transcriptSegments.isEmpty, !translatedSegments.isEmpty else { return }
-        let merged = transcriptSegments.map { source in
-            let translated = translatedSegments.first { $0.id == source.id }?.text ?? ""
-            return TranscriptionSegment(id: source.id, start: source.start, end: source.end, text: "\(source.text)\n\(translated)")
-        }
         export(
-            segments: merged,
+            segments: bilingualSegments(),
             format: format,
             suggestedSuffix: ".bilingual.\(languageSuffix(translationTargetLabel)).\(format.fileExtension)"
         )
     }
 
-    func exportAll() {
-        guard let selectedVideoURL, !transcriptSegments.isEmpty else { return }
+    var defaultExportBaseName: String {
+        selectedVideoURL?.deletingPathExtension().lastPathComponent ?? "subtitles"
+    }
+
+    /// Writes exactly the documents and formats picked in the export sheet.
+    /// A single document in a single format keeps the plain base name; more
+    /// than one file adds identifying suffixes.
+    func performExport(_ options: ExportOptions) {
+        var documents: [(suffix: String, segments: [TranscriptionSegment])] = []
+        if options.includeOriginal && !transcriptSegments.isEmpty {
+            documents.append(("original", transcriptSegments))
+        }
+        let target = languageSuffix(translationTargetLabel)
+        if options.includeTranslation && !translatedSegments.isEmpty {
+            documents.append(("translated.\(target)", translatedSegments))
+        }
+        if options.includeBilingual && !transcriptSegments.isEmpty && !translatedSegments.isEmpty {
+            documents.append(("bilingual.\(target)", bilingualSegments()))
+        }
+
+        let fileCount = documents.count * options.formats.count + (options.includeLog ? 1 : 0)
+        guard fileCount > 0 else { return }
+        let useSuffixes = documents.count * options.formats.count > 1 || options.includeLog
+
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Export"
+        panel.message = "Choose a folder for \(fileCount) exported file(s)."
         panel.directoryURL = lastExportDirectoryURL()
 
-        if panel.runModal() == .OK, let folder = panel.url {
-            settings.lastExportDirectory = folder.path
-            let base = selectedVideoURL.deletingPathExtension().lastPathComponent
-            do {
-                try SubtitleWriter.writeSRT(
-                    segments: transcriptSegments,
-                    to: folder.appendingPathComponent("\(base).original.srt")
-                )
-                try SubtitleWriter.writeText(
-                    segments: transcriptSegments,
-                    to: folder.appendingPathComponent("\(base).original.txt")
-                )
-                try SubtitleWriter.writeMarkdown(
-                    segments: transcriptSegments,
-                    to: folder.appendingPathComponent("\(base).original.md")
-                )
-                try SubtitleWriter.writeJSON(
-                    segments: transcriptSegments,
-                    to: folder.appendingPathComponent("\(base).original.json")
-                )
-
-                if !translatedSegments.isEmpty {
-                    let target = languageSuffix(translationTargetLabel)
-                    try SubtitleWriter.writeSRT(
-                        segments: translatedSegments,
-                        to: folder.appendingPathComponent("\(base).translated.\(target).srt")
-                    )
-                    try SubtitleWriter.writeText(
-                        segments: translatedSegments,
-                        to: folder.appendingPathComponent("\(base).translated.\(target).txt")
-                    )
-                    try SubtitleWriter.writeMarkdown(
-                        segments: translatedSegments,
-                        to: folder.appendingPathComponent("\(base).translated.\(target).md")
-                    )
-                    try SubtitleWriter.writeJSON(
-                        segments: translatedSegments,
-                        to: folder.appendingPathComponent("\(base).translated.\(target).json")
-                    )
-                    let bilingual = transcriptSegments.map { source in
-                        let translated = translatedSegments.first { $0.id == source.id }?.text ?? ""
-                        return TranscriptionSegment(id: source.id, start: source.start, end: source.end, text: "\(source.text)\n\(translated)")
-                    }
-                    try SubtitleWriter.writeSRT(
-                        segments: bilingual,
-                        to: folder.appendingPathComponent("\(base).bilingual.\(target).srt")
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        settings.lastExportDirectory = folder.path
+        do {
+            for document in documents {
+                for format in options.formats {
+                    let name = useSuffixes
+                        ? "\(options.baseName).\(document.suffix).\(format.fileExtension)"
+                        : "\(options.baseName).\(format.fileExtension)"
+                    try SubtitleWriter.write(
+                        segments: document.segments,
+                        format: format,
+                        to: folder.appendingPathComponent(name)
                     )
                 }
-
-                try log.write(to: folder.appendingPathComponent("\(base).log.txt"), atomically: true, encoding: .utf8)
-                appendLog("Exported all artifacts to \(folder.path(percentEncoded: false)).")
-            } catch {
-                appendLog("Export all failed: \(error.localizedDescription)")
             }
+            if options.includeLog {
+                try log.write(
+                    to: folder.appendingPathComponent("\(options.baseName).log.txt"),
+                    atomically: true,
+                    encoding: .utf8
+                )
+            }
+            appendLog("Exported \(fileCount) file(s) to \(folder.path(percentEncoded: false)).")
+        } catch {
+            appendLog("Export failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func bilingualSegments() -> [TranscriptionSegment] {
+        let translatedByID = Dictionary(uniqueKeysWithValues: translatedSegments.map { ($0.id, $0.text) })
+        return transcriptSegments.map { source in
+            TranscriptionSegment(
+                id: source.id,
+                start: source.start,
+                end: source.end,
+                text: "\(source.text)\n\(translatedByID[source.id] ?? "")"
+            )
         }
     }
 

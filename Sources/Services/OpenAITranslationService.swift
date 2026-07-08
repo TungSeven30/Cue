@@ -4,6 +4,8 @@ enum TranslationServiceError: LocalizedError {
     case missingAPIKey
     case invalidResponse
     case apiError(String)
+    /// An error retrying cannot fix (bad key, unknown model, malformed request).
+    case fatalAPIError(String)
     case validationFailed(String)
 
     var errorDescription: String? {
@@ -12,12 +14,20 @@ enum TranslationServiceError: LocalizedError {
             return "Add an OpenAI API key in Settings before translating."
         case .invalidResponse:
             return "The translation response could not be parsed."
-        case .apiError(let message):
+        case .apiError(let message), .fatalAPIError(let message):
             return message
         case .validationFailed(let message):
             return message
         }
     }
+}
+
+/// A previously translated subtitle pair passed along with a chunk so the
+/// model keeps terminology, names, tone, and pronouns consistent across
+/// chunk boundaries.
+private struct TranslationContextPair: Sendable {
+    let source: String
+    let translation: String
 }
 
 private struct TranslationChunkResult {
@@ -92,6 +102,7 @@ struct OpenAITranslationService {
             let results = try await withThrowingTaskGroup(of: TranslationChunkResult.self) { group in
                 for (index, chunk) in indexedChunks {
                     let chunkNumber = index + 1
+                    let context = Self.contextPairs(before: chunk, in: segments, translatedByID: translatedByID)
                     group.addTask {
                         let translatedChunk = try await translateChunkWithRetry(
                             chunk,
@@ -101,7 +112,8 @@ struct OpenAITranslationService {
                             targetLanguage: targetLanguage.isEmpty ? "English" : targetLanguage,
                             prompt: prompt,
                             apiKey: apiKey,
-                            model: model
+                            model: model,
+                            context: context
                         )
                         return TranslationChunkResult(chunkNumber: chunkNumber, segments: translatedChunk)
                     }
@@ -166,7 +178,8 @@ struct OpenAITranslationService {
         targetLanguage: String,
         prompt: String,
         apiKey: String,
-        model: String
+        model: String,
+        context: [TranslationContextPair]
     ) async throws -> [TranslatedSegment] {
         var lastError: Error?
         for attempt in 1...3 {
@@ -179,9 +192,15 @@ struct OpenAITranslationService {
                     targetLanguage: targetLanguage,
                     prompt: prompt,
                     apiKey: apiKey,
-                    model: model
+                    model: model,
+                    context: context
                 )
             } catch {
+                // Retrying cannot fix a rejected key or unknown model; surface
+                // it immediately instead of burning the remaining attempts.
+                if case TranslationServiceError.fatalAPIError = error {
+                    throw error
+                }
                 lastError = error
                 if Task.isCancelled {
                     throw CancellationError()
@@ -191,6 +210,37 @@ struct OpenAITranslationService {
                 }
             }
         }
+
+        // A model that persistently drops or invents segment ids usually
+        // succeeds on smaller batches, so split the chunk in half rather
+        // than failing the whole run over one bad response.
+        if segments.count >= 8, let error = lastError, case TranslationServiceError.validationFailed = error {
+            let midpoint = segments.count / 2
+            let firstHalf = try await translateChunkWithRetry(
+                Array(segments[..<midpoint]),
+                chunkNumber: chunkNumber,
+                totalChunks: totalChunks,
+                sourceLanguage: sourceLanguage,
+                targetLanguage: targetLanguage,
+                prompt: prompt,
+                apiKey: apiKey,
+                model: model,
+                context: context
+            )
+            let secondHalf = try await translateChunkWithRetry(
+                Array(segments[midpoint...]),
+                chunkNumber: chunkNumber,
+                totalChunks: totalChunks,
+                sourceLanguage: sourceLanguage,
+                targetLanguage: targetLanguage,
+                prompt: prompt,
+                apiKey: apiKey,
+                model: model,
+                context: context
+            )
+            return firstHalf + secondHalf
+        }
+
         throw lastError ?? TranslationServiceError.invalidResponse
     }
 
@@ -202,7 +252,8 @@ struct OpenAITranslationService {
         targetLanguage: String,
         prompt: String,
         apiKey: String,
-        model: String
+        model: String,
+        context: [TranslationContextPair]
     ) async throws -> [TranslatedSegment] {
         let systemPrompt = """
         \(prompt)
@@ -211,8 +262,26 @@ struct OpenAITranslationService {
         Target language: \(targetLanguage).
         Preserve segment count, ordering, ids, and timing alignment.
         Keep lines concise for subtitles.
+        When earlier translated context is provided, keep terminology, names, tone, speaker register, and pronouns consistent with it. Never re-output context lines.
         This is chunk \(chunkNumber) of \(totalChunks); do not mention chunking.
         Return JSON only in the shape {"segments":[{"id":1,"text":"..."}]}.
+        """
+
+        var userText = ""
+        if !context.isEmpty {
+            let contextLines = context
+                .map { "\($0.source) => \($0.translation)" }
+                .joined(separator: "\n")
+            userText += """
+            Already translated context from the preceding subtitles (for consistency only; do not include in the output):
+            \(contextLines)
+
+
+            """
+        }
+        userText += """
+        Segments:
+        \(String(decoding: try JSONEncoder().encode(segments), as: UTF8.self))
         """
 
         let requestBody = TranslationRequest(
@@ -232,15 +301,20 @@ struct OpenAITranslationService {
                     content: [
                         .init(
                             type: "input_text",
-                            text: """
-                            Segments:
-                            \(String(decoding: try JSONEncoder().encode(segments), as: UTF8.self))
-                            """
+                            text: userText
                         )
                     ]
                 )
             ],
-            text: .init(verbosity: "low")
+            text: .init(
+                verbosity: "low",
+                format: .init(
+                    type: "json_schema",
+                    name: "subtitle_translation",
+                    strict: true,
+                    schema: TranslationSchema.segments
+                )
+            )
         )
 
         var request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
@@ -255,9 +329,7 @@ struct OpenAITranslationService {
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {
-            throw TranslationServiceError.apiError(
-                Self.describeAPIError(data: data, statusCode: httpResponse.statusCode, model: model)
-            )
+            throw Self.classifyAPIError(data: data, statusCode: httpResponse.statusCode, model: model)
         }
 
         let decoded = try JSONDecoder().decode(OpenAIResponseEnvelope.self, from: data)
@@ -276,24 +348,52 @@ struct OpenAITranslationService {
     }
 
     /// Turns an OpenAI error response into a single actionable sentence
-    /// instead of dumping raw JSON into the run log.
-    private static func describeAPIError(data: Data, statusCode: Int, model: String) -> String {
+    /// instead of dumping raw JSON into the run log, and marks errors that
+    /// retrying cannot fix as fatal so the retry loop stops immediately.
+    private static func classifyAPIError(data: Data, statusCode: Int, model: String) -> TranslationServiceError {
         let parsed = try? JSONDecoder().decode(OpenAIErrorEnvelope.self, from: data)
         let message = parsed?.error.message
 
-        if statusCode == 401 {
-            return "OpenAI rejected the API key (401). Check the key in Settings."
+        if statusCode == 401 || statusCode == 403 {
+            return .fatalAPIError("OpenAI rejected the API key (\(statusCode)). Check the key in Settings.")
         }
         if statusCode == 429 {
-            return message ?? "OpenAI rate limit or quota exceeded (429). Try again later or check billing."
+            return .apiError(message ?? "OpenAI rate limit or quota exceeded (429). Try again later or check billing.")
         }
         if let code = parsed?.error.code, code == "model_not_found" || statusCode == 404 {
-            return "OpenAI does not recognize the model \"\(model)\". Set a valid model in Settings."
+            return .fatalAPIError("OpenAI does not recognize the model \"\(model)\". Set a valid model in Settings.")
+        }
+        if statusCode == 400 {
+            return .fatalAPIError("OpenAI rejected the request (400): \(message ?? "invalid request"). Check the model in Settings supports structured JSON output.")
         }
         if let message {
-            return "OpenAI error (\(statusCode)): \(message)"
+            return .apiError("OpenAI error (\(statusCode)): \(message)")
         }
-        return "OpenAI returned status \(statusCode)."
+        return .apiError("OpenAI returned status \(statusCode).")
+    }
+
+    /// Collects the most recent already-translated pairs that precede a chunk,
+    /// so the model can keep names, terminology, and tone consistent across
+    /// chunk boundaries.
+    private static func contextPairs(
+        before chunk: [TranscriptionSegment],
+        in segments: [TranscriptionSegment],
+        translatedByID: [Int: String],
+        limit: Int = 8
+    ) -> [TranslationContextPair] {
+        guard let firstID = chunk.first?.id,
+              let chunkStart = segments.firstIndex(where: { $0.id == firstID })
+        else {
+            return []
+        }
+        return Array(
+            segments[..<chunkStart]
+                .compactMap { segment -> TranslationContextPair? in
+                    guard let translation = translatedByID[segment.id] else { return nil }
+                    return TranslationContextPair(source: segment.text, translation: translation)
+                }
+                .suffix(limit)
+        )
     }
 
     private func validate(_ translated: [TranslatedSegment], expected segments: [TranscriptionSegment]) throws {
@@ -364,6 +464,57 @@ private struct TranslationContent: Encodable {
 
 private struct TranslationTextConfig: Encodable {
     let verbosity: String
+    let format: TranslationTextFormat
+}
+
+private struct TranslationTextFormat: Encodable {
+    let type: String
+    let name: String
+    let strict: Bool
+    let schema: JSONValue
+}
+
+/// Minimal JSON tree that can be encoded with JSONEncoder, used to embed the
+/// structured-output schema in the request body.
+private enum JSONValue: Encodable {
+    case string(String)
+    case bool(Bool)
+    case object([String: JSONValue])
+    case array([JSONValue])
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value): try container.encode(value)
+        case .bool(let value): try container.encode(value)
+        case .object(let value): try container.encode(value)
+        case .array(let value): try container.encode(value)
+        }
+    }
+}
+
+/// Structured-output schema so the Responses API is guaranteed to return
+/// exactly {"segments":[{"id":Int,"text":String}]} — no code fences, no prose.
+private enum TranslationSchema {
+    static let segments: JSONValue = .object([
+        "type": .string("object"),
+        "properties": .object([
+            "segments": .object([
+                "type": .string("array"),
+                "items": .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "id": .object(["type": .string("integer")]),
+                        "text": .object(["type": .string("string")])
+                    ]),
+                    "required": .array([.string("id"), .string("text")]),
+                    "additionalProperties": .bool(false)
+                ])
+            ])
+        ]),
+        "required": .array([.string("segments")]),
+        "additionalProperties": .bool(false)
+    ])
 }
 
 private struct OpenAIResponseEnvelope: Decodable {

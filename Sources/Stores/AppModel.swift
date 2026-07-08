@@ -15,6 +15,9 @@ final class AppModel: ObservableObject {
     /// Set when the user cancels while jobs are still queued; Start All resumes.
     @Published var queuePaused = false
     private var didProcessQueuedJob = false
+    private var dirtyJobIDs: Set<UUID> = []
+    /// Keeps very chatty jobs from growing without bound in memory and on disk.
+    private static let maxLogLength = 200_000
 
     private let transcriptionService = TranscriptionService()
     private let translationService = TranslationService()
@@ -212,7 +215,9 @@ final class AppModel: ObservableObject {
         guard !newJobs.isEmpty else { return }
         jobs.insert(contentsOf: newJobs, at: 0)
         selectedJobID = newJobs.first?.id
-        persistJobs()
+        for job in newJobs {
+            persistJob(job.id)
+        }
         if settings.autoStartAddedJobs {
             for job in newJobs {
                 enqueueJob(job.id)
@@ -224,10 +229,11 @@ final class AppModel: ObservableObject {
         // The running job cannot be deleted; cancel it first.
         guard id != activeJobID else { return }
         jobs.removeAll { $0.id == id }
+        dirtyJobIDs.remove(id)
         if selectedJobID == id {
             selectedJobID = jobs.first?.id
         }
-        persistJobs()
+        jobStore.deleteJob(id)
     }
 
     func runDiagnostics() {
@@ -361,7 +367,6 @@ final class AppModel: ObservableObject {
             jobs[index].log += "Adjusted transcription settings: \(validationMessage)\n"
         }
         appendLog("Starting transcription with \(settings.whisperBackend.label) and model \(settings.whisperModel).", to: jobID)
-        persistJobs()
 
         activeJobID = jobID
         activeTask = Task {
@@ -417,7 +422,6 @@ final class AppModel: ObservableObject {
             "Starting translation from \(settings.translationSourceLanguage) to \(settings.translationTargetLanguage) with \(settings.openAIModel) using \(settings.translationChunkMode.label.lowercased()) chunks and \(settings.translationParallelism) worker(s).",
             to: jobID
         )
-        persistJobs()
 
         activeJobID = jobID
         activeTask = Task {
@@ -749,13 +753,14 @@ final class AppModel: ObservableObject {
               Bundle.main.bundleURL.pathExtension == "app",
               !NSApp.isActive
         else { return }
-        let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
             guard granted else { return }
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = body
-            center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+            UNUserNotificationCenter.current().add(
+                UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+            )
         }
     }
 
@@ -765,10 +770,17 @@ final class AppModel: ObservableObject {
         }
         mutate(&jobs[index])
         jobs[index].updatedAt = Date()
+        if jobs[index].log.count > Self.maxLogLength {
+            let tail = jobs[index].log.suffix(Self.maxLogLength * 3 / 4)
+            jobs[index].log = "… earlier log trimmed …\n\(tail)"
+        }
         if debouncePersist {
-            schedulePersist()
+            schedulePersist(id)
         } else {
-            persistJobs()
+            dirtyJobIDs.insert(id)
+            persistTask?.cancel()
+            persistTask = nil
+            flushDirtyJobs()
         }
     }
 
@@ -846,21 +858,29 @@ final class AppModel: ObservableObject {
         return normalized.isEmpty ? "translation" : normalized
     }
 
-    private func persistJobs() {
-        persistTask?.cancel()
-        persistTask = nil
-        jobStore.saveJobs(jobs)
+    private func persistJob(_ id: UUID) {
+        guard let job = jobs.first(where: { $0.id == id }) else { return }
+        jobStore.saveJob(job)
     }
 
     /// Coalesces rapid mutations (segment keystrokes, progress ticks) into a
-    /// single disk write so we don't rewrite the whole history per keystroke.
-    private func schedulePersist() {
+    /// single disk write per dirty job instead of rewriting the whole
+    /// history per keystroke.
+    private func schedulePersist(_ id: UUID) {
+        dirtyJobIDs.insert(id)
         persistTask?.cancel()
         persistTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard !Task.isCancelled, let self else { return }
             self.persistTask = nil
-            self.jobStore.saveJobs(self.jobs)
+            self.flushDirtyJobs()
         }
+    }
+
+    private func flushDirtyJobs() {
+        for id in dirtyJobIDs {
+            persistJob(id)
+        }
+        dirtyJobIDs.removeAll()
     }
 }

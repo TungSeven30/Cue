@@ -9,11 +9,15 @@ struct TranscriptView: View {
     @State private var warningsOnly = false
 
     var body: some View {
+        // Build the lookup once per render; computing it per row made large
+        // transcripts O(n^2) to draw.
+        let warningsBySegment = Dictionary(grouping: warnings, by: \.segmentID)
+        let filtered = filteredSegments(warningsBySegment: warningsBySegment)
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Text("^[\(filteredSegments.count) segment](inflect: true)")
+                Text("^[\(filtered.count) segment](inflect: true)")
                     .font(.callout.weight(.medium))
-                if filteredSegments.count != segments.count {
+                if filtered.count != segments.count {
                     Text("of \(segments.count)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -34,13 +38,13 @@ struct TranscriptView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 180)
                 Button("Replace All") {
-                    replaceAll()
+                    replaceAll(in: filtered)
                 }
                 .disabled(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
             LazyVStack(alignment: .leading, spacing: 8) {
-                ForEach(filteredSegments) { segment in
+                ForEach(filtered) { segment in
                     SegmentEditorRow(
                         segment: segment,
                         warnings: warningsBySegment[segment.id] ?? [],
@@ -51,11 +55,7 @@ struct TranscriptView: View {
         }
     }
 
-    private var warningsBySegment: [Int: [SubtitleQualityWarning]] {
-        Dictionary(grouping: warnings, by: \.segmentID)
-    }
-
-    private var filteredSegments: [TranscriptionSegment] {
+    private func filteredSegments(warningsBySegment: [Int: [SubtitleQualityWarning]]) -> [TranscriptionSegment] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return segments.filter { segment in
             let matchesSearch = query.isEmpty || segment.text.lowercased().contains(query) || "\(segment.id)".contains(query)
@@ -64,10 +64,10 @@ struct TranscriptView: View {
         }
     }
 
-    private func replaceAll() {
+    private func replaceAll(in filtered: [TranscriptionSegment]) {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
-        for segment in filteredSegments where segment.text.localizedCaseInsensitiveContains(query) {
+        for segment in filtered where segment.text.localizedCaseInsensitiveContains(query) {
             let updated = segment.text.replacingOccurrences(
                 of: query,
                 with: replacementText,

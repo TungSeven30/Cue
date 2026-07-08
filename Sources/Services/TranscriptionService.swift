@@ -184,8 +184,30 @@ private enum TranscriptionPostProcessor {
         }
 
         cleaned = repairInvalidTimings(cleaned)
+        cleaned = repairLongDurations(cleaned)
 
         return renumber(cleaned)
+    }
+
+    /// Whisper-style transcribers sometimes stretch a short utterance across
+    /// a long run of silence or music. Cap the display time to roughly what
+    /// the text needs to be read, so a one-word subtitle does not linger on
+    /// screen for half a minute.
+    private static func repairLongDurations(
+        _ segments: [TranscriptionSegment],
+        maximumDuration: Double = 8.0
+    ) -> [TranscriptionSegment] {
+        segments.map { segment in
+            guard segment.end - segment.start > maximumDuration else { return segment }
+            let readingTime = 0.8 + Double(segment.text.count) * 0.35
+            let allowed = min(maximumDuration, max(1.5, readingTime))
+            return TranscriptionSegment(
+                id: segment.id,
+                start: segment.start,
+                end: segment.start + allowed,
+                text: segment.text
+            )
+        }
     }
 
     /// Transcribers occasionally emit segments with zero or near-zero

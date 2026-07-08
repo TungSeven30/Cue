@@ -64,7 +64,7 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
 }
 
 struct JobSettingsSnapshot: Codable, Hashable {
-    static let currentTranscriptionProcessingVersion = 3
+    static let currentTranscriptionProcessingVersion = 4
 
     var transcriptionProcessingVersion: Int
     var transcriptionPreset: TranscriptionPreset

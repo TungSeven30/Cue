@@ -12,7 +12,7 @@ final class AppModel: ObservableObject {
     @Published var isRunningDiagnostics = false
 
     private let transcriptionService = TranscriptionService()
-    private let translationService = OpenAITranslationService()
+    private let translationService = TranslationService()
     private let diagnosticsService = EnvironmentDiagnosticsService()
     private let jobStore = JobStore()
     private var activeTask: Task<Void, Never>?
@@ -79,7 +79,7 @@ final class AppModel: ObservableObject {
     }
 
     var canTranslate: Bool {
-        !transcriptSegments.isEmpty && !isBusy && !settings.openAIAPIKey.isEmpty
+        !transcriptSegments.isEmpty && !isBusy && !settings.currentTranslationAPIKey.isEmpty
     }
 
     var canCancel: Bool {
@@ -210,7 +210,10 @@ final class AppModel: ObservableObject {
     func runDiagnostics() {
         isRunningDiagnostics = true
         Task {
-            diagnostics = await diagnosticsService.run(openAIAPIKey: settings.openAIAPIKey)
+            diagnostics = await diagnosticsService.run(
+                translationAPIKey: settings.currentTranslationAPIKey,
+                providerLabel: settings.currentTranslationProvider.label
+            )
             isRunningDiagnostics = false
         }
     }
@@ -271,7 +274,7 @@ final class AppModel: ObservableObject {
                     self?.updateProgress(progress, for: jobID)
                 }
                 finishTranscription(result, for: jobID)
-                if settings.autoTranslateAfterTranscription && !settings.openAIAPIKey.isEmpty {
+                if settings.autoTranslateAfterTranscription && !settings.currentTranslationAPIKey.isEmpty {
                     activeTask = nil
                     activeJobID = nil
                     startTranslation()

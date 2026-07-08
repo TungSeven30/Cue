@@ -1,7 +1,7 @@
 import Foundation
 
 struct EnvironmentDiagnosticsService {
-    func run(openAIAPIKey: String) async -> [EnvironmentDiagnostic] {
+    func run(translationAPIKey: String, providerLabel: String) async -> [EnvironmentDiagnostic] {
         async let ffmpeg = commandDiagnostic(
             id: "ffmpeg",
             title: "ffmpeg",
@@ -43,11 +43,13 @@ struct EnvironmentDiagnosticsService {
         var results = await [ffmpeg, python, mlx, faster, qwen3]
         results.append(
             EnvironmentDiagnostic(
-                id: "openai-key",
-                title: "OpenAI API Key",
-                detail: openAIAPIKey.isEmpty ? "No API key configured." : "API key is configured.",
-                recovery: "Add an API key in Settings before translating.",
-                state: openAIAPIKey.isEmpty ? .warning : .passed
+                id: "translation-key",
+                title: "Translation API Key (\(providerLabel))",
+                detail: translationAPIKey.isEmpty
+                    ? "No \(providerLabel) API key configured for the selected translation model."
+                    : "\(providerLabel) API key is configured.",
+                recovery: "Add a \(providerLabel) API key in Settings before translating.",
+                state: translationAPIKey.isEmpty ? .warning : .passed
             )
         )
         return results

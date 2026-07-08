@@ -195,11 +195,18 @@ enum AppSettingPresets {
         SettingsPreset(label: "Vietnamese", value: "Vietnamese")
     ]
 
+    // The provider (OpenAI, Anthropic, Google) is inferred from the model
+    // name; each provider uses its own API key from Settings.
     static let translationModels: [SettingsPreset] = [
         SettingsPreset(label: "GPT-5.5", value: "gpt-5.5"),
         SettingsPreset(label: "GPT-5.4 Mini", value: "gpt-5.4-mini"),
         SettingsPreset(label: "GPT-5.4 Nano", value: "gpt-5.4-nano"),
-        SettingsPreset(label: "GPT-5.2", value: "gpt-5.2")
+        SettingsPreset(label: "GPT-5.2", value: "gpt-5.2"),
+        SettingsPreset(label: "Claude Opus 4.8", value: "claude-opus-4-8"),
+        SettingsPreset(label: "Claude Sonnet 5", value: "claude-sonnet-5"),
+        SettingsPreset(label: "Claude Haiku 4.5", value: "claude-haiku-4-5"),
+        SettingsPreset(label: "Gemini 3.1 Pro", value: "gemini-3.1-pro-preview"),
+        SettingsPreset(label: "Gemini 3.5 Flash", value: "gemini-3.5-flash")
     ]
 }
 
@@ -228,8 +235,13 @@ final class AppSettingsStore: ObservableObject {
             save()
         }
     }
+    /// The translation model. Despite the name (kept for stored-settings
+    /// compatibility) it can be an OpenAI, Anthropic, or Google model; the
+    /// provider is inferred from the model name.
     @Published var openAIModel: String { didSet { save() } }
     @Published var openAIAPIKey: String { didSet { save() } }
+    @Published var anthropicAPIKey: String { didSet { save() } }
+    @Published var googleAPIKey: String { didSet { save() } }
     @Published var translationSourceLanguage: String { didSet { save() } }
     @Published var translationTargetLanguage: String { didSet { save() } }
     @Published var translationPrompt: String { didSet { save() } }
@@ -297,6 +309,8 @@ final class AppSettingsStore: ObservableObject {
 
     private let defaults: UserDefaults
     private static let apiKeyAccount = "openAIAPIKey"
+    private static let anthropicKeyAccount = "anthropicAPIKey"
+    private static let googleKeyAccount = "googleAPIKey"
     nonisolated static let mlxTurboModel = "mlx-community/whisper-large-v3-turbo"
     nonisolated static let fasterTurboModel = "large-v3-turbo"
     nonisolated static let qwen3DefaultModel = "Qwen/Qwen3-ASR-1.7B"
@@ -335,19 +349,28 @@ final class AppSettingsStore: ObservableObject {
         temperature = max(0, min(1, defaults.object(forKey: "temperature") as? Double ?? 0))
         noSpeechThreshold = max(0, min(1, defaults.object(forKey: "noSpeechThreshold") as? Double ?? 0.6))
 
-        // The API key lives in the Keychain. Migrate any legacy plaintext key
+        // The API keys live in the Keychain. Migrate any legacy plaintext key
         // that earlier builds stored in UserDefaults, then scrub it.
+        let resolvedOpenAIKey: String
         if let stored = KeychainStore.read(account: Self.apiKeyAccount) {
-            openAIAPIKey = stored
+            resolvedOpenAIKey = stored
         } else if let legacy = defaults.string(forKey: "openAIAPIKey"), !legacy.isEmpty {
-            openAIAPIKey = legacy
+            resolvedOpenAIKey = legacy
             KeychainStore.write(legacy, account: Self.apiKeyAccount)
             defaults.removeObject(forKey: "openAIAPIKey")
         } else {
-            openAIAPIKey = ""
+            resolvedOpenAIKey = ""
             defaults.removeObject(forKey: "openAIAPIKey")
         }
-        persistedAPIKey = openAIAPIKey
+        openAIAPIKey = resolvedOpenAIKey
+        persistedAPIKey = resolvedOpenAIKey
+
+        let resolvedAnthropicKey = KeychainStore.read(account: Self.anthropicKeyAccount) ?? ""
+        anthropicAPIKey = resolvedAnthropicKey
+        persistedAnthropicKey = resolvedAnthropicKey
+        let resolvedGoogleKey = KeychainStore.read(account: Self.googleKeyAccount) ?? ""
+        googleAPIKey = resolvedGoogleKey
+        persistedGoogleKey = resolvedGoogleKey
 
         normalizeModelForSelectedBackend()
         save()
@@ -356,6 +379,24 @@ final class AppSettingsStore: ObservableObject {
     private var isApplyingPreset = false
     private var isApplyingQualityPreset = false
     private var persistedAPIKey = ""
+    private var persistedAnthropicKey = ""
+    private var persistedGoogleKey = ""
+
+    var currentTranslationProvider: TranslationProvider {
+        TranslationProvider.infer(from: openAIModel)
+    }
+
+    var currentTranslationAPIKey: String {
+        translationAPIKey(for: currentTranslationProvider)
+    }
+
+    func translationAPIKey(for provider: TranslationProvider) -> String {
+        switch provider {
+        case .openai: return openAIAPIKey
+        case .anthropic: return anthropicAPIKey
+        case .google: return googleAPIKey
+        }
+    }
 
     private func save() {
         defaults.set(transcriptionPreset.rawValue, forKey: "transcriptionPreset")
@@ -385,11 +426,19 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(noSpeechThreshold, forKey: "noSpeechThreshold")
         defaults.synchronize()
         // save() runs on every settings mutation; only touch the Keychain
-        // when the key itself changed so typing elsewhere (e.g. the prompt
+        // when a key itself changed so typing elsewhere (e.g. the prompt
         // editor) does not trigger a Keychain write per keystroke.
         if openAIAPIKey != persistedAPIKey {
             KeychainStore.write(openAIAPIKey, account: Self.apiKeyAccount)
             persistedAPIKey = openAIAPIKey
+        }
+        if anthropicAPIKey != persistedAnthropicKey {
+            KeychainStore.write(anthropicAPIKey, account: Self.anthropicKeyAccount)
+            persistedAnthropicKey = anthropicAPIKey
+        }
+        if googleAPIKey != persistedGoogleKey {
+            KeychainStore.write(googleAPIKey, account: Self.googleKeyAccount)
+            persistedGoogleKey = googleAPIKey
         }
     }
 

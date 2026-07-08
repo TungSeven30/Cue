@@ -110,10 +110,12 @@ struct SettingsView: View {
                 }
                 Stepper("Parallel chunks: \(settings.translationParallelism)", value: $settings.translationParallelism, in: 1...4)
                 SecureField("OpenAI API key", text: $settings.openAIAPIKey)
+                SecureField("Anthropic API key", text: $settings.anthropicAPIKey)
+                SecureField("Google API key", text: $settings.googleAPIKey)
             } header: {
                 Label("Translation", systemImage: "character.bubble")
             } footer: {
-                Text("Model choices are editable; use any OpenAI Responses API model your account supports.")
+                Text("Use any OpenAI (gpt-…), Anthropic (claude-…), or Google (gemini-…) model — the provider and API key are chosen from the model name. Keys are stored in the Keychain.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -135,8 +135,8 @@ struct DetailView: View {
         if model.transcriptSegments.isEmpty {
             return "Transcribe the video first, then translate the segments into \(model.translationTargetLabel)."
         }
-        if model.settings.openAIAPIKey.isEmpty {
-            return "Add an OpenAI API key in Settings (⌘,) to translate the transcript into \(model.translationTargetLabel)."
+        if model.settings.currentTranslationAPIKey.isEmpty {
+            return "Add a \(model.settings.currentTranslationProvider.label) API key in Settings (⌘,) to translate the transcript into \(model.translationTargetLabel)."
         }
         return "Translate the transcript into natural \(model.translationTargetLabel) subtitles with your configured model."
     }
@@ -322,8 +322,8 @@ private struct HeaderCard: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(!model.canTranslate)
 
-                if model.settings.openAIAPIKey.isEmpty {
-                    Text("Add an OpenAI API key in Settings to enable translation.")
+                if model.settings.currentTranslationAPIKey.isEmpty {
+                    Text("Add a \(model.settings.currentTranslationProvider.label) API key in Settings to enable translation.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else if !model.partialTranslatedSegments.isEmpty {

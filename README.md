@@ -23,7 +23,7 @@ WhisperDesk is a native-first macOS app for a personal video workflow:
 - local transcription: Python helper invoked from the app
 - preferred backend: `mlx-whisper` on Apple Silicon
 - fallback backend: `faster-whisper`
-- translation: OpenAI Responses API
+- translation: OpenAI, Anthropic (Claude), or Google (Gemini) — provider inferred from the model name
 - persistence: JSON job history under Application Support
 
 ## Recommended local setup
@@ -46,4 +46,4 @@ WhisperDesk is a native-first macOS app for a personal video workflow:
 - Transcription quality presets tune audio preprocessing, VAD, beam search, no-speech thresholds, and subtitle cleanup.
 - Translation chunking and limited parallelism are configurable in Settings.
 - This app is structured so the UI remains native macOS while the speech stack stays replaceable.
-- The OpenAI API key is stored in the macOS Keychain (any key from earlier builds is migrated out of user defaults on first launch).
+- API keys (OpenAI, Anthropic, Google) are stored in the macOS Keychain (any key from earlier builds is migrated out of user defaults on first launch).

@@ -1,7 +1,34 @@
 import Foundation
 
+/// The LLM provider used for translation, inferred from the model name so a
+/// single "model" setting selects both the model and the API to call.
+enum TranslationProvider {
+    case openai
+    case anthropic
+    case google
+
+    static func infer(from model: String) -> TranslationProvider {
+        let normalized = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized.hasPrefix("claude") {
+            return .anthropic
+        }
+        if normalized.hasPrefix("gemini") || normalized.hasPrefix("models/gemini") {
+            return .google
+        }
+        return .openai
+    }
+
+    var label: String {
+        switch self {
+        case .openai: return "OpenAI"
+        case .anthropic: return "Anthropic"
+        case .google: return "Google"
+        }
+    }
+}
+
 enum TranslationServiceError: LocalizedError {
-    case missingAPIKey
+    case missingAPIKey(String)
     case invalidResponse
     case apiError(String)
     /// An error retrying cannot fix (bad key, unknown model, malformed request).
@@ -10,8 +37,8 @@ enum TranslationServiceError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .missingAPIKey:
-            return "Add an OpenAI API key in Settings before translating."
+        case .missingAPIKey(let provider):
+            return "Add an \(provider) API key in Settings before translating."
         case .invalidResponse:
             return "The translation response could not be parsed."
         case .apiError(let message), .fatalAPIError(let message):
@@ -35,7 +62,7 @@ private struct TranslationChunkResult {
     let segments: [TranslatedSegment]
 }
 
-struct OpenAITranslationService {
+struct TranslationService {
     @MainActor
     func translate(
         segments: [TranscriptionSegment],
@@ -45,8 +72,9 @@ struct OpenAITranslationService {
         progress: @escaping @MainActor (JobProgress) -> Void,
         onPartial: @escaping @MainActor ([TranscriptionSegment]) -> Void
     ) async throws -> [TranscriptionSegment] {
-        let apiKey = settings.openAIAPIKey
         let model = settings.openAIModel
+        let provider = TranslationProvider.infer(from: model)
+        let apiKey = settings.translationAPIKey(for: provider)
         let chunkSize = settings.translationChunkMode.chunkSize
         let parallelism = max(1, min(4, settings.translationParallelism))
         let translationSourceLanguage = Self.translationSourceLanguage(
@@ -59,7 +87,7 @@ struct OpenAITranslationService {
             : settings.translationPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !apiKey.isEmpty else {
-            throw TranslationServiceError.missingAPIKey
+            throw TranslationServiceError.missingAPIKey(provider.label)
         }
 
         let chunks = segments.chunked(into: chunkSize)
@@ -284,44 +312,14 @@ struct OpenAITranslationService {
         \(String(decoding: try JSONEncoder().encode(segments), as: UTF8.self))
         """
 
-        let requestBody = TranslationRequest(
+        let provider = TranslationProvider.infer(from: model)
+        let request = try Self.makeRequest(
+            provider: provider,
             model: model,
-            input: [
-                .init(
-                    role: "system",
-                    content: [
-                        .init(
-                            type: "input_text",
-                            text: systemPrompt
-                        )
-                    ]
-                ),
-                .init(
-                    role: "user",
-                    content: [
-                        .init(
-                            type: "input_text",
-                            text: userText
-                        )
-                    ]
-                )
-            ],
-            text: .init(
-                verbosity: "low",
-                format: .init(
-                    type: "json_schema",
-                    name: "subtitle_translation",
-                    strict: true,
-                    schema: TranslationSchema.segments
-                )
-            )
+            apiKey: apiKey,
+            systemPrompt: systemPrompt,
+            userText: userText
         )
-
-        var request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONEncoder().encode(requestBody)
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -329,11 +327,11 @@ struct OpenAITranslationService {
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {
-            throw Self.classifyAPIError(data: data, statusCode: httpResponse.statusCode, model: model)
+            throw Self.classifyAPIError(provider: provider, data: data, statusCode: httpResponse.statusCode, model: model)
         }
 
-        let decoded = try JSONDecoder().decode(OpenAIResponseEnvelope.self, from: data)
-        let rawText = decoded.outputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawText = try Self.extractOutputText(provider: provider, data: data)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard let jsonData = Self.extractJSONObject(from: rawText).data(using: .utf8) else {
             throw TranslationServiceError.invalidResponse
         }
@@ -347,29 +345,125 @@ struct OpenAITranslationService {
         }
     }
 
-    /// Turns an OpenAI error response into a single actionable sentence
+    /// Builds the provider-specific HTTP request. All three providers receive
+    /// the same system prompt, user text, and JSON schema for the reply.
+    private static func makeRequest(
+        provider: TranslationProvider,
+        model: String,
+        apiKey: String,
+        systemPrompt: String,
+        userText: String
+    ) throws -> URLRequest {
+        var request: URLRequest
+        switch provider {
+        case .openai:
+            request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            request.httpBody = try JSONEncoder().encode(
+                TranslationRequest(
+                    model: model,
+                    input: [
+                        .init(role: "system", content: [.init(type: "input_text", text: systemPrompt)]),
+                        .init(role: "user", content: [.init(type: "input_text", text: userText)])
+                    ],
+                    text: .init(
+                        verbosity: "low",
+                        format: .init(
+                            type: "json_schema",
+                            name: "subtitle_translation",
+                            strict: true,
+                            schema: TranslationSchema.segments
+                        )
+                    )
+                )
+            )
+        case .anthropic:
+            request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+            request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+            request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            request.httpBody = try JSONEncoder().encode(
+                AnthropicRequest(
+                    model: model,
+                    max_tokens: 16000,
+                    system: systemPrompt,
+                    messages: [.init(role: "user", content: userText)],
+                    output_config: .init(format: .init(type: "json_schema", schema: TranslationSchema.segments))
+                )
+            )
+        case .google:
+            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent"
+            guard let url = URL(string: endpoint) else {
+                throw TranslationServiceError.fatalAPIError("The Gemini model name \"\(model)\" is not a valid model id.")
+            }
+            request = URLRequest(url: url)
+            request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+            request.httpBody = try JSONEncoder().encode(
+                GeminiRequest(
+                    systemInstruction: .init(parts: [.init(text: systemPrompt)]),
+                    contents: [.init(role: "user", parts: [.init(text: userText)])],
+                    generationConfig: .init(
+                        responseMimeType: "application/json",
+                        responseJsonSchema: TranslationSchema.segments
+                    )
+                )
+            )
+        }
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Large chunks on slower models can exceed URLSession's default 60s.
+        request.timeoutInterval = 300
+        return request
+    }
+
+    /// Pulls the model's text reply out of the provider-specific envelope.
+    private static func extractOutputText(provider: TranslationProvider, data: Data) throws -> String {
+        switch provider {
+        case .openai:
+            return try JSONDecoder().decode(OpenAIResponseEnvelope.self, from: data).outputText
+        case .anthropic:
+            let decoded = try JSONDecoder().decode(AnthropicResponseEnvelope.self, from: data)
+            if decoded.stop_reason == "refusal" {
+                throw TranslationServiceError.apiError("Claude declined to translate this chunk (refusal). Try a different model or rephrase the prompt.")
+            }
+            return decoded.outputText
+        case .google:
+            return try JSONDecoder().decode(GeminiResponseEnvelope.self, from: data).outputText
+        }
+    }
+
+    /// Turns a provider error response into a single actionable sentence
     /// instead of dumping raw JSON into the run log, and marks errors that
     /// retrying cannot fix as fatal so the retry loop stops immediately.
-    private static func classifyAPIError(data: Data, statusCode: Int, model: String) -> TranslationServiceError {
-        let parsed = try? JSONDecoder().decode(OpenAIErrorEnvelope.self, from: data)
-        let message = parsed?.error.message
+    private static func classifyAPIError(
+        provider: TranslationProvider,
+        data: Data,
+        statusCode: Int,
+        model: String
+    ) -> TranslationServiceError {
+        // Every provider nests {"error": {"message": ...}}; codes vary in
+        // shape, so dig leniently instead of decoding a strict envelope.
+        let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let errorBody = body?["error"] as? [String: Any]
+        let message = errorBody?["message"] as? String
+        let code = errorBody?["code"] as? String ?? errorBody?["status"] as? String
+        let name = provider.label
 
         if statusCode == 401 || statusCode == 403 {
-            return .fatalAPIError("OpenAI rejected the API key (\(statusCode)). Check the key in Settings.")
+            return .fatalAPIError("\(name) rejected the API key (\(statusCode)). Check the key in Settings.")
         }
         if statusCode == 429 {
-            return .apiError(message ?? "OpenAI rate limit or quota exceeded (429). Try again later or check billing.")
+            return .apiError(message ?? "\(name) rate limit or quota exceeded (429). Try again later or check billing.")
         }
-        if let code = parsed?.error.code, code == "model_not_found" || statusCode == 404 {
-            return .fatalAPIError("OpenAI does not recognize the model \"\(model)\". Set a valid model in Settings.")
+        if statusCode == 404 || code == "model_not_found" || code == "NOT_FOUND" {
+            return .fatalAPIError("\(name) does not recognize the model \"\(model)\". Set a valid model in Settings.")
         }
         if statusCode == 400 {
-            return .fatalAPIError("OpenAI rejected the request (400): \(message ?? "invalid request"). Check the model in Settings supports structured JSON output.")
+            return .fatalAPIError("\(name) rejected the request (400): \(message ?? "invalid request"). Check the model in Settings supports structured JSON output.")
         }
         if let message {
-            return .apiError("OpenAI error (\(statusCode)): \(message)")
+            return .apiError("\(name) error (\(statusCode)): \(message)")
         }
-        return .apiError("OpenAI returned status \(statusCode).")
+        return .apiError("\(name) returned status \(statusCode).")
     }
 
     /// Collects the most recent already-translated pairs that precede a chunk,
@@ -536,12 +630,85 @@ private struct OpenAIOutputContent: Decodable {
     let text: String?
 }
 
-private struct OpenAIErrorEnvelope: Decodable {
-    struct APIError: Decodable {
-        let message: String
-        let code: String?
+// MARK: - Anthropic Messages API types
+
+private struct AnthropicRequest: Encodable {
+    struct Message: Encodable {
+        let role: String
+        let content: String
     }
-    let error: APIError
+    struct OutputConfig: Encodable {
+        let format: OutputFormat
+    }
+    struct OutputFormat: Encodable {
+        let type: String
+        let schema: JSONValue
+    }
+
+    let model: String
+    let max_tokens: Int
+    let system: String
+    let messages: [Message]
+    let output_config: OutputConfig
+}
+
+private struct AnthropicResponseEnvelope: Decodable {
+    struct ContentBlock: Decodable {
+        let type: String
+        let text: String?
+    }
+
+    let content: [ContentBlock]
+    let stop_reason: String?
+
+    var outputText: String {
+        content.compactMap { $0.type == "text" ? $0.text : nil }.joined()
+    }
+}
+
+// MARK: - Google Gemini API types
+
+private struct GeminiRequest: Encodable {
+    struct Part: Encodable {
+        let text: String
+    }
+    struct SystemInstruction: Encodable {
+        let parts: [Part]
+    }
+    struct Content: Encodable {
+        let role: String
+        let parts: [Part]
+    }
+    struct GenerationConfig: Encodable {
+        let responseMimeType: String
+        let responseJsonSchema: JSONValue
+    }
+
+    let systemInstruction: SystemInstruction
+    let contents: [Content]
+    let generationConfig: GenerationConfig
+}
+
+private struct GeminiResponseEnvelope: Decodable {
+    struct Candidate: Decodable {
+        let content: CandidateContent?
+    }
+    struct CandidateContent: Decodable {
+        let parts: [CandidatePart]?
+    }
+    struct CandidatePart: Decodable {
+        let text: String?
+    }
+
+    let candidates: [Candidate]?
+
+    var outputText: String {
+        (candidates ?? [])
+            .compactMap(\.content?.parts)
+            .flatMap { $0 }
+            .compactMap(\.text)
+            .joined()
+    }
 }
 
 private struct TranslatedSegmentsPayload: Decodable {

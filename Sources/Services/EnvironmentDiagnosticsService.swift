@@ -28,10 +28,19 @@ struct EnvironmentDiagnosticsService {
             title: "Faster Whisper",
             module: "faster_whisper",
             recovery: "Optional fallback: pip install faster-whisper.",
-            repairCommand: "python3 -m pip install faster-whisper"
+            repairCommand: "python3 -m pip install faster-whisper",
+            optional: true
+        )
+        async let qwen3 = pythonImportDiagnostic(
+            id: "qwen3-asr",
+            title: "Qwen3 ASR",
+            module: "mlx_qwen3_asr",
+            recovery: "Optional: best transcription accuracy. pip install 'mlx-qwen3-asr[aligner]'.",
+            repairCommand: "python3 -m pip install 'mlx-qwen3-asr[aligner]'",
+            optional: true
         )
 
-        var results = await [ffmpeg, python, mlx, faster]
+        var results = await [ffmpeg, python, mlx, faster, qwen3]
         results.append(
             EnvironmentDiagnostic(
                 id: "openai-key",
@@ -49,7 +58,8 @@ struct EnvironmentDiagnosticsService {
         title: String,
         command: [String],
         recovery: String,
-        repairCommand: String? = nil
+        repairCommand: String? = nil,
+        optional: Bool = false
     ) async -> EnvironmentDiagnostic {
         await Task.detached(priority: .utility) {
             let result = runProcess(command)
@@ -58,7 +68,7 @@ struct EnvironmentDiagnosticsService {
                 title: title,
                 detail: result.output.isEmpty ? result.message : result.output,
                 recovery: recovery,
-                state: result.succeeded ? .passed : .failed,
+                state: result.succeeded ? .passed : (optional ? .warning : .failed),
                 repairCommand: repairCommand
             )
         }.value
@@ -69,14 +79,16 @@ struct EnvironmentDiagnosticsService {
         title: String,
         module: String,
         recovery: String,
-        repairCommand: String? = nil
+        repairCommand: String? = nil,
+        optional: Bool = false
     ) async -> EnvironmentDiagnostic {
         await commandDiagnostic(
             id: id,
             title: title,
             command: ["/usr/bin/env", "python3", "-c", "import \(module); print('available')"],
             recovery: recovery,
-            repairCommand: repairCommand
+            repairCommand: repairCommand,
+            optional: optional
         )
     }
 }

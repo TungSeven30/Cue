@@ -4,6 +4,7 @@ enum WhisperBackend: String, CaseIterable, Identifiable, Codable, Hashable {
     case auto
     case mlxWhisper = "mlx-whisper"
     case fasterWhisper = "faster-whisper"
+    case qwen3ASR = "qwen3-asr"
 
     var id: String { rawValue }
 
@@ -15,11 +16,14 @@ enum WhisperBackend: String, CaseIterable, Identifiable, Codable, Hashable {
             return "MLX Whisper"
         case .fasterWhisper:
             return "Faster Whisper"
+        case .qwen3ASR:
+            return "Qwen3 ASR"
         }
     }
 }
 
 enum TranscriptionPreset: String, CaseIterable, Identifiable, Codable, Hashable {
+    case bestAccuracy
     case fastAppleSilicon
     case mostCompatible
     case higherAccuracy
@@ -30,9 +34,10 @@ enum TranscriptionPreset: String, CaseIterable, Identifiable, Codable, Hashable 
 
     var label: String {
         switch self {
+        case .bestAccuracy: return "Best Accuracy (Qwen3)"
         case .fastAppleSilicon: return "Fast Apple Silicon"
         case .mostCompatible: return "Most Compatible"
-        case .higherAccuracy: return "Higher Accuracy"
+        case .higherAccuracy: return "Higher Accuracy (Whisper)"
         case .draft: return "Small/Fast Draft"
         case .custom: return "Custom"
         }
@@ -40,6 +45,7 @@ enum TranscriptionPreset: String, CaseIterable, Identifiable, Codable, Hashable 
 
     var backend: WhisperBackend? {
         switch self {
+        case .bestAccuracy: return .qwen3ASR
         case .fastAppleSilicon, .higherAccuracy: return .mlxWhisper
         case .mostCompatible, .draft: return .fasterWhisper
         case .custom: return nil
@@ -48,6 +54,7 @@ enum TranscriptionPreset: String, CaseIterable, Identifiable, Codable, Hashable 
 
     var model: String? {
         switch self {
+        case .bestAccuracy: return AppSettingsStore.qwen3DefaultModel
         case .fastAppleSilicon: return "mlx-community/whisper-large-v3-turbo"
         case .mostCompatible: return "large-v3-turbo"
         case .higherAccuracy: return "mlx-community/whisper-large-v3"
@@ -138,6 +145,11 @@ enum AppSettingPresets {
                 SettingsPreset(label: "Small", value: "small"),
                 SettingsPreset(label: "Base", value: "base"),
                 SettingsPreset(label: "Tiny", value: "tiny")
+            ]
+        case .qwen3ASR:
+            return [
+                SettingsPreset(label: "Qwen3 ASR 1.7B (best)", value: AppSettingsStore.qwen3DefaultModel),
+                SettingsPreset(label: "Qwen3 ASR 0.6B (fast)", value: "Qwen/Qwen3-ASR-0.6B")
             ]
         }
     }
@@ -287,6 +299,7 @@ final class AppSettingsStore: ObservableObject {
     private static let apiKeyAccount = "openAIAPIKey"
     nonisolated static let mlxTurboModel = "mlx-community/whisper-large-v3-turbo"
     nonisolated static let fasterTurboModel = "large-v3-turbo"
+    nonisolated static let qwen3DefaultModel = "Qwen/Qwen3-ASR-1.7B"
     static let defaultTranslationPrompt = """
     You are a professional subtitle translator. Translate faithfully and naturally for the target audience.
     Preserve meaning, tone, names, numbers, and cultural context. Keep each subtitle concise, readable, and aligned to the original timing.
@@ -388,13 +401,17 @@ final class AppSettingsStore: ObservableObject {
         let model = whisperModel.trimmingCharacters(in: .whitespacesAndNewlines)
         switch whisperBackend {
         case .fasterWhisper:
-            return model.hasPrefix("mlx-community/")
+            return model.hasPrefix("mlx-community/") || model.hasPrefix("Qwen/")
                 ? "Faster Whisper needs a Faster Whisper model such as \(Self.fasterTurboModel)."
                 : nil
         case .mlxWhisper:
             return model.hasPrefix("mlx-community/")
                 ? nil
                 : "MLX Whisper works best with an MLX model such as \(Self.mlxTurboModel)."
+        case .qwen3ASR:
+            return model.hasPrefix("Qwen/Qwen3-ASR")
+                ? nil
+                : "Qwen3 ASR needs a Qwen3 model such as \(Self.qwen3DefaultModel)."
         case .auto:
             return nil
         }
@@ -496,12 +513,16 @@ final class AppSettingsStore: ObservableObject {
 
         switch whisperBackend {
         case .auto, .mlxWhisper:
-            if force || trimmedModel.isEmpty || trimmedModel == Self.fasterTurboModel {
+            if force || trimmedModel.isEmpty || trimmedModel == Self.fasterTurboModel || trimmedModel.hasPrefix("Qwen/") {
                 whisperModel = Self.mlxTurboModel
             }
         case .fasterWhisper:
-            if force || trimmedModel.isEmpty || trimmedModel.hasPrefix("mlx-community/whisper-") {
+            if force || trimmedModel.isEmpty || trimmedModel.hasPrefix("mlx-community/whisper-") || trimmedModel.hasPrefix("Qwen/") {
                 whisperModel = Self.fasterTurboModel
+            }
+        case .qwen3ASR:
+            if force || !trimmedModel.hasPrefix("Qwen/Qwen3-ASR") {
+                whisperModel = Self.qwen3DefaultModel
             }
         }
     }

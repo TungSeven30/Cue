@@ -33,6 +33,12 @@ from pathlib import Path
 ACTIVE_CHILDREN = set()
 ACTIVE_LOCK = threading.Lock()
 
+PIP_PACKAGES = {
+    "mlx-whisper": "mlx-whisper",
+    "faster-whisper": "faster-whisper",
+    "qwen3-asr": "'mlx-qwen3-asr[aligner]'",
+}
+
 
 def emit(stage: str, detail: str, fraction=None) -> None:
     payload = {"stage": stage, "detail": detail, "fraction": fraction}
@@ -176,6 +182,88 @@ def load_with_mlx(audio_path: Path, model: str, language: str, temperature: floa
     ]
 
 
+SENTENCE_ENDINGS = ("。", "！", "？", "!", "?", ".")
+
+
+def join_token_text(previous: str, token: str) -> str:
+    # Insert a space between latin words; CJK tokens concatenate directly.
+    if previous and token and previous[-1].isascii() and previous[-1].isalnum() and token[0].isascii() and token[0].isalnum():
+        return previous + " " + token
+    return previous + token
+
+
+def group_timed_tokens(tokens, max_chars=42, max_duration=6.0, max_gap=0.8):
+    """Qwen3's aligner emits token-level timestamps; merge them into
+    subtitle-sized segments, breaking at sentence endings, pauses, and
+    length/duration caps."""
+    groups = []
+    current = None
+    for token in tokens:
+        text = token["text"]
+        if not text:
+            continue
+        if current is not None:
+            gap = token["start"] - current["end"]
+            merged = join_token_text(current["text"], text)
+            duration = token["end"] - current["start"]
+            if gap > max_gap or len(merged) > max_chars or duration > max_duration:
+                groups.append(current)
+                current = None
+            else:
+                current["text"] = merged
+                current["end"] = max(current["end"], token["end"])
+                if current["text"].rstrip().endswith(SENTENCE_ENDINGS) and len(current["text"]) >= 8:
+                    groups.append(current)
+                    current = None
+                continue
+        if current is None:
+            current = {"start": token["start"], "end": token["end"], "text": text}
+    if current is not None:
+        groups.append(current)
+    return groups
+
+
+def load_with_qwen3(audio_path: Path, model: str, language: str):
+    from mlx_qwen3_asr import transcribe as qwen3_transcribe
+
+    emit("loadingModel", f"Loading {model} with Qwen3 ASR. First run may download the model.", 0.18)
+    result = call_with_supported_kwargs(
+        qwen3_transcribe,
+        str(audio_path),
+        model=model,
+        language=None if language == "auto" else language,
+        return_timestamps=True,
+    )
+    emit("transcribing", "Normalizing transcript segments.", 0.92)
+    raw_segments = getattr(result, "segments", None) or []
+    tokens = []
+    for segment in raw_segments:
+        if isinstance(segment, dict):
+            start, end, text = segment.get("start", 0.0), segment.get("end", 0.0), segment.get("text", "")
+        else:
+            start = getattr(segment, "start", 0.0)
+            end = getattr(segment, "end", 0.0)
+            text = getattr(segment, "text", "")
+        tokens.append(
+            {
+                "start": float(start or 0.0),
+                "end": float(end or 0.0),
+                "text": str(text).strip(),
+            }
+        )
+    segments = [
+        {"id": index, "start": group["start"], "end": group["end"], "text": group["text"].strip()}
+        for index, group in enumerate(group_timed_tokens(tokens), start=1)
+    ]
+    if not segments:
+        if str(getattr(result, "text", "") or "").strip():
+            raise RuntimeError(
+                "Qwen3 ASR produced text but no timestamps. Install the aligner extra: pip install 'mlx-qwen3-asr[aligner]'"
+            )
+        raise RuntimeError("Qwen3 ASR returned no transcript.")
+    return "qwen3-asr", segments
+
+
 def faster_whisper_model(model: str) -> str:
     model = model.strip()
     if model in {"mlx-community/whisper-large-v3-turbo", "openai/whisper-large-v3-turbo"}:
@@ -239,7 +327,7 @@ def main() -> int:
     parser.add_argument("input_file")
     parser.add_argument("--language", default="auto")
     parser.add_argument("--model", default="mlx-community/whisper-large-v3-turbo")
-    parser.add_argument("--backend", default="auto", choices=["auto", "mlx-whisper", "faster-whisper"])
+    parser.add_argument("--backend", default="auto", choices=["auto", "mlx-whisper", "faster-whisper", "qwen3-asr"])
     parser.add_argument("--preprocess-audio", default="true")
     parser.add_argument("--vad-filter", default="true")
     parser.add_argument("--beam-size", type=int, default=5)
@@ -279,6 +367,8 @@ def main() -> int:
                         args.temperature,
                         args.no_speech_threshold,
                     )
+                elif backend == "qwen3-asr":
+                    used_backend, segments = load_with_qwen3(audio_path, args.model, args.language)
                 else:
                     used_backend, segments = load_with_faster_whisper(
                         audio_path,
@@ -295,7 +385,7 @@ def main() -> int:
                 sys.stdout.write("\n")
                 return 0
             except ModuleNotFoundError as exc:
-                errors.append(f"{backend} is not installed (pip install {backend}).")
+                errors.append(f"{backend} is not installed (pip install {PIP_PACKAGES.get(backend, backend)}).")
             except Exception as exc:  # pragma: no cover
                 errors.append(f"{backend} failed: {exc}")
 
@@ -303,7 +393,7 @@ def main() -> int:
     print(
         f"Transcription failed using {label}.\n"
         + "\n".join(errors)
-        + "\nInstall mlx-whisper (recommended on Apple Silicon) or faster-whisper, then try again.",
+        + "\nInstall mlx-whisper (recommended on Apple Silicon), mlx-qwen3-asr[aligner] (best accuracy), or faster-whisper, then try again.",
         file=sys.stderr,
     )
     return 1

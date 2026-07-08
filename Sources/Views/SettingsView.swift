@@ -21,6 +21,7 @@ struct SettingsView: View {
                     presets: AppSettingPresets.transcriptionLanguages,
                     selection: $settings.sourceLanguage
                 )
+                Toggle("Start jobs automatically when files are added", isOn: $settings.autoStartAddedJobs)
                 Toggle("Show advanced transcription controls", isOn: $settings.showAdvancedControls)
                 if settings.showAdvancedControls {
                     backendPicker
@@ -83,6 +84,7 @@ struct SettingsView: View {
 
             Section {
                 Toggle("Translate after transcription", isOn: $settings.autoTranslateAfterTranscription)
+                Toggle("Save SRT subtitles next to the video when finished", isOn: $settings.autoExportSidecar)
                 presetPicker(
                     "Translate from",
                     presets: AppSettingPresets.translationSourceLanguages,

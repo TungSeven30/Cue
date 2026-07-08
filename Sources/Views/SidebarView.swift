@@ -18,12 +18,19 @@ struct SidebarView: View {
                         JobRow(job: job)
                             .tag(job.id)
                             .contextMenu {
+                                if model.jobNeedsWork(job) && job.status != .queued {
+                                    Button {
+                                        model.enqueueJob(job.id)
+                                    } label: {
+                                        Label("Add to Queue", systemImage: "clock")
+                                    }
+                                }
                                 Button(role: .destructive) {
                                     model.deleteJob(job.id)
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
-                                .disabled(model.isBusy)
+                                .disabled(job.id == model.activeJobID)
                             }
                     }
                 }
@@ -31,14 +38,29 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
-            Button {
-                model.selectVideo()
-            } label: {
-                Label("Add Files…", systemImage: "plus")
-                    .frame(maxWidth: .infinity)
+            VStack(spacing: 8) {
+                if model.hasPendingWork || model.queuePaused {
+                    Button {
+                        model.startAllPendingJobs()
+                    } label: {
+                        Label(
+                            model.queuePaused ? "Resume Queue" : "Start All",
+                            systemImage: "play.fill"
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .help("Queue every job that still needs transcription or translation")
+                }
+                Button {
+                    model.selectVideo()
+                } label: {
+                    Label("Add Files…", systemImage: "plus")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
+                .buttonStyle(.borderedProminent)
             }
-            .controlSize(.large)
-            .buttonStyle(.borderedProminent)
             .padding(12)
         }
     }

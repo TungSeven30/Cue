@@ -6,6 +6,8 @@ extension JobStatus {
         switch self {
         case .idle:
             return .secondary
+        case .queued:
+            return .indigo
         case .transcribing, .translating:
             return .blue
         case .transcriptionComplete:

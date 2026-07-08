@@ -2,6 +2,7 @@ import Foundation
 
 enum JobStatus: String, Codable, CaseIterable {
     case idle
+    case queued
     case transcribing
     case transcriptionComplete
     case translating
@@ -13,6 +14,8 @@ enum JobStatus: String, Codable, CaseIterable {
         switch self {
         case .idle:
             return "Idle"
+        case .queued:
+            return "Queued"
         case .transcribing:
             return "Transcribing"
         case .transcriptionComplete:
@@ -33,6 +36,8 @@ enum JobStatus: String, Codable, CaseIterable {
         switch self {
         case .idle:
             return "circle.dashed"
+        case .queued:
+            return "clock"
         case .transcribing:
             return "waveform"
         case .transcriptionComplete:
@@ -46,6 +51,10 @@ enum JobStatus: String, Codable, CaseIterable {
         case .failed:
             return "exclamationmark.triangle.fill"
         }
+    }
+
+    var isRunning: Bool {
+        self == .transcribing || self == .translating
     }
 }
 

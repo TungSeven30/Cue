@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import Foundation
 import UniformTypeIdentifiers
+import UserNotifications
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -11,13 +12,16 @@ final class AppModel: ObservableObject {
     @Published var diagnostics: [EnvironmentDiagnostic] = []
     @Published var isRunningDiagnostics = false
     @Published var isShowingExportSheet = false
+    /// Set when the user cancels while jobs are still queued; Start All resumes.
+    @Published var queuePaused = false
+    private var didProcessQueuedJob = false
 
     private let transcriptionService = TranscriptionService()
     private let translationService = TranslationService()
     private let diagnosticsService = EnvironmentDiagnosticsService()
     private let jobStore = JobStore()
     private var activeTask: Task<Void, Never>?
-    private var activeJobID: UUID?
+    private(set) var activeJobID: UUID?
     private var cancellables = Set<AnyCancellable>()
     private var persistTask: Task<Void, Never>?
 
@@ -75,20 +79,35 @@ final class AppModel: ObservableObject {
         currentJob?.status == .translating
     }
 
+    /// Any job is currently running.
+    var isProcessing: Bool {
+        activeJobID != nil
+    }
+
+    /// The job the user is looking at is the one running.
+    var isSelectedJobRunning: Bool {
+        currentJob?.status.isRunning == true
+    }
+
     var canTranscribe: Bool {
-        currentJob != nil && !isBusy
+        currentJob != nil && !isSelectedJobRunning && currentJob?.status != .queued
     }
 
     var canTranslate: Bool {
-        !transcriptSegments.isEmpty && !isBusy && !settings.currentTranslationAPIKey.isEmpty
+        !transcriptSegments.isEmpty && !isSelectedJobRunning && currentJob?.status != .queued
+            && !settings.currentTranslationAPIKey.isEmpty
     }
 
     var canCancel: Bool {
-        isBusy
+        isProcessing
     }
 
-    var isBusy: Bool {
-        isRunningTranscription || isRunningTranslation
+    var hasPendingWork: Bool {
+        jobs.contains { jobNeedsWork($0) }
+    }
+
+    var queuedJobCount: Int {
+        jobs.filter { $0.status == .queued }.count
     }
 
     var translationTargetLabel: String {
@@ -122,10 +141,10 @@ final class AppModel: ObservableObject {
     }
 
     var canPerformPrimaryAction: Bool {
-        if currentJob == nil { return !isBusy }
+        if currentJob == nil { return true }
         if transcriptSegments.isEmpty { return canTranscribe }
         if translatedSegments.isEmpty { return canTranslate }
-        return !isBusy
+        return !isSelectedJobRunning
     }
 
     var diagnosticsSummary: String {
@@ -151,7 +170,6 @@ final class AppModel: ObservableObject {
     }
 
     func selectJob(_ id: UUID?) {
-        guard !isBusy else { return }
         selectedJobID = id
     }
 
@@ -184,7 +202,7 @@ final class AppModel: ObservableObject {
         addVideos(urls: [url])
     }
 
-    /// Adds videos as separate queued jobs. Used by the file picker and drag-and-drop.
+    /// Adds videos as separate jobs. Used by the file picker and drag-and-drop.
     func addVideos(urls: [URL]) {
         let newJobs = urls.map { url in
             var job = TranscriptionJob(sourceURL: url, settings: settings)
@@ -193,14 +211,18 @@ final class AppModel: ObservableObject {
         }
         guard !newJobs.isEmpty else { return }
         jobs.insert(contentsOf: newJobs, at: 0)
-        if !isBusy {
-            selectedJobID = newJobs.first?.id
-        }
+        selectedJobID = newJobs.first?.id
         persistJobs()
+        if settings.autoStartAddedJobs {
+            for job in newJobs {
+                enqueueJob(job.id)
+            }
+        }
     }
 
     func deleteJob(_ id: UUID) {
-        guard !isBusy else { return }
+        // The running job cannot be deleted; cancel it first.
+        guard id != activeJobID else { return }
         jobs.removeAll { $0.id == id }
         if selectedJobID == id {
             selectedJobID = jobs.first?.id
@@ -219,8 +241,77 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func startTranscription(force: Bool = false) {
-        guard let index = currentJobIndex, !isBusy else { return }
+    // MARK: - Queue
+
+    /// Queues every job that still needs work and starts processing.
+    func startAllPendingJobs() {
+        queuePaused = false
+        for job in jobs where jobNeedsWork(job) && job.status != .queued {
+            updateJob(job.id) { job in
+                job.status = .queued
+                job.progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
+            }
+        }
+        processQueue()
+    }
+
+    /// Adds one job to the queue (or starts it right away when nothing is running).
+    func enqueueJob(_ id: UUID) {
+        guard let job = jobs.first(where: { $0.id == id }), !job.status.isRunning else { return }
+        queuePaused = false
+        updateJob(id) { job in
+            job.status = .queued
+            job.progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
+        }
+        processQueue()
+    }
+
+    func jobNeedsWork(_ job: TranscriptionJob) -> Bool {
+        if job.status.isRunning { return false }
+        if job.status == .queued { return true }
+        if job.transcriptSegments.isEmpty { return true }
+        return job.translatedSegments.isEmpty && !settings.currentTranslationAPIKey.isEmpty
+    }
+
+    /// Runs the next queued job. Serial on purpose: one model on the GPU at
+    /// a time.
+    private func processQueue() {
+        guard activeJobID == nil, !queuePaused else { return }
+        guard let next = jobs.first(where: { $0.status == .queued }) else {
+            if didProcessQueuedJob {
+                didProcessQueuedJob = false
+                notify(title: "WhisperDesk", body: "All queued jobs finished.")
+            }
+            return
+        }
+        didProcessQueuedJob = true
+        if next.transcriptSegments.isEmpty {
+            startTranscription(jobID: next.id)
+        } else {
+            startTranslation(jobID: next.id)
+        }
+        // If the job could not start (e.g. a guard failed), fail it instead
+        // of stalling the whole queue on a stuck "queued" entry.
+        if activeJobID == nil, let job = jobs.first(where: { $0.id == next.id }), job.status == .queued {
+            markFailed(next.id, message: "Could not start this job. Check the file and settings.")
+            processQueue()
+        }
+    }
+
+    func startTranscription(jobID: UUID? = nil, force: Bool = false) {
+        guard let index = jobs.firstIndex(where: { $0.id == (jobID ?? selectedJobID) }) else { return }
+        let targetID = jobs[index].id
+        guard !jobs[index].status.isRunning else { return }
+        // Something else is running: queue this job instead of fighting for
+        // the GPU.
+        if activeJobID != nil {
+            enqueueJob(targetID)
+            return
+        }
+        startTranscriptionNow(at: index, force: force)
+    }
+
+    private func startTranscriptionNow(at index: Int, force: Bool) {
         let jobID = jobs[index].id
         let videoURL = jobs[index].sourceURL
 
@@ -248,10 +339,14 @@ final class AppModel: ObservableObject {
            jobs[index].settings.bestOf == settings.bestOf,
            jobs[index].settings.temperature == settings.temperature,
            jobs[index].settings.noSpeechThreshold == settings.noSpeechThreshold {
+            let hasTranslation = !jobs[index].translatedSegments.isEmpty
+            jobs[index].status = hasTranslation ? .translationComplete : .transcriptionComplete
             jobs[index].progress = JobProgress(stage: .complete, detail: "Using existing transcript for unchanged file and settings.", fraction: 1)
-            appendLog("Skipped transcription because this file and transcription settings already have a transcript.")
-            if settings.autoTranslateAfterTranscription && jobs[index].translatedSegments.isEmpty {
-                startTranslation()
+            appendLog("Skipped transcription because this file and transcription settings already have a transcript.", to: jobID)
+            if settings.autoTranslateAfterTranscription && !hasTranslation {
+                startTranslation(jobID: jobID)
+            } else {
+                processQueue()
             }
             return
         }
@@ -265,7 +360,7 @@ final class AppModel: ObservableObject {
         if let validationMessage {
             jobs[index].log += "Adjusted transcription settings: \(validationMessage)\n"
         }
-        appendLog("Starting transcription with \(settings.whisperBackend.label) and model \(settings.whisperModel).")
+        appendLog("Starting transcription with \(settings.whisperBackend.label) and model \(settings.whisperModel).", to: jobID)
         persistJobs()
 
         activeJobID = jobID
@@ -278,21 +373,38 @@ final class AppModel: ObservableObject {
                 if settings.autoTranslateAfterTranscription && !settings.currentTranslationAPIKey.isEmpty {
                     activeTask = nil
                     activeJobID = nil
-                    startTranslation()
+                    startTranslation(jobID: jobID)
                     return
                 }
+                // The job ends here (no translation step follows).
+                autoExportSidecars(for: jobID)
+                notifyJobFinished(jobID)
             } catch is CancellationError {
                 markCanceled(jobID)
             } catch {
                 markFailed(jobID, message: "Transcription failed: \(error.localizedDescription)")
+                notifyJobFinished(jobID)
             }
             activeTask = nil
             activeJobID = nil
+            processQueue()
         }
     }
 
-    func startTranslation() {
-        guard let index = currentJobIndex, !jobs[index].transcriptSegments.isEmpty, !isBusy else { return }
+    func startTranslation(jobID: UUID? = nil) {
+        guard let index = jobs.firstIndex(where: { $0.id == (jobID ?? selectedJobID) }),
+              !jobs[index].transcriptSegments.isEmpty
+        else { return }
+        let targetID = jobs[index].id
+        guard !jobs[index].status.isRunning else { return }
+        if activeJobID != nil {
+            enqueueJob(targetID)
+            return
+        }
+        startTranslationNow(at: index)
+    }
+
+    private func startTranslationNow(at index: Int) {
         let jobID = jobs[index].id
         let segments = jobs[index].transcriptSegments
         let existingTranslations = jobs[index].partialTranslatedSegments.isEmpty
@@ -302,7 +414,8 @@ final class AppModel: ObservableObject {
         jobs[index].progress = JobProgress(stage: .translating, detail: "Starting translation.", fraction: 0)
         jobs[index].settings = JobSettingsSnapshot(settings: settings)
         appendLog(
-            "Starting translation from \(settings.translationSourceLanguage) to \(settings.translationTargetLanguage) with \(settings.openAIModel) using \(settings.translationChunkMode.label.lowercased()) chunks and \(settings.translationParallelism) worker(s)."
+            "Starting translation from \(settings.translationSourceLanguage) to \(settings.translationTargetLanguage) with \(settings.openAIModel) using \(settings.translationChunkMode.label.lowercased()) chunks and \(settings.translationParallelism) worker(s).",
+            to: jobID
         )
         persistJobs()
 
@@ -325,12 +438,19 @@ final class AppModel: ObservableObject {
             } catch {
                 markFailed(jobID, message: "Translation failed: \(error.localizedDescription)")
             }
+            notifyJobFinished(jobID)
             activeTask = nil
             activeJobID = nil
+            processQueue()
         }
     }
 
     func cancelActiveJob() {
+        // Stopping the current job also pauses the queue: a cancel means
+        // "stop working", not "move on to the next one".
+        if queuedJobCount > 0 {
+            queuePaused = true
+        }
         activeTask?.cancel()
         if let id = activeJobID ?? selectedJobID {
             updateJob(id) { job in
@@ -426,8 +546,15 @@ final class AppModel: ObservableObject {
     }
 
     private func bilingualSegments() -> [TranscriptionSegment] {
-        let translatedByID = Dictionary(uniqueKeysWithValues: translatedSegments.map { ($0.id, $0.text) })
-        return transcriptSegments.map { source in
+        bilingualSegments(transcript: transcriptSegments, translated: translatedSegments)
+    }
+
+    private func bilingualSegments(
+        transcript: [TranscriptionSegment],
+        translated: [TranscriptionSegment]
+    ) -> [TranscriptionSegment] {
+        let translatedByID = Dictionary(uniqueKeysWithValues: translated.map { ($0.id, $0.text) })
+        return transcript.map { source in
             TranscriptionSegment(
                 id: source.id,
                 start: source.start,
@@ -435,6 +562,68 @@ final class AppModel: ObservableObject {
                 text: "\(source.text)\n\(translatedByID[source.id] ?? "")"
             )
         }
+    }
+
+    // MARK: - Sidecar auto-export
+
+    /// Writes SRT files next to the source video when a job finishes, named
+    /// with language codes (video.vi.srt) so media players auto-load them.
+    private func autoExportSidecars(for id: UUID) {
+        guard settings.autoExportSidecar,
+              let job = jobs.first(where: { $0.id == id })
+        else { return }
+
+        // Follow the document choices remembered by the export sheet.
+        let defaults = UserDefaults.standard
+        let includeOriginal = defaults.object(forKey: "exportIncludeOriginal") as? Bool ?? true
+        let includeTranslation = defaults.object(forKey: "exportIncludeTranslation") as? Bool ?? true
+        let includeBilingual = defaults.object(forKey: "exportIncludeBilingual") as? Bool ?? false
+
+        let folder = job.sourceURL.deletingLastPathComponent()
+        let base = job.sourceURL.deletingPathExtension().lastPathComponent
+        var written: [String] = []
+        do {
+            if includeOriginal, !job.transcriptSegments.isEmpty {
+                let code = Self.sidecarLanguageCode(for: job.settings.sourceLanguage) ?? "original"
+                let name = "\(base).\(code).srt"
+                try SubtitleWriter.writeSRT(segments: job.transcriptSegments, to: folder.appendingPathComponent(name))
+                written.append(name)
+            }
+            if includeTranslation, !job.translatedSegments.isEmpty {
+                let code = Self.sidecarLanguageCode(for: job.settings.translationTargetLanguage)
+                    ?? languageSuffix(job.settings.translationTargetLanguage)
+                let name = "\(base).\(code).srt"
+                try SubtitleWriter.writeSRT(segments: job.translatedSegments, to: folder.appendingPathComponent(name))
+                written.append(name)
+            }
+            if includeBilingual, !job.transcriptSegments.isEmpty, !job.translatedSegments.isEmpty {
+                let name = "\(base).bilingual.srt"
+                try SubtitleWriter.writeSRT(
+                    segments: bilingualSegments(transcript: job.transcriptSegments, translated: job.translatedSegments),
+                    to: folder.appendingPathComponent(name)
+                )
+                written.append(name)
+            }
+            if !written.isEmpty {
+                appendLog("Saved sidecar subtitles next to the video: \(written.joined(separator: ", ")).", to: id)
+            }
+        } catch {
+            appendLog("Sidecar export failed: \(error.localizedDescription)", to: id)
+        }
+    }
+
+    /// ISO-639-1 code for sidecar file names. Transcription languages are
+    /// already codes ("ja"); translation targets are names ("Vietnamese").
+    private static func sidecarLanguageCode(for language: String) -> String? {
+        let normalized = language.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let codes: [String: String] = [
+            "english": "en", "japanese": "ja", "chinese": "zh", "korean": "ko",
+            "spanish": "es", "french": "fr", "german": "de", "indonesian": "id",
+            "thai": "th", "vietnamese": "vi",
+        ]
+        if normalized.isEmpty || normalized == "auto" { return nil }
+        if codes.values.contains(normalized) { return normalized }
+        return codes[normalized]
     }
 
     func exportLog() {
@@ -500,6 +689,7 @@ final class AppModel: ObservableObject {
             job.progress = JobProgress(stage: .complete, detail: "Translation complete.", fraction: 1)
             job.log += "Translation finished. Produced \(segments.count) translated segments.\n"
         }
+        autoExportSidecars(for: id)
     }
 
     private func markCanceled(_ id: UUID) {
@@ -534,8 +724,38 @@ final class AppModel: ObservableObject {
 
     private func appendLog(_ entry: String) {
         guard let id = selectedJobID else { return }
+        appendLog(entry, to: id)
+    }
+
+    private func appendLog(_ entry: String, to id: UUID) {
         updateJob(id) { job in
             job.log += "\(entry)\n"
+        }
+    }
+
+    // MARK: - Notifications
+
+    /// Posts a completion notification when the app is in the background so
+    /// long runs can be left unattended.
+    private func notifyJobFinished(_ id: UUID) {
+        guard let job = jobs.first(where: { $0.id == id }) else { return }
+        notify(title: job.title, body: job.status.label)
+    }
+
+    private func notify(title: String, body: String) {
+        // UNUserNotificationCenter requires a real app bundle, and there is
+        // no point notifying while the user is looking at the app.
+        guard Bundle.main.bundleIdentifier != nil,
+              Bundle.main.bundleURL.pathExtension == "app",
+              !NSApp.isActive
+        else { return }
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
         }
     }
 
@@ -545,8 +765,6 @@ final class AppModel: ObservableObject {
         }
         mutate(&jobs[index])
         jobs[index].updatedAt = Date()
-        jobs.sort { $0.updatedAt > $1.updatedAt }
-        selectedJobID = id
         if debouncePersist {
             schedulePersist()
         } else {

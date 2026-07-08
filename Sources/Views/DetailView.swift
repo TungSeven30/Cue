@@ -261,7 +261,7 @@ private struct HeaderCard: View {
                 if let status = model.currentJob?.status {
                     Image(systemName: status.systemImage)
                         .foregroundStyle(status.tint)
-                        .symbolEffect(.pulse, isActive: model.isBusy)
+                        .symbolEffect(.pulse, isActive: model.isSelectedJobRunning)
                 }
                 Text(progress.stage.label)
                     .font(.subheadline.weight(.semibold))
@@ -291,7 +291,7 @@ private struct HeaderCard: View {
                     .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
             } else if let fraction = progress.fraction {
                 ProgressView(value: fraction)
-            } else if model.isBusy {
+            } else if model.isSelectedJobRunning {
                 ProgressView().progressViewStyle(.linear)
             }
         }
@@ -445,8 +445,8 @@ private struct RunOptionsRow: View {
                 Spacer()
             }
         }
-        .disabled(model.isBusy)
-        .opacity(model.isBusy ? 0.55 : 1)
+        .disabled(model.isSelectedJobRunning)
+        .opacity(model.isSelectedJobRunning ? 0.55 : 1)
     }
 
     private func field<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {

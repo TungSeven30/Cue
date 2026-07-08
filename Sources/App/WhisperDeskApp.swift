@@ -24,6 +24,12 @@ struct WhisperDeskApp: App {
                 }
                 .keyboardShortcut("o")
 
+                Button("Start All") {
+                    model.startAllPendingJobs()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(!model.hasPendingWork && !model.queuePaused)
+
                 Button("Transcribe") {
                     model.startTranscription()
                 }

@@ -246,6 +246,8 @@ final class AppSettingsStore: ObservableObject {
     @Published var translationTargetLanguage: String { didSet { save() } }
     @Published var translationPrompt: String { didSet { save() } }
     @Published var autoTranslateAfterTranscription: Bool { didSet { save() } }
+    @Published var autoStartAddedJobs: Bool { didSet { save() } }
+    @Published var autoExportSidecar: Bool { didSet { save() } }
     @Published var showAdvancedControls: Bool { didSet { save() } }
     @Published var translationChunkMode: TranslationChunkMode { didSet { save() } }
     @Published var translationParallelism: Int {
@@ -333,6 +335,8 @@ final class AppSettingsStore: ObservableObject {
         translationTargetLanguage = defaults.string(forKey: "translationTargetLanguage") ?? "English"
         translationPrompt = defaults.string(forKey: "translationPrompt") ?? Self.defaultTranslationPrompt
         autoTranslateAfterTranscription = defaults.bool(forKey: "autoTranslateAfterTranscription")
+        autoStartAddedJobs = defaults.object(forKey: "autoStartAddedJobs") as? Bool ?? true
+        autoExportSidecar = defaults.bool(forKey: "autoExportSidecar")
         showAdvancedControls = defaults.bool(forKey: "showAdvancedControls")
         translationChunkMode = TranslationChunkMode(rawValue: defaults.string(forKey: "translationChunkMode") ?? "") ?? .balanced
         translationParallelism = max(1, min(4, defaults.object(forKey: "translationParallelism") as? Int ?? 2))
@@ -409,6 +413,8 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(translationTargetLanguage, forKey: "translationTargetLanguage")
         defaults.set(translationPrompt, forKey: "translationPrompt")
         defaults.set(autoTranslateAfterTranscription, forKey: "autoTranslateAfterTranscription")
+        defaults.set(autoStartAddedJobs, forKey: "autoStartAddedJobs")
+        defaults.set(autoExportSidecar, forKey: "autoExportSidecar")
         defaults.set(showAdvancedControls, forKey: "showAdvancedControls")
         defaults.set(translationChunkMode.rawValue, forKey: "translationChunkMode")
         defaults.set(translationParallelism, forKey: "translationParallelism")

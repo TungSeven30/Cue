@@ -13,7 +13,13 @@ struct WhisperDeskApp: App {
         }
         .commands {
             CommandGroup(after: .newItem) {
-                Button("Open Video...") {
+                Button(model.primaryActionTitle) {
+                    model.performPrimaryAction()
+                }
+                .keyboardShortcut(.return, modifiers: [.command])
+                .disabled(!model.canPerformPrimaryAction)
+
+                Button("Add Files...") {
                     model.selectVideo()
                 }
                 .keyboardShortcut("o")
@@ -39,25 +45,35 @@ struct WhisperDeskApp: App {
 
             CommandGroup(after: .saveItem) {
                 Button("Export Transcript SRT") {
-                    model.exportTranscript()
+                    model.exportTranscript(format: .srt)
                 }
                 .disabled(model.transcriptSegments.isEmpty)
 
-                Button("Export Translation SRT") {
-                    model.exportTranslation()
+                Button("Export \(model.translationExportTitle) SRT") {
+                    model.exportTranslation(format: .srt)
                 }
                 .disabled(model.translatedSegments.isEmpty)
 
-                Button("Export Bilingual SRT") {
-                    model.exportBilingual()
+                Button("Export \(model.bilingualExportTitle) SRT") {
+                    model.exportBilingual(format: .srt)
                 }
                 .disabled(model.translatedSegments.isEmpty)
+
+                Button("Export All...") {
+                    model.exportAll()
+                }
+                .disabled(model.transcriptSegments.isEmpty)
+
+                Button("Export Log...") {
+                    model.exportLog()
+                }
+                .disabled(model.currentJob == nil)
             }
         }
 
         Settings {
             SettingsView(settings: model.settings)
-                .frame(width: 480, height: 380)
+                .frame(width: 620, height: 780)
         }
     }
 }

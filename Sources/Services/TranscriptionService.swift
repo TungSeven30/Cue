@@ -29,7 +29,18 @@ struct TranscriptionService {
         let snapshot = TranscriptionSettingsSnapshot(
             sourceLanguage: settings.sourceLanguage,
             whisperModel: settings.whisperModel,
-            whisperBackendRawValue: settings.whisperBackend.rawValue
+            whisperBackendRawValue: settings.whisperBackend.rawValue,
+            preprocessAudio: settings.preprocessAudio,
+            vadFilter: settings.vadFilter,
+            removeEmptySegments: settings.removeEmptySegments,
+            removeRepeatedText: settings.removeRepeatedText,
+            mergeShortSegments: settings.mergeShortSegments,
+            minSegmentDuration: settings.minSegmentDuration,
+            maxMergeGap: settings.maxMergeGap,
+            beamSize: settings.beamSize,
+            bestOf: settings.bestOf,
+            temperature: settings.temperature,
+            noSpeechThreshold: settings.noSpeechThreshold
         )
 
         let scriptURL = try BackendScriptWriter.ensureScript()
@@ -50,6 +61,18 @@ struct TranscriptionService {
                 snapshot.whisperModel,
                 "--backend",
                 snapshot.whisperBackendRawValue,
+                "--preprocess-audio",
+                snapshot.preprocessAudio ? "true" : "false",
+                "--vad-filter",
+                snapshot.vadFilter ? "true" : "false",
+                "--beam-size",
+                "\(snapshot.beamSize)",
+                "--best-of",
+                "\(snapshot.bestOf)",
+                "--temperature",
+                "\(snapshot.temperature)",
+                "--no-speech-threshold",
+                "\(snapshot.noSpeechThreshold)",
             ]
             processBox.process = process
 
@@ -98,7 +121,8 @@ struct TranscriptionService {
             }
 
             let payload = try JSONDecoder().decode(TranscriptionPayload.self, from: stdoutData)
-            return TranscriptionResult(backend: payload.backend, segments: payload.segments)
+            let cleanedSegments = TranscriptionPostProcessor.clean(payload.segments, settings: snapshot)
+            return TranscriptionResult(backend: payload.backend, segments: cleanedSegments)
         } onCancel: {
             processBox.terminate()
         }
@@ -109,11 +133,235 @@ private struct TranscriptionSettingsSnapshot: Sendable {
     let sourceLanguage: String
     let whisperModel: String
     let whisperBackendRawValue: String
+    let preprocessAudio: Bool
+    let vadFilter: Bool
+    let removeEmptySegments: Bool
+    let removeRepeatedText: Bool
+    let mergeShortSegments: Bool
+    let minSegmentDuration: Double
+    let maxMergeGap: Double
+    let beamSize: Int
+    let bestOf: Int
+    let temperature: Double
+    let noSpeechThreshold: Double
 }
 
 private struct TranscriptionPayload: Decodable {
     let backend: String
     let segments: [TranscriptionSegment]
+}
+
+private enum TranscriptionPostProcessor {
+    static func clean(_ segments: [TranscriptionSegment], settings: TranscriptionSettingsSnapshot) -> [TranscriptionSegment] {
+        var cleaned = segments.map { segment in
+            TranscriptionSegment(
+                id: segment.id,
+                start: segment.start,
+                end: segment.end,
+                text: normalizeWhitespace(segment.text)
+            )
+        }
+
+        if settings.removeRepeatedText {
+            cleaned = cleaned.map { segment in
+                TranscriptionSegment(
+                    id: segment.id,
+                    start: segment.start,
+                    end: segment.end,
+                    text: collapseRepeatedText(segment.text)
+                )
+            }
+            cleaned = removeAdjacentDuplicates(cleaned)
+            cleaned = removeEchoesAfterSilence(cleaned)
+        }
+
+        if settings.removeEmptySegments {
+            cleaned = cleaned.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
+
+        if settings.mergeShortSegments {
+            cleaned = mergeShortSegments(cleaned, minDuration: settings.minSegmentDuration, maxGap: settings.maxMergeGap)
+        }
+
+        return renumber(cleaned)
+    }
+
+    private static func normalizeWhitespace(_ text: String) -> String {
+        text
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func collapseRepeatedText(_ text: String) -> String {
+        let trimmed = normalizeWhitespace(text)
+        guard !trimmed.isEmpty else { return "" }
+
+        let words = trimmed.split(separator: " ").map(String.init)
+        if words.count >= 4 {
+            for phraseLength in stride(from: min(8, words.count / 2), through: 1, by: -1) {
+                var output: [String] = []
+                var index = 0
+                while index < words.count {
+                    let phrase = Array(words[index..<min(index + phraseLength, words.count)])
+                    var next = index + phraseLength
+                    var repeated = false
+                    while next + phraseLength <= words.count && Array(words[next..<next + phraseLength]) == phrase {
+                        repeated = true
+                        next += phraseLength
+                    }
+                    output.append(contentsOf: phrase)
+                    index = repeated ? next : index + phraseLength
+                }
+                let candidate = output.joined(separator: " ")
+                if candidate.count < trimmed.count {
+                    return candidate
+                }
+            }
+        }
+
+        let scalars = Array(trimmed)
+        guard scalars.count >= 8 else { return trimmed }
+        for length in stride(from: min(20, scalars.count / 2), through: 2, by: -1) {
+            let first = String(scalars.prefix(length))
+            var cursor = length
+            var repeats = 1
+            while cursor + length <= scalars.count && String(scalars[cursor..<cursor + length]) == first {
+                repeats += 1
+                cursor += length
+            }
+            if repeats >= 2 && cursor == scalars.count {
+                return first
+            }
+        }
+        return trimmed
+    }
+
+    private static func removeAdjacentDuplicates(_ segments: [TranscriptionSegment]) -> [TranscriptionSegment] {
+        var result: [TranscriptionSegment] = []
+        for segment in segments {
+            let normalized = comparableText(segment.text)
+            if let last = result.last {
+                let previous = comparableText(last.text)
+                let closeInTime = segment.start - last.end <= 0.35
+                if closeInTime && !normalized.isEmpty && normalized == previous {
+                    result[result.count - 1] = TranscriptionSegment(
+                        id: last.id,
+                        start: last.start,
+                        end: max(last.end, segment.end),
+                        text: last.text
+                    )
+                    continue
+                }
+            }
+            result.append(segment)
+        }
+        return result
+    }
+
+    private static func removeEchoesAfterSilence(_ segments: [TranscriptionSegment]) -> [TranscriptionSegment] {
+        var result: [TranscriptionSegment] = []
+        for segment in segments {
+            if let last = result.last, isLikelySilenceEcho(segment, after: last) {
+                continue
+            }
+            result.append(segment)
+        }
+        return result
+    }
+
+    private static func isLikelySilenceEcho(_ segment: TranscriptionSegment, after previous: TranscriptionSegment) -> Bool {
+        let gap = segment.start - previous.end
+        guard gap >= 1.5 else { return false }
+
+        let current = comparableText(segment.text)
+        let prior = comparableText(previous.text)
+        let minimumLength = gap >= 4 ? 6 : 8
+        guard current.count >= minimumLength, prior.count >= minimumLength else {
+            return false
+        }
+
+        let duration = segment.end - segment.start
+        let similarity = textSimilarity(current, prior)
+        if current == prior {
+            return duration >= 0.8
+        }
+        return duration >= 1.2 && similarity >= 0.9
+    }
+
+    private static func comparableText(_ text: String) -> String {
+        text
+            .lowercased()
+            .unicodeScalars
+            .filter { scalar in
+                !CharacterSet.whitespacesAndNewlines.contains(scalar)
+                    && !CharacterSet.punctuationCharacters.contains(scalar)
+                    && !CharacterSet.symbols.contains(scalar)
+            }
+            .map(String.init)
+            .joined()
+    }
+
+    private static func textSimilarity(_ first: String, _ second: String) -> Double {
+        guard !first.isEmpty, !second.isEmpty else { return 0 }
+        if first == second { return 1 }
+
+        let firstCharacters = Array(first)
+        let secondCharacters = Array(second)
+        let distance = editDistance(firstCharacters, secondCharacters)
+        let longest = max(firstCharacters.count, secondCharacters.count)
+        return 1 - (Double(distance) / Double(max(longest, 1)))
+    }
+
+    private static func editDistance(_ first: [Character], _ second: [Character]) -> Int {
+        if first.isEmpty { return second.count }
+        if second.isEmpty { return first.count }
+
+        var previous = Array(0...second.count)
+        var current = Array(repeating: 0, count: second.count + 1)
+
+        for firstIndex in 1...first.count {
+            current[0] = firstIndex
+            for secondIndex in 1...second.count {
+                let substitutionCost = first[firstIndex - 1] == second[secondIndex - 1] ? 0 : 1
+                current[secondIndex] = min(
+                    previous[secondIndex] + 1,
+                    current[secondIndex - 1] + 1,
+                    previous[secondIndex - 1] + substitutionCost
+                )
+            }
+            swap(&previous, &current)
+        }
+
+        return previous[second.count]
+    }
+
+    private static func mergeShortSegments(_ segments: [TranscriptionSegment], minDuration: Double, maxGap: Double) -> [TranscriptionSegment] {
+        var result: [TranscriptionSegment] = []
+        for segment in segments {
+            let duration = segment.end - segment.start
+            if duration < minDuration,
+               let last = result.last,
+               segment.start - last.end <= maxGap {
+                result[result.count - 1] = TranscriptionSegment(
+                    id: last.id,
+                    start: last.start,
+                    end: max(last.end, segment.end),
+                    text: normalizeWhitespace("\(last.text) \(segment.text)")
+                )
+            } else {
+                result.append(segment)
+            }
+        }
+        return result
+    }
+
+    private static func renumber(_ segments: [TranscriptionSegment]) -> [TranscriptionSegment] {
+        segments.enumerated().map { index, segment in
+            TranscriptionSegment(id: index + 1, start: segment.start, end: segment.end, text: segment.text)
+        }
+    }
 }
 
 private struct TranscriptionProgressEvent: Decodable {

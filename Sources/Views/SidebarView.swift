@@ -34,12 +34,11 @@ struct SidebarView: View {
             Button {
                 model.selectVideo()
             } label: {
-                Label("Open Video…", systemImage: "plus")
+                Label("Add Files…", systemImage: "plus")
                     .frame(maxWidth: .infinity)
             }
             .controlSize(.large)
             .buttonStyle(.borderedProminent)
-            .disabled(model.isBusy)
             .padding(12)
         }
     }

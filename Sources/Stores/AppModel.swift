@@ -50,6 +50,10 @@ final class AppModel: ObservableObject {
         currentJob?.translatedSegments ?? []
     }
 
+    var partialTranslatedSegments: [TranscriptionSegment] {
+        currentJob?.partialTranslatedSegments ?? []
+    }
+
     var log: String {
         currentJob?.log ?? "Choose a video to begin.\n"
     }
@@ -86,6 +90,43 @@ final class AppModel: ObservableObject {
         isRunningTranscription || isRunningTranslation
     }
 
+    var translationTargetLabel: String {
+        let target = translatedSegments.isEmpty
+            ? settings.translationTargetLanguage
+            : currentJob?.settings.translationTargetLanguage ?? settings.translationTargetLanguage
+        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Translation" : trimmed
+    }
+
+    var translationExportTitle: String {
+        "\(translationTargetLabel) Translation"
+    }
+
+    var bilingualExportTitle: String {
+        "Bilingual Captions (\(translationTargetLabel))"
+    }
+
+    var primaryActionTitle: String {
+        if currentJob == nil { return "Open Video" }
+        if transcriptSegments.isEmpty { return "Transcribe" }
+        if translatedSegments.isEmpty { return "Translate to \(translationTargetLabel)" }
+        return "Export All"
+    }
+
+    var primaryActionSystemImage: String {
+        if currentJob == nil { return "folder" }
+        if transcriptSegments.isEmpty { return "waveform" }
+        if translatedSegments.isEmpty { return "character.bubble" }
+        return "square.and.arrow.up"
+    }
+
+    var canPerformPrimaryAction: Bool {
+        if currentJob == nil { return !isBusy }
+        if transcriptSegments.isEmpty { return canTranscribe }
+        if translatedSegments.isEmpty { return canTranslate }
+        return !isBusy
+    }
+
     var diagnosticsSummary: String {
         guard !diagnostics.isEmpty else {
             return "Not checked"
@@ -114,23 +155,46 @@ final class AppModel: ObservableObject {
     }
 
     func selectVideo() {
-        guard !isBusy else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.movie, .mpeg4Movie, .audio]
         panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let url = panel.url {
-            addVideo(url: url)
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Add"
+        panel.message = "Choose one or more video or audio files to add as jobs."
+        if panel.runModal() == .OK {
+            addVideos(urls: panel.urls)
+        }
+    }
+
+    func performPrimaryAction() {
+        if currentJob == nil {
+            selectVideo()
+        } else if transcriptSegments.isEmpty {
+            startTranscription()
+        } else if translatedSegments.isEmpty {
+            startTranslation()
+        } else {
+            exportAll()
         }
     }
 
     /// Adds a video as a new job. Used by the file picker and drag-and-drop.
     func addVideo(url: URL) {
-        guard !isBusy else { return }
-        var job = TranscriptionJob(sourceURL: url, settings: settings)
-        job.log = "Selected \(url.path(percentEncoded: false)).\n"
-        jobs.insert(job, at: 0)
-        selectedJobID = job.id
+        addVideos(urls: [url])
+    }
+
+    /// Adds videos as separate queued jobs. Used by the file picker and drag-and-drop.
+    func addVideos(urls: [URL]) {
+        let newJobs = urls.map { url in
+            var job = TranscriptionJob(sourceURL: url, settings: settings)
+            job.log = "Selected \(url.path(percentEncoded: false)).\n"
+            return job
+        }
+        guard !newJobs.isEmpty else { return }
+        jobs.insert(contentsOf: newJobs, at: 0)
+        if !isBusy {
+            selectedJobID = newJobs.first?.id
+        }
         persistJobs()
     }
 
@@ -151,14 +215,52 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func startTranscription() {
+    func startTranscription(force: Bool = false) {
         guard let index = currentJobIndex, !isBusy else { return }
         let jobID = jobs[index].id
         let videoURL = jobs[index].sourceURL
+
+        let validationMessage = settings.transcriptionValidationMessage
+        if validationMessage != nil {
+            settings.repairTranscriptionModelForBackend()
+        }
+
+        let currentFingerprint = TranscriptionJob.fingerprint(for: videoURL)
+        if !force,
+           !jobs[index].transcriptSegments.isEmpty,
+           jobs[index].sourceFingerprint == currentFingerprint,
+           jobs[index].settings.transcriptionProcessingVersion == JobSettingsSnapshot.currentTranscriptionProcessingVersion,
+           jobs[index].settings.sourceLanguage == settings.sourceLanguage,
+           jobs[index].settings.whisperModel == settings.whisperModel,
+           jobs[index].settings.whisperBackend == settings.whisperBackend,
+           jobs[index].settings.preprocessAudio == settings.preprocessAudio,
+           jobs[index].settings.vadFilter == settings.vadFilter,
+           jobs[index].settings.removeEmptySegments == settings.removeEmptySegments,
+           jobs[index].settings.removeRepeatedText == settings.removeRepeatedText,
+           jobs[index].settings.mergeShortSegments == settings.mergeShortSegments,
+           jobs[index].settings.minSegmentDuration == settings.minSegmentDuration,
+           jobs[index].settings.maxMergeGap == settings.maxMergeGap,
+           jobs[index].settings.beamSize == settings.beamSize,
+           jobs[index].settings.bestOf == settings.bestOf,
+           jobs[index].settings.temperature == settings.temperature,
+           jobs[index].settings.noSpeechThreshold == settings.noSpeechThreshold {
+            jobs[index].progress = JobProgress(stage: .complete, detail: "Using existing transcript for unchanged file and settings.", fraction: 1)
+            appendLog("Skipped transcription because this file and transcription settings already have a transcript.")
+            if settings.autoTranslateAfterTranscription && jobs[index].translatedSegments.isEmpty {
+                startTranslation()
+            }
+            return
+        }
+
         jobs[index].status = .transcribing
         jobs[index].progress = JobProgress(stage: .preflight, detail: "Starting transcription.", fraction: 0)
         jobs[index].translatedSegments = []
+        jobs[index].partialTranslatedSegments = []
+        jobs[index].sourceFingerprint = currentFingerprint
         jobs[index].settings = JobSettingsSnapshot(settings: settings)
+        if let validationMessage {
+            jobs[index].log += "Adjusted transcription settings: \(validationMessage)\n"
+        }
         appendLog("Starting transcription with \(settings.whisperBackend.label) and model \(settings.whisperModel).")
         persistJobs()
 
@@ -169,6 +271,12 @@ final class AppModel: ObservableObject {
                     self?.updateProgress(progress, for: jobID)
                 }
                 finishTranscription(result, for: jobID)
+                if settings.autoTranslateAfterTranscription && !settings.openAIAPIKey.isEmpty {
+                    activeTask = nil
+                    activeJobID = nil
+                    startTranslation()
+                    return
+                }
             } catch is CancellationError {
                 markCanceled(jobID)
             } catch {
@@ -183,10 +291,15 @@ final class AppModel: ObservableObject {
         guard let index = currentJobIndex, !jobs[index].transcriptSegments.isEmpty, !isBusy else { return }
         let jobID = jobs[index].id
         let segments = jobs[index].transcriptSegments
+        let existingTranslations = jobs[index].partialTranslatedSegments.isEmpty
+            ? jobs[index].translatedSegments
+            : jobs[index].partialTranslatedSegments
         jobs[index].status = .translating
         jobs[index].progress = JobProgress(stage: .translating, detail: "Starting translation.", fraction: 0)
         jobs[index].settings = JobSettingsSnapshot(settings: settings)
-        appendLog("Starting translation with \(settings.openAIModel).")
+        appendLog(
+            "Starting translation from \(settings.translationSourceLanguage) to \(settings.translationTargetLanguage) with \(settings.openAIModel) using \(settings.translationChunkMode.label.lowercased()) chunks and \(settings.translationParallelism) worker(s)."
+        )
         persistJobs()
 
         activeJobID = jobID
@@ -195,9 +308,12 @@ final class AppModel: ObservableObject {
                 let result = try await translationService.translate(
                     segments: segments,
                     sourceLanguage: settings.sourceLanguage,
-                    settings: settings
+                    settings: settings,
+                    existingTranslations: existingTranslations
                 ) { [weak self] progress in
                     self?.updateProgress(progress, for: jobID)
+                } onPartial: { [weak self] partial in
+                    self?.updatePartialTranslation(partial, for: jobID)
                 }
                 finishTranslation(result, for: jobID)
             } catch is CancellationError {
@@ -221,23 +337,115 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func exportTranscript() {
+    func exportTranscript(format: SubtitleExportFormat = .srt) {
         guard !transcriptSegments.isEmpty else { return }
-        export(segments: transcriptSegments, suggestedSuffix: ".original.srt")
+        export(segments: transcriptSegments, format: format, suggestedSuffix: ".original.\(format.fileExtension)")
     }
 
-    func exportTranslation() {
+    func exportTranslation(format: SubtitleExportFormat = .srt) {
         guard !translatedSegments.isEmpty else { return }
-        export(segments: translatedSegments, suggestedSuffix: ".translated.en.srt")
+        export(
+            segments: translatedSegments,
+            format: format,
+            suggestedSuffix: ".translated.\(languageSuffix(translationTargetLabel)).\(format.fileExtension)"
+        )
     }
 
-    func exportBilingual() {
+    func exportBilingual(format: SubtitleExportFormat = .srt) {
         guard !transcriptSegments.isEmpty, !translatedSegments.isEmpty else { return }
         let merged = transcriptSegments.map { source in
             let translated = translatedSegments.first { $0.id == source.id }?.text ?? ""
             return TranscriptionSegment(id: source.id, start: source.start, end: source.end, text: "\(source.text)\n\(translated)")
         }
-        export(segments: merged, suggestedSuffix: ".bilingual.srt")
+        export(
+            segments: merged,
+            format: format,
+            suggestedSuffix: ".bilingual.\(languageSuffix(translationTargetLabel)).\(format.fileExtension)"
+        )
+    }
+
+    func exportAll() {
+        guard let selectedVideoURL, !transcriptSegments.isEmpty else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Export"
+        panel.directoryURL = lastExportDirectoryURL()
+
+        if panel.runModal() == .OK, let folder = panel.url {
+            settings.lastExportDirectory = folder.path
+            let base = selectedVideoURL.deletingPathExtension().lastPathComponent
+            do {
+                try SubtitleWriter.writeSRT(
+                    segments: transcriptSegments,
+                    to: folder.appendingPathComponent("\(base).original.srt")
+                )
+                try SubtitleWriter.writeText(
+                    segments: transcriptSegments,
+                    to: folder.appendingPathComponent("\(base).original.txt")
+                )
+                try SubtitleWriter.writeMarkdown(
+                    segments: transcriptSegments,
+                    to: folder.appendingPathComponent("\(base).original.md")
+                )
+                try SubtitleWriter.writeJSON(
+                    segments: transcriptSegments,
+                    to: folder.appendingPathComponent("\(base).original.json")
+                )
+
+                if !translatedSegments.isEmpty {
+                    let target = languageSuffix(translationTargetLabel)
+                    try SubtitleWriter.writeSRT(
+                        segments: translatedSegments,
+                        to: folder.appendingPathComponent("\(base).translated.\(target).srt")
+                    )
+                    try SubtitleWriter.writeText(
+                        segments: translatedSegments,
+                        to: folder.appendingPathComponent("\(base).translated.\(target).txt")
+                    )
+                    try SubtitleWriter.writeMarkdown(
+                        segments: translatedSegments,
+                        to: folder.appendingPathComponent("\(base).translated.\(target).md")
+                    )
+                    try SubtitleWriter.writeJSON(
+                        segments: translatedSegments,
+                        to: folder.appendingPathComponent("\(base).translated.\(target).json")
+                    )
+                    let bilingual = transcriptSegments.map { source in
+                        let translated = translatedSegments.first { $0.id == source.id }?.text ?? ""
+                        return TranscriptionSegment(id: source.id, start: source.start, end: source.end, text: "\(source.text)\n\(translated)")
+                    }
+                    try SubtitleWriter.writeSRT(
+                        segments: bilingual,
+                        to: folder.appendingPathComponent("\(base).bilingual.\(target).srt")
+                    )
+                }
+
+                try log.write(to: folder.appendingPathComponent("\(base).log.txt"), atomically: true, encoding: .utf8)
+                appendLog("Exported all artifacts to \(folder.path(percentEncoded: false)).")
+            } catch {
+                appendLog("Export all failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func exportLog() {
+        guard let selectedVideoURL else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.plainText]
+        panel.directoryURL = lastExportDirectoryURL()
+        panel.nameFieldStringValue = selectedVideoURL.deletingPathExtension().lastPathComponent + ".log.txt"
+        if panel.runModal() == .OK, let destination = panel.url {
+            settings.lastExportDirectory = destination.deletingLastPathComponent().path
+            do {
+                try log.write(to: destination, atomically: true, encoding: .utf8)
+                appendLog("Exported log to \(destination.path(percentEncoded: false)).")
+            } catch {
+                appendLog("Export log failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     func updateTranscriptSegment(_ segment: TranscriptionSegment, text: String) {
@@ -281,6 +489,7 @@ final class AppModel: ObservableObject {
     private func finishTranslation(_ segments: [TranscriptionSegment], for id: UUID) {
         updateJob(id) { job in
             job.translatedSegments = segments
+            job.partialTranslatedSegments = []
             job.status = .translationComplete
             job.progress = JobProgress(stage: .complete, detail: "Translation complete.", fraction: 1)
             job.log += "Translation finished. Produced \(segments.count) translated segments.\n"
@@ -307,6 +516,13 @@ final class AppModel: ObservableObject {
         updateJob(id, debouncePersist: true) { job in
             job.progress = progress
             job.log += "\(progress.stage.label): \(progress.detail)\n"
+        }
+    }
+
+    private func updatePartialTranslation(_ segments: [TranscriptionSegment], for id: UUID) {
+        updateJob(id, debouncePersist: true) { job in
+            job.partialTranslatedSegments = segments
+            job.log += "Saved partial translation: \(segments.count) segment(s).\n"
         }
     }
 
@@ -346,19 +562,64 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func export(segments: [TranscriptionSegment], suggestedSuffix: String) {
+    private func export(segments: [TranscriptionSegment], format: SubtitleExportFormat, suggestedSuffix: String) {
         guard let selectedVideoURL else { return }
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.plainText]
+        panel.allowedContentTypes = [contentType(for: format)]
+        panel.allowsOtherFileTypes = false
+        panel.directoryURL = lastExportDirectoryURL()
         panel.nameFieldStringValue = selectedVideoURL.deletingPathExtension().lastPathComponent + suggestedSuffix
         if panel.runModal() == .OK, let destination = panel.url {
+            let exportURL = normalizedExportURL(destination, expectedExtension: format.fileExtension)
+            settings.lastExportDirectory = exportURL.deletingLastPathComponent().path
             do {
-                try SubtitleWriter.writeSRT(segments: segments, to: destination)
-                appendLog("Exported subtitles to \(destination.path(percentEncoded: false)).")
+                try SubtitleWriter.write(segments: segments, format: format, to: exportURL)
+                appendLog("Exported subtitles to \(exportURL.path(percentEncoded: false)).")
             } catch {
                 appendLog("Export failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    private func contentType(for format: SubtitleExportFormat) -> UTType {
+        switch format {
+        case .srt:
+            return UTType(filenameExtension: "srt", conformingTo: .plainText) ?? .plainText
+        case .text:
+            return .plainText
+        case .markdown:
+            return UTType(filenameExtension: "md", conformingTo: .plainText) ?? .plainText
+        case .json:
+            return .json
+        }
+    }
+
+    private func normalizedExportURL(_ url: URL, expectedExtension: String) -> URL {
+        let expected = expectedExtension.lowercased()
+        if url.pathExtension.lowercased() == expected {
+            return url
+        }
+
+        let withoutAddedExtension = url.deletingPathExtension()
+        if withoutAddedExtension.pathExtension.lowercased() == expected {
+            return withoutAddedExtension
+        }
+
+        return withoutAddedExtension.appendingPathExtension(expectedExtension)
+    }
+
+    private func lastExportDirectoryURL() -> URL? {
+        let path = settings.lastExportDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        return path.isEmpty ? nil : URL(fileURLWithPath: path, isDirectory: true)
+    }
+
+    private func languageSuffix(_ language: String) -> String {
+        let normalized = language
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: "-")
+        return normalized.isEmpty ? "translation" : normalized
     }
 
     private func persistJobs() {

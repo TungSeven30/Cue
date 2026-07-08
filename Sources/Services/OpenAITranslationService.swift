@@ -20,47 +20,104 @@ enum TranslationServiceError: LocalizedError {
     }
 }
 
+private struct TranslationChunkResult {
+    let chunkNumber: Int
+    let segments: [TranslatedSegment]
+}
+
 struct OpenAITranslationService {
     @MainActor
     func translate(
         segments: [TranscriptionSegment],
         sourceLanguage: String,
         settings: AppSettingsStore,
-        progress: @escaping @MainActor (JobProgress) -> Void
+        existingTranslations: [TranscriptionSegment],
+        progress: @escaping @MainActor (JobProgress) -> Void,
+        onPartial: @escaping @MainActor ([TranscriptionSegment]) -> Void
     ) async throws -> [TranscriptionSegment] {
         let apiKey = settings.openAIAPIKey
         let model = settings.openAIModel
+        let chunkSize = settings.translationChunkMode.chunkSize
+        let parallelism = max(1, min(4, settings.translationParallelism))
+        let translationSourceLanguage = Self.translationSourceLanguage(
+            translationSetting: settings.translationSourceLanguage,
+            transcriptionSetting: sourceLanguage
+        )
+        let targetLanguage = settings.translationTargetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = settings.translationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? AppSettingsStore.defaultTranslationPrompt
+            : settings.translationPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !apiKey.isEmpty else {
             throw TranslationServiceError.missingAPIKey
         }
 
-        let chunks = segments.chunked(into: 80)
-        var translatedByID: [Int: String] = [:]
+        let chunks = segments.chunked(into: chunkSize)
+        var translatedByID = Dictionary(uniqueKeysWithValues: existingTranslations.map { ($0.id, $0.text) })
+        let targetIDs = Set(segments.map(\.id))
+        translatedByID = translatedByID.filter { targetIDs.contains($0.key) }
 
-        for (index, chunk) in chunks.enumerated() {
+        if !translatedByID.isEmpty {
+            onPartialResult(translatedByID: translatedByID, source: segments, progress: progress, onPartial: onPartial)
+        }
+
+        var nextIndex = 0
+        while nextIndex < chunks.count {
             if Task.isCancelled {
                 throw CancellationError()
             }
 
-            let chunkNumber = index + 1
+            let batchStart = nextIndex
+            let batchEnd = min(nextIndex + parallelism, chunks.count)
+            let indexedChunks = (batchStart..<batchEnd).compactMap { index -> (Int, [TranscriptionSegment])? in
+                let chunk = chunks[index]
+                let isComplete = chunk.allSatisfy { translatedByID[$0.id] != nil }
+                return isComplete ? nil : (index, chunk)
+            }
+            nextIndex = batchEnd
+
+            guard !indexedChunks.isEmpty else {
+                continue
+            }
+
+            let chunkLabels = indexedChunks.map { "\($0.0 + 1)" }.joined(separator: ", ")
             progress(
                 JobProgress(
                     stage: .translating,
-                    detail: "Translating chunk \(chunkNumber) of \(chunks.count).",
-                    fraction: Double(index) / Double(max(chunks.count, 1))
+                    detail: "Translating chunk \(chunkLabels) of \(chunks.count).",
+                    fraction: Double(batchStart) / Double(max(chunks.count, 1))
                 )
             )
 
-            let translatedChunk = try await translateChunkWithRetry(
-                chunk,
-                chunkNumber: chunkNumber,
-                totalChunks: chunks.count,
-                sourceLanguage: sourceLanguage,
-                apiKey: apiKey,
-                model: model
-            )
-            translatedChunk.forEach { translatedByID[$0.id] = $0.text }
+            let results = try await withThrowingTaskGroup(of: TranslationChunkResult.self) { group in
+                for (index, chunk) in indexedChunks {
+                    let chunkNumber = index + 1
+                    group.addTask {
+                        let translatedChunk = try await translateChunkWithRetry(
+                            chunk,
+                            chunkNumber: chunkNumber,
+                            totalChunks: chunks.count,
+                            sourceLanguage: translationSourceLanguage,
+                            targetLanguage: targetLanguage.isEmpty ? "English" : targetLanguage,
+                            prompt: prompt,
+                            apiKey: apiKey,
+                            model: model
+                        )
+                        return TranslationChunkResult(chunkNumber: chunkNumber, segments: translatedChunk)
+                    }
+                }
+
+                var collected: [TranslationChunkResult] = []
+                for try await result in group {
+                    collected.append(result)
+                }
+                return collected.sorted { $0.chunkNumber < $1.chunkNumber }
+            }
+
+            for result in results {
+                result.segments.forEach { translatedByID[$0.id] = $0.text }
+                onPartialResult(translatedByID: translatedByID, source: segments, progress: progress, onPartial: onPartial)
+            }
         }
 
         let untranslated = segments.filter { translatedByID[$0.id] == nil }.count
@@ -79,11 +136,35 @@ struct OpenAITranslationService {
         }
     }
 
+    @MainActor
+    private func onPartialResult(
+        translatedByID: [Int: String],
+        source segments: [TranscriptionSegment],
+        progress: @escaping @MainActor (JobProgress) -> Void,
+        onPartial: @escaping @MainActor ([TranscriptionSegment]) -> Void
+    ) {
+        let partial = segments.compactMap { segment -> TranscriptionSegment? in
+            guard let text = translatedByID[segment.id] else { return nil }
+            return TranscriptionSegment(id: segment.id, start: segment.start, end: segment.end, text: text)
+        }
+        onPartial(partial)
+        let completed = segments.filter { translatedByID[$0.id] != nil }.count
+        progress(
+            JobProgress(
+                stage: .translating,
+                detail: "Saved \(completed) of \(segments.count) translated segment(s).",
+                fraction: Double(completed) / Double(max(segments.count, 1))
+            )
+        )
+    }
+
     private func translateChunkWithRetry(
         _ segments: [TranscriptionSegment],
         chunkNumber: Int,
         totalChunks: Int,
         sourceLanguage: String,
+        targetLanguage: String,
+        prompt: String,
         apiKey: String,
         model: String
     ) async throws -> [TranslatedSegment] {
@@ -95,6 +176,8 @@ struct OpenAITranslationService {
                     chunkNumber: chunkNumber,
                     totalChunks: totalChunks,
                     sourceLanguage: sourceLanguage,
+                    targetLanguage: targetLanguage,
+                    prompt: prompt,
                     apiKey: apiKey,
                     model: model
                 )
@@ -116,9 +199,22 @@ struct OpenAITranslationService {
         chunkNumber: Int,
         totalChunks: Int,
         sourceLanguage: String,
+        targetLanguage: String,
+        prompt: String,
         apiKey: String,
         model: String
     ) async throws -> [TranslatedSegment] {
+        let systemPrompt = """
+        \(prompt)
+
+        Source language: \(sourceLanguage).
+        Target language: \(targetLanguage).
+        Preserve segment count, ordering, ids, and timing alignment.
+        Keep lines concise for subtitles.
+        This is chunk \(chunkNumber) of \(totalChunks); do not mention chunking.
+        Return JSON only in the shape {"segments":[{"id":1,"text":"..."}]}.
+        """
+
         let requestBody = TranslationRequest(
             model: model,
             input: [
@@ -127,13 +223,7 @@ struct OpenAITranslationService {
                     content: [
                         .init(
                             type: "input_text",
-                            text: """
-                            You translate subtitle segments into natural English.
-                            Preserve segment count, ordering, ids, and timing alignment.
-                            Keep lines concise for subtitles.
-                            This is chunk \(chunkNumber) of \(totalChunks); do not mention chunking.
-                            Return JSON only in the shape {"segments":[{"id":1,"text":"..."}]}.
-                            """
+                            text: systemPrompt
                         )
                     ]
                 ),
@@ -143,7 +233,6 @@ struct OpenAITranslationService {
                         .init(
                             type: "input_text",
                             text: """
-                            Source language: \(sourceLanguage).
                             Segments:
                             \(String(decoding: try JSONEncoder().encode(segments), as: UTF8.self))
                             """
@@ -173,7 +262,7 @@ struct OpenAITranslationService {
 
         let decoded = try JSONDecoder().decode(OpenAIResponseEnvelope.self, from: data)
         let rawText = decoded.outputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let jsonData = rawText.data(using: .utf8) else {
+        guard let jsonData = Self.extractJSONObject(from: rawText).data(using: .utf8) else {
             throw TranslationServiceError.invalidResponse
         }
 
@@ -215,6 +304,44 @@ struct OpenAITranslationService {
             let missing = expectedIDs.subtracting(actualIDs).sorted()
             let extra = actualIDs.subtracting(expectedIDs).sorted()
             throw TranslationServiceError.validationFailed("Translation returned mismatched segment ids. Missing: \(missing). Extra: \(extra).")
+        }
+    }
+
+    private static func extractJSONObject(from text: String) -> String {
+        var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("```") {
+            trimmed = trimmed
+                .replacingOccurrences(of: "```json", with: "")
+                .replacingOccurrences(of: "```JSON", with: "")
+                .replacingOccurrences(of: "```", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        guard let start = trimmed.firstIndex(of: "{"), let end = trimmed.lastIndex(of: "}"), start <= end else {
+            return trimmed
+        }
+        return String(trimmed[start...end])
+    }
+
+    private static func translationSourceLanguage(translationSetting: String, transcriptionSetting: String) -> String {
+        let trimmedTranslation = translationSetting.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTranslation.isEmpty && trimmedTranslation.lowercased() != "auto" {
+            return trimmedTranslation
+        }
+
+        switch transcriptionSetting.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "en": return "English"
+        case "ja": return "Japanese"
+        case "zh": return "Chinese"
+        case "ko": return "Korean"
+        case "es": return "Spanish"
+        case "fr": return "French"
+        case "de": return "German"
+        case "id": return "Indonesian"
+        case "th": return "Thai"
+        case "vi": return "Vietnamese"
+        case "", "auto": return "the source language detected in the transcript"
+        default: return transcriptionSetting
         }
     }
 }

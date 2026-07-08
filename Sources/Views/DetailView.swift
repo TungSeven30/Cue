@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 enum WorkspaceTab: String, CaseIterable, Identifiable {
@@ -39,9 +40,9 @@ struct DetailView: View {
         .navigationTitle("WhisperDesk")
         .navigationSubtitle(model.currentJob?.title ?? "")
         .dropDestination(for: URL.self) { urls, _ in
-            guard let url = urls.first(where: \.isFileURL) else { return false }
-            model.addVideo(url: url)
-            return true
+            let fileURLs = urls.filter(\.isFileURL)
+            model.addVideos(urls: fileURLs)
+            return !fileURLs.isEmpty
         }
     }
 
@@ -49,9 +50,9 @@ struct DetailView: View {
         ContentUnavailableView {
             Label("No Video Selected", systemImage: "film.stack")
         } description: {
-            Text("Open a video or audio file — or drag one into the window — to start transcribing.")
+            Text("Open video or audio files, or drag them into the window, to add jobs.")
         } actions: {
-            Button("Open Video…") { model.selectVideo() }
+            Button("Add Files…") { model.selectVideo() }
                 .buttonStyle(.borderedProminent)
         }
     }
@@ -132,12 +133,12 @@ struct DetailView: View {
 
     private var translationHint: String {
         if model.transcriptSegments.isEmpty {
-            return "Transcribe the video first, then translate the segments into English."
+            return "Transcribe the video first, then translate the segments into \(model.translationTargetLabel)."
         }
         if model.settings.openAIAPIKey.isEmpty {
-            return "Add an OpenAI API key in Settings (⌘,) to translate the transcript into English."
+            return "Add an OpenAI API key in Settings (⌘,) to translate the transcript into \(model.translationTargetLabel)."
         }
-        return "Translate the transcript into natural English subtitles with your configured model."
+        return "Translate the transcript into natural \(model.translationTargetLabel) subtitles with your configured model."
     }
 }
 
@@ -173,7 +174,11 @@ private struct HeaderCard: View {
 
             progressStrip
 
+            nextActionRow
+
             Divider()
+
+            settingsSummary
 
             RunOptionsRow(model: model)
         }
@@ -183,6 +188,22 @@ private struct HeaderCard: View {
             RoundedRectangle(cornerRadius: 12)
                 .strokeBorder(.separator, lineWidth: 1)
         )
+    }
+
+    @ViewBuilder
+    private var settingsSummary: some View {
+        if let job = model.currentJob {
+            HStack(spacing: 12) {
+                Label(job.settings.transcriptionPreset.label, systemImage: "speedometer")
+                Text(job.settings.transcriptionQualityPreset.label)
+                Text("\(job.settings.whisperBackend.label) · \(job.settings.whisperModel)")
+                Text("\(job.settings.translationSourceLanguage) → \(job.settings.translationTargetLanguage) · \(job.settings.openAIModel)")
+                Spacer()
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
     }
 
     private var diagnosticsPill: some View {
@@ -275,33 +296,153 @@ private struct HeaderCard: View {
             }
         }
     }
+
+    @ViewBuilder
+    private var nextActionRow: some View {
+        if model.transcriptSegments.isEmpty {
+            Button {
+                model.startTranscription()
+            } label: {
+                Label("Transcribe", systemImage: "waveform")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!model.canTranscribe)
+        } else if model.translatedSegments.isEmpty {
+            HStack(spacing: 10) {
+                Button {
+                    model.startTranslation()
+                } label: {
+                    Label(
+                        model.partialTranslatedSegments.isEmpty
+                            ? "Translate to \(model.translationTargetLabel)"
+                            : "Resume Translation",
+                        systemImage: "character.bubble"
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!model.canTranslate)
+
+                if model.settings.openAIAPIKey.isEmpty {
+                    Text("Add an OpenAI API key in Settings to enable translation.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if !model.partialTranslatedSegments.isEmpty {
+                    Text("\(model.partialTranslatedSegments.count) segment(s) already saved.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
 }
 
 private struct RunOptionsRow: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 20) {
-            field(title: "Language") {
-                TextField("auto", text: $model.settings.sourceLanguage)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 90)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .bottom, spacing: 20) {
+                field(title: "Preset") {
+                    Picker("Preset", selection: $model.settings.transcriptionPreset) {
+                        ForEach(TranscriptionPreset.allCases) { preset in
+                            Text(preset.label).tag(preset)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 180)
+                }
+
+                field(title: "Quality") {
+                    Picker("Quality", selection: $model.settings.transcriptionQualityPreset) {
+                        ForEach(TranscriptionQualityPreset.allCases) { preset in
+                            Text(preset.label).tag(preset)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 160)
+                }
+
+                field(title: "Transcribe language") {
+                    presetMenu(
+                        "Language",
+                        presets: AppSettingPresets.transcriptionLanguages,
+                        selection: $model.settings.sourceLanguage
+                    )
+                    .frame(width: 130)
+                }
             }
 
-            field(title: "Backend") {
-                Picker("Backend", selection: $model.settings.whisperBackend) {
-                    ForEach(WhisperBackend.allCases) { backend in
-                        Text(backend.label).tag(backend)
+            if model.settings.showAdvancedControls {
+                HStack(alignment: .bottom, spacing: 20) {
+                    field(title: "Backend") {
+                        Picker("Backend", selection: $model.settings.whisperBackend) {
+                            ForEach(WhisperBackend.allCases) { backend in
+                                Text(backend.label).tag(backend)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 150)
+                    }
+
+                    field(title: "Whisper model") {
+                        presetMenu(
+                            "Whisper model",
+                            presets: AppSettingPresets.whisperModels(for: model.settings.whisperBackend),
+                            selection: $model.settings.whisperModel
+                        )
+                        .frame(minWidth: 220)
+                    }
+
+                    if let message = model.settings.transcriptionValidationMessage {
+                        Button("Repair") {
+                            model.settings.repairTranscriptionModelForBackend()
+                        }
+                        .help(message)
                     }
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(width: 150)
             }
 
-            field(title: "Whisper model") {
-                TextField("model", text: $model.settings.whisperModel)
-                    .textFieldStyle(.roundedBorder)
+            HStack(alignment: .bottom, spacing: 20) {
+                field(title: "Translate from") {
+                    presetMenu(
+                        "Translate from",
+                        presets: AppSettingPresets.translationSourceLanguages,
+                        selection: $model.settings.translationSourceLanguage
+                    )
+                    .frame(width: 150)
+                }
+
+                field(title: "Translate to") {
+                    presetMenu(
+                        "Translate to",
+                        presets: AppSettingPresets.translationTargetLanguages,
+                        selection: $model.settings.translationTargetLanguage
+                    )
+                    .frame(width: 150)
+                }
+
+                field(title: "Translation LLM") {
+                    presetMenu(
+                        "LLM",
+                        presets: AppSettingPresets.translationModels,
+                        selection: $model.settings.openAIModel
+                    )
+                    .frame(width: 170)
+                }
+            }
+
+            HStack(spacing: 14) {
+                Toggle("Auto-translate", isOn: $model.settings.autoTranslateAfterTranscription)
+                    .toggleStyle(.checkbox)
+                Toggle("Advanced", isOn: $model.settings.showAdvancedControls)
+                    .toggleStyle(.checkbox)
+                Text("\(model.settings.translationSourceLanguage) → \(model.settings.translationTargetLanguage)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
             }
         }
         .disabled(model.isBusy)
@@ -315,6 +456,23 @@ private struct RunOptionsRow: View {
                 .foregroundStyle(.tertiary)
             content()
         }
+    }
+
+    private func presetMenu(
+        _ title: String,
+        presets: [SettingsPreset],
+        selection: Binding<String>
+    ) -> some View {
+        Picker(title, selection: selection) {
+            ForEach(presets) { preset in
+                Text(preset.label).tag(preset.value)
+            }
+            if !presets.map(\.value).contains(selection.wrappedValue) {
+                Text(selection.wrappedValue).tag(selection.wrappedValue)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
     }
 }
 
@@ -354,6 +512,16 @@ private struct DiagnosticsPopover: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer(minLength: 0)
+                        if diagnostic.state != .passed, let command = diagnostic.repairCommand {
+                            Button {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(command, forType: .string)
+                            } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
+                            .labelStyle(.iconOnly)
+                            .help(command)
+                        }
                     }
                 }
             }

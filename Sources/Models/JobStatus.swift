@@ -16,11 +16,11 @@ enum JobStatus: String, Codable, CaseIterable {
         case .transcribing:
             return "Transcribing"
         case .transcriptionComplete:
-            return "Transcription complete"
+            return "Transcript ready"
         case .translating:
             return "Translating"
         case .translationComplete:
-            return "Translation complete"
+            return "Translation ready"
         case .canceled:
             return "Canceled"
         case .failed:

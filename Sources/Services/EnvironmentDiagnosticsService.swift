@@ -6,25 +6,29 @@ struct EnvironmentDiagnosticsService {
             id: "ffmpeg",
             title: "ffmpeg",
             command: ["/usr/bin/env", "ffmpeg", "-version"],
-            recovery: "Install ffmpeg and make sure it is available on PATH."
+            recovery: "Install ffmpeg and make sure it is available on PATH.",
+            repairCommand: "brew install ffmpeg"
         )
         async let python = commandDiagnostic(
             id: "python3",
             title: "Python 3",
             command: ["/usr/bin/env", "python3", "--version"],
-            recovery: "Install Python 3 and make sure python3 is available on PATH."
+            recovery: "Install Python 3 and make sure python3 is available on PATH.",
+            repairCommand: "brew install python"
         )
         async let mlx = pythonImportDiagnostic(
             id: "mlx-whisper",
             title: "MLX Whisper",
             module: "mlx_whisper",
-            recovery: "Install with pip install mlx-whisper for fast Apple Silicon transcription."
+            recovery: "Install with pip install mlx-whisper for fast Apple Silicon transcription.",
+            repairCommand: "python3 -m pip install mlx-whisper"
         )
         async let faster = pythonImportDiagnostic(
             id: "faster-whisper",
             title: "Faster Whisper",
             module: "faster_whisper",
-            recovery: "Optional fallback: pip install faster-whisper."
+            recovery: "Optional fallback: pip install faster-whisper.",
+            repairCommand: "python3 -m pip install faster-whisper"
         )
 
         var results = await [ffmpeg, python, mlx, faster]
@@ -44,7 +48,8 @@ struct EnvironmentDiagnosticsService {
         id: String,
         title: String,
         command: [String],
-        recovery: String
+        recovery: String,
+        repairCommand: String? = nil
     ) async -> EnvironmentDiagnostic {
         await Task.detached(priority: .utility) {
             let result = runProcess(command)
@@ -53,7 +58,8 @@ struct EnvironmentDiagnosticsService {
                 title: title,
                 detail: result.output.isEmpty ? result.message : result.output,
                 recovery: recovery,
-                state: result.succeeded ? .passed : .failed
+                state: result.succeeded ? .passed : .failed,
+                repairCommand: repairCommand
             )
         }.value
     }
@@ -62,13 +68,15 @@ struct EnvironmentDiagnosticsService {
         id: String,
         title: String,
         module: String,
-        recovery: String
+        recovery: String,
+        repairCommand: String? = nil
     ) async -> EnvironmentDiagnostic {
         await commandDiagnostic(
             id: id,
             title: title,
             command: ["/usr/bin/env", "python3", "-c", "import \(module); print('available')"],
-            recovery: recovery
+            recovery: recovery,
+            repairCommand: repairCommand
         )
     }
 }

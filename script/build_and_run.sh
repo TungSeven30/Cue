@@ -7,27 +7,41 @@ BUNDLE_ID="com.local.WhisperDesk"
 MIN_SYSTEM_VERSION="14.0"
 APP_VERSION="${APP_VERSION:-1.0}"
 APP_BUILD="${APP_BUILD:-1}"
+INSTALL_DIR="${INSTALL_DIR:-/Applications}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
+APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
+ICON_FILE="AppIcon.icns"
+ICON_SOURCE="$ROOT_DIR/Resources/$ICON_FILE"
 
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 
-swift build
-BUILD_DIR="$(swift build --show-bin-path)"
-BUILD_BINARY="$BUILD_DIR/$APP_NAME"
+build_bundle() {
+  local configuration="${1:-debug}"
+  local swift_args=()
+  if [[ "$configuration" == "release" ]]; then
+    swift_args=(-c release)
+  fi
 
-rm -rf "$APP_BUNDLE"
-mkdir -p "$APP_MACOS"
-cp "$BUILD_BINARY" "$APP_BINARY"
-chmod +x "$APP_BINARY"
+  swift build "${swift_args[@]}"
+  BUILD_DIR="$(swift build "${swift_args[@]}" --show-bin-path)"
+  BUILD_BINARY="$BUILD_DIR/$APP_NAME"
 
-cat >"$INFO_PLIST" <<PLIST
+  rm -rf "$APP_BUNDLE"
+  mkdir -p "$APP_MACOS" "$APP_RESOURCES"
+  cp "$BUILD_BINARY" "$APP_BINARY"
+  chmod +x "$APP_BINARY"
+  if [[ -f "$ICON_SOURCE" ]]; then
+    cp "$ICON_SOURCE" "$APP_RESOURCES/$ICON_FILE"
+  fi
+
+  cat >"$INFO_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -38,6 +52,10 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
   <string>$APP_NAME</string>
+  <key>CFBundleDisplayName</key>
+  <string>$APP_NAME</string>
+  <key>CFBundleIconFile</key>
+  <string>$ICON_FILE</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -56,32 +74,81 @@ cat >"$INFO_PLIST" <<PLIST
 </plist>
 PLIST
 
+  /usr/bin/plutil -lint "$INFO_PLIST" >/dev/null
+  if command -v codesign >/dev/null 2>&1; then
+    codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null
+  fi
+}
+
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE"
 }
 
+open_installed_app() {
+  local app_path="$1"
+  /usr/bin/open -n "$app_path"
+}
+
+register_app() {
+  local app_path="$1"
+  local lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+  if [[ -x "$lsregister" ]]; then
+    "$lsregister" -f "$app_path" >/dev/null 2>&1 || true
+  fi
+}
+
+install_app() {
+  build_bundle release
+
+  local target_dir="$INSTALL_DIR"
+  if [[ "$target_dir" == "/Applications" && ! -w "$target_dir" ]]; then
+    target_dir="$HOME/Applications"
+  fi
+  mkdir -p "$target_dir"
+
+  local installed_app="$target_dir/$APP_NAME.app"
+  rm -rf "$installed_app"
+  /usr/bin/ditto "$APP_BUNDLE" "$installed_app"
+  xattr -dr com.apple.quarantine "$installed_app" >/dev/null 2>&1 || true
+  register_app "$installed_app"
+
+  echo "Installed $installed_app"
+  open_installed_app "$installed_app"
+  rm -rf "$APP_BUNDLE"
+}
+
 case "$MODE" in
   run)
+    build_bundle debug
     open_app
     ;;
   --debug|debug)
+    build_bundle debug
     lldb -- "$APP_BINARY"
     ;;
   --logs|logs)
+    build_bundle debug
     open_app
     /usr/bin/log stream --info --style compact --predicate "process == \"$APP_NAME\""
     ;;
   --telemetry|telemetry)
+    build_bundle debug
     open_app
     /usr/bin/log stream --info --style compact --predicate "subsystem == \"$BUNDLE_ID\""
     ;;
   --verify|verify)
+    build_bundle debug
     open_app
     sleep 1
     pgrep -x "$APP_NAME" >/dev/null
     ;;
+  --install|install)
+    install_app
+    sleep 1
+    pgrep -x "$APP_NAME" >/dev/null
+    ;;
   *)
-    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify]" >&2
+    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify|--install]" >&2
     exit 2
     ;;
 esac

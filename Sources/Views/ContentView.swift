@@ -17,41 +17,62 @@ struct ContentView: View {
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             Button {
+                model.performPrimaryAction()
+            } label: {
+                Label(model.primaryActionTitle, systemImage: model.primaryActionSystemImage)
+            }
+            .disabled(!model.canPerformPrimaryAction)
+            .help(model.primaryActionTitle)
+
+            Button {
                 model.selectVideo()
             } label: {
-                Label("Open Video", systemImage: "folder")
+                Label("Add Files", systemImage: "folder.badge.plus")
             }
-            .help("Open a video or audio file")
+            .help("Add one or more video or audio files")
 
             Button {
-                model.startTranscription()
+                model.startTranscription(force: true)
             } label: {
-                Label("Transcribe", systemImage: "waveform")
+                Label("Retry Transcribe", systemImage: "arrow.clockwise")
             }
             .disabled(!model.canTranscribe)
-            .help("Transcribe the selected video locally")
-
-            Button {
-                model.startTranslation()
-            } label: {
-                Label("Translate", systemImage: "character.bubble")
-            }
-            .disabled(!model.canTranslate)
-            .help("Translate the transcript into English")
+            .help("Run transcription again")
 
             Menu {
-                Button("Original Transcript") { model.exportTranscript() }
+                Menu("Original Transcript") {
+                    exportFormatButtons { format in
+                        model.exportTranscript(format: format)
+                    }
+                }
+                .disabled(model.transcriptSegments.isEmpty)
+
+                Menu(model.translationExportTitle) {
+                    exportFormatButtons { format in
+                        model.exportTranslation(format: format)
+                    }
+                }
+                .disabled(model.translatedSegments.isEmpty)
+
+                Menu(model.bilingualExportTitle) {
+                    exportFormatButtons { format in
+                        model.exportBilingual(format: format)
+                    }
+                }
+                .disabled(model.translatedSegments.isEmpty)
+
+                Divider()
+
+                Button("Export All…") { model.exportAll() }
                     .disabled(model.transcriptSegments.isEmpty)
-                Button("English Translation") { model.exportTranslation() }
-                    .disabled(model.translatedSegments.isEmpty)
-                Button("Bilingual Captions") { model.exportBilingual() }
-                    .disabled(model.translatedSegments.isEmpty)
+                Button("Export Log…") { model.exportLog() }
+                    .disabled(model.currentJob == nil)
             } label: {
                 Label("Export", systemImage: "square.and.arrow.up")
             }
             .menuIndicator(.hidden)
             .disabled(model.transcriptSegments.isEmpty)
-            .help("Export subtitles as .srt")
+            .help("Export subtitles and logs")
 
             if model.canCancel {
                 Button(role: .destructive) {
@@ -61,6 +82,13 @@ struct ContentView: View {
                 }
                 .help("Cancel the running job")
             }
+        }
+    }
+
+    @ViewBuilder
+    private func exportFormatButtons(action: @escaping (SubtitleExportFormat) -> Void) -> some View {
+        ForEach(SubtitleExportFormat.allCases) { format in
+            Button(format.label) { action(format) }
         }
     }
 }

@@ -402,7 +402,15 @@ private final class ProcessBox: @unchecked Sendable {
         lock.lock()
         let process = storedProcess
         lock.unlock()
-        process?.terminate()
+        guard let process, process.isRunning else { return }
+        process.terminate()
+        // Python only runs signal handlers between bytecodes, so a helper
+        // deep inside native inference code can miss SIGTERM entirely.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) {
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+        }
     }
 }
 

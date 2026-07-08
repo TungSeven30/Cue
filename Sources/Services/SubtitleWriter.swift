@@ -86,10 +86,15 @@ enum SubtitleWriter {
     }
 
     static func formatSRTTimestamp(_ seconds: Double) -> String {
-        let hours = Int(seconds / 3600)
-        let minutes = Int((seconds.truncatingRemainder(dividingBy: 3600)) / 60)
-        let wholeSeconds = Int(seconds) % 60
-        let milliseconds = Int((seconds - floor(seconds)) * 1000)
+        // Round to whole milliseconds first so values like 1.0599 become
+        // 00:00:01,060 instead of truncating to ,059, and let the carry
+        // roll into seconds naturally.
+        let totalMilliseconds = max(0, Int((seconds * 1000).rounded()))
+        let milliseconds = totalMilliseconds % 1000
+        let totalSeconds = totalMilliseconds / 1000
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let wholeSeconds = totalSeconds % 60
         return String(format: "%02d:%02d:%02d,%03d", hours, minutes, wholeSeconds, milliseconds)
     }
 

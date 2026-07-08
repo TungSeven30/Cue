@@ -334,6 +334,7 @@ final class AppSettingsStore: ObservableObject {
             openAIAPIKey = ""
             defaults.removeObject(forKey: "openAIAPIKey")
         }
+        persistedAPIKey = openAIAPIKey
 
         normalizeModelForSelectedBackend()
         save()
@@ -341,6 +342,7 @@ final class AppSettingsStore: ObservableObject {
 
     private var isApplyingPreset = false
     private var isApplyingQualityPreset = false
+    private var persistedAPIKey = ""
 
     private func save() {
         defaults.set(transcriptionPreset.rawValue, forKey: "transcriptionPreset")
@@ -369,7 +371,13 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(temperature, forKey: "temperature")
         defaults.set(noSpeechThreshold, forKey: "noSpeechThreshold")
         defaults.synchronize()
-        KeychainStore.write(openAIAPIKey, account: Self.apiKeyAccount)
+        // save() runs on every settings mutation; only touch the Keychain
+        // when the key itself changed so typing elsewhere (e.g. the prompt
+        // editor) does not trigger a Keychain write per keystroke.
+        if openAIAPIKey != persistedAPIKey {
+            KeychainStore.write(openAIAPIKey, account: Self.apiKeyAccount)
+            persistedAPIKey = openAIAPIKey
+        }
     }
 
     func resetTranslationPrompt() {

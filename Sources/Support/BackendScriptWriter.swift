@@ -50,8 +50,16 @@ def terminate_children(signum=None, frame=None) -> None:
                 pass
 
 
-signal.signal(signal.SIGTERM, terminate_children)
-signal.signal(signal.SIGINT, terminate_children)
+def handle_termination(signum=None, frame=None) -> None:
+    # Exit after cleaning up children. Without the exit, a cancel arriving
+    # during model inference (no children running) would be swallowed and
+    # transcription would keep running after the app reported "Canceled".
+    terminate_children()
+    sys.exit(130)
+
+
+signal.signal(signal.SIGTERM, handle_termination)
+signal.signal(signal.SIGINT, handle_termination)
 
 
 def bool_arg(value: str) -> bool:

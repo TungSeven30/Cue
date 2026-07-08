@@ -183,7 +183,37 @@ private enum TranscriptionPostProcessor {
             cleaned = mergeShortSegments(cleaned, minDuration: settings.minSegmentDuration, maxGap: settings.maxMergeGap)
         }
 
+        cleaned = repairInvalidTimings(cleaned)
+
         return renumber(cleaned)
+    }
+
+    /// Transcribers occasionally emit segments with zero or near-zero
+    /// duration (word-level alignment of an isolated word). A subtitle that
+    /// displays for 0s is useless in a player, so extend it to a readable
+    /// minimum without overlapping the next segment.
+    private static func repairInvalidTimings(
+        _ segments: [TranscriptionSegment],
+        minimumDuration: Double = 0.8,
+        gapToNext: Double = 0.05
+    ) -> [TranscriptionSegment] {
+        var result = segments
+        for index in result.indices {
+            let segment = result[index]
+            guard segment.end - segment.start < 0.2 else { continue }
+            var end = segment.start + minimumDuration
+            if index + 1 < result.count {
+                end = min(end, result[index + 1].start - gapToNext)
+            }
+            guard end > segment.start else { continue }
+            result[index] = TranscriptionSegment(
+                id: segment.id,
+                start: segment.start,
+                end: end,
+                text: segment.text
+            )
+        }
+        return result
     }
 
     private static func normalizeWhitespace(_ text: String) -> String {

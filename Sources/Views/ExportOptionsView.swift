@@ -105,7 +105,11 @@ struct ExportOptionsView: View {
     }
 
     private var summary: String {
-        fileCount == 0 ? "Nothing selected" : "^[\(fileCount) file](inflect: true)"
+        switch fileCount {
+        case 0: return "Nothing selected"
+        case 1: return "1 file"
+        default: return "\(fileCount) files"
+        }
     }
 
     private var nameHint: String {

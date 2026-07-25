@@ -71,13 +71,16 @@ final class PlayerController: ObservableObject {
     }
 
     /// Binary search for the segment whose [start, end) contains `time`.
+    /// A seek to a segment's exact start can materialize a hair before it
+    /// (CMTime rounding), so probe slightly ahead of the playhead.
     private static func segment(at time: Double, in segments: [TranscriptionSegment]) -> TranscriptionSegment? {
+        let probe = time + 0.15
         var low = 0
         var high = segments.count - 1
         var candidate: TranscriptionSegment?
         while low <= high {
             let mid = (low + high) / 2
-            if segments[mid].start <= time {
+            if segments[mid].start <= probe {
                 candidate = segments[mid]
                 low = mid + 1
             } else {

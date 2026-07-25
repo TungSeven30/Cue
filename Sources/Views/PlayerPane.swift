@@ -128,7 +128,6 @@ struct PlayerPane: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 280)
         .background(Color.black, in: RoundedRectangle(cornerRadius: 12))
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }

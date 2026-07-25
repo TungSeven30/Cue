@@ -30,6 +30,8 @@ struct DetailView: View {
     @ObservedObject var playerController: PlayerController
     @State private var tab: WorkspaceTab = .transcript
     @AppStorage("followPlayback") private var followPlayback = true
+    @AppStorage("playerHeight") private var playerHeight = 280.0
+    @State private var dragStartHeight: Double?
 
     var body: some View {
         Group {
@@ -89,9 +91,12 @@ struct DetailView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
                 PlayerPane(controller: playerController)
+                    .frame(height: playerHeight)
                     .padding(.horizontal, 20)
                     .padding(.top, 10)
-                    .padding(.bottom, 12)
+
+                playerResizeHandle
+                    .padding(.bottom, 2)
             } else {
                 HeaderCard(model: model)
                     .padding(20)
@@ -119,6 +124,39 @@ struct DetailView: View {
 
             tabContent
         }
+    }
+
+    /// Drag up or down to resize the video; double-click to reset.
+    private var playerResizeHandle: some View {
+        RoundedRectangle(cornerRadius: 2.5)
+            .fill(.tertiary)
+            .frame(width: 44, height: 5)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+            .onHover { inside in
+                if inside {
+                    NSCursor.resizeUpDown.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        if dragStartHeight == nil {
+                            dragStartHeight = playerHeight
+                        }
+                        playerHeight = min(640, max(140, (dragStartHeight ?? playerHeight) + value.translation.height))
+                    }
+                    .onEnded { _ in
+                        dragStartHeight = nil
+                    }
+            )
+            .onTapGesture(count: 2) {
+                playerHeight = 280
+            }
+            .help("Drag to resize the video preview; double-click to reset")
     }
 
     private var compactHeader: some View {

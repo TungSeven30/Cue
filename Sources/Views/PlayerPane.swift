@@ -49,6 +49,9 @@ final class PlayerController: ObservableObject {
             toleranceBefore: .zero,
             toleranceAfter: .zero
         )
+        // The periodic observer does not reliably fire for a seek while
+        // paused, so update the highlight and overlay right away.
+        refresh(at: seconds)
     }
 
     func pause() {

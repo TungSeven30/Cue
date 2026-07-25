@@ -8,7 +8,7 @@ struct ContentView: View {
             SidebarView(model: model)
                 .navigationSplitViewColumnWidth(min: 210, ideal: 250)
         } detail: {
-            DetailView(model: model)
+            DetailView(model: model, playerController: model.playerController)
                 .toolbar { toolbarContent }
         }
         .sheet(isPresented: $model.isShowingExportSheet) {
@@ -44,6 +44,14 @@ struct ContentView: View {
             }
             .disabled(!model.canTranscribe)
             .help("Run transcription again")
+
+            Button {
+                model.isPlayerVisible.toggle()
+            } label: {
+                Label("Video Preview", systemImage: model.isPlayerVisible ? "play.rectangle.fill" : "play.rectangle")
+            }
+            .disabled(model.currentJob == nil)
+            .help(model.isPlayerVisible ? "Hide the video preview" : "Show the video preview")
 
             Button {
                 model.isShowingExportSheet = true

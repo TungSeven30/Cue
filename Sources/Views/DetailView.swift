@@ -27,7 +27,9 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
 
 struct DetailView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject var playerController: PlayerController
     @State private var tab: WorkspaceTab = .transcript
+    @AppStorage("followPlayback") private var followPlayback = true
 
     var body: some View {
         Group {
@@ -44,6 +46,27 @@ struct DetailView: View {
             model.addVideos(urls: fileURLs)
             return !fileURLs.isEmpty
         }
+        .onAppear { syncPlayer() }
+        .onChange(of: model.selectedJobID) { syncPlayer() }
+        .onChange(of: model.isPlayerVisible) { syncPlayer() }
+        .onChange(of: tab) { syncOverlaySegments() }
+        .onChange(of: model.transcriptSegments) { syncOverlaySegments() }
+        .onChange(of: model.translatedSegments) { syncOverlaySegments() }
+    }
+
+    private func syncPlayer() {
+        guard model.isPlayerVisible, let url = model.selectedVideoURL else { return }
+        playerController.load(url: url)
+        syncOverlaySegments()
+    }
+
+    private func syncOverlaySegments() {
+        // The overlay and highlight follow whichever text the user is
+        // looking at: translation on the translation tab, else the original.
+        let segments = tab == .translation && !model.translatedSegments.isEmpty
+            ? model.translatedSegments
+            : model.transcriptSegments
+        playerController.updateSegments(segments)
     }
 
     private var emptyWorkspace: some View {
@@ -59,22 +82,65 @@ struct DetailView: View {
 
     private var workspace: some View {
         VStack(spacing: 0) {
-            HeaderCard(model: model)
-                .padding(20)
+            if model.isPlayerVisible {
+                // The full header card would leave no room for the video and
+                // the transcript, so shrink it to one line while previewing.
+                compactHeader
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
+                PlayerPane(controller: playerController)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+                    .padding(.bottom, 12)
+            } else {
+                HeaderCard(model: model)
+                    .padding(20)
+            }
 
-            Picker("View", selection: $tab) {
-                ForEach(WorkspaceTab.allCases) { tab in
-                    Label(tab.title, systemImage: tab.systemImage).tag(tab)
+            HStack(spacing: 12) {
+                Picker("View", selection: $tab) {
+                    ForEach(WorkspaceTab.allCases) { tab in
+                        Label(tab.title, systemImage: tab.systemImage).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                if model.isPlayerVisible {
+                    Toggle("Follow playback", isOn: $followPlayback)
+                        .toggleStyle(.checkbox)
+                        .help("Keep the playing segment scrolled into view")
                 }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
 
             Divider()
 
             tabContent
+        }
+    }
+
+    private var compactHeader: some View {
+        HStack(spacing: 10) {
+            if let job = model.currentJob {
+                Image(systemName: job.status.systemImage)
+                    .foregroundStyle(job.status.tint)
+                Text(job.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(job.status.label)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                if model.isSelectedJobRunning, let fraction = model.progress.fraction {
+                    ProgressView(value: fraction)
+                        .frame(width: 120)
+                    Text("\(Int((fraction * 100).rounded()))%")
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
         }
     }
 
@@ -93,14 +159,7 @@ struct DetailView: View {
                         .disabled(!model.canTranscribe)
                 }
             } else {
-                ScrollView {
-                    TranscriptView(
-                        segments: model.transcriptSegments,
-                        warnings: model.qualityWarnings(for: model.transcriptSegments),
-                        onEdit: model.updateTranscriptSegment
-                    )
-                    .padding(20)
-                }
+                segmentList(segments: model.transcriptSegments, onEdit: model.updateTranscriptSegment)
             }
         case .translation:
             if model.translatedSegments.isEmpty {
@@ -114,19 +173,36 @@ struct DetailView: View {
                         .disabled(!model.canTranslate)
                 }
             } else {
-                ScrollView {
-                    TranscriptView(
-                        segments: model.translatedSegments,
-                        warnings: model.qualityWarnings(for: model.translatedSegments),
-                        onEdit: model.updateTranslatedSegment
-                    )
-                    .padding(20)
-                }
+                segmentList(segments: model.translatedSegments, onEdit: model.updateTranslatedSegment)
             }
         case .log:
             ScrollView {
                 LogView(log: model.log)
                     .padding(20)
+            }
+        }
+    }
+
+    private func segmentList(
+        segments: [TranscriptionSegment],
+        onEdit: @escaping (TranscriptionSegment, String) -> Void
+    ) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                TranscriptView(
+                    segments: segments,
+                    warnings: model.qualityWarnings(for: segments),
+                    activeSegmentID: model.isPlayerVisible ? playerController.activeSegmentID : nil,
+                    onEdit: onEdit,
+                    onSeek: model.isPlayerVisible ? { playerController.seek(to: $0.start) } : nil
+                )
+                .padding(20)
+            }
+            .onChange(of: playerController.activeSegmentID) { _, newID in
+                guard followPlayback, model.isPlayerVisible, let newID else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    proxy.scrollTo(newID, anchor: .center)
+                }
             }
         }
     }

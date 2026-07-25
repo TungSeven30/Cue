@@ -12,8 +12,17 @@ final class AppModel: ObservableObject {
     @Published var diagnostics: [EnvironmentDiagnostic] = []
     @Published var isRunningDiagnostics = false
     @Published var isShowingExportSheet = false
+    @Published var isPlayerVisible: Bool {
+        didSet {
+            UserDefaults.standard.set(isPlayerVisible, forKey: "isPlayerVisible")
+            if !isPlayerVisible {
+                playerController.pause()
+            }
+        }
+    }
     /// Set when the user cancels while jobs are still queued; Start All resumes.
     @Published var queuePaused = false
+    let playerController = PlayerController()
     private var didProcessQueuedJob = false
     private var dirtyJobIDs: Set<UUID> = []
     /// Keeps very chatty jobs from growing without bound in memory and on disk.
@@ -29,6 +38,7 @@ final class AppModel: ObservableObject {
     private var persistTask: Task<Void, Never>?
 
     init() {
+        isPlayerVisible = UserDefaults.standard.object(forKey: "isPlayerVisible") as? Bool ?? true
         jobs = jobStore.loadJobs().sorted { $0.updatedAt > $1.updatedAt }
         selectedJobID = jobs.first?.id
         // `settings` is a nested ObservableObject; changes to its fields do not

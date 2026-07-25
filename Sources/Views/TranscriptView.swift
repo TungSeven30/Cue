@@ -3,7 +3,9 @@ import SwiftUI
 struct TranscriptView: View {
     let segments: [TranscriptionSegment]
     let warnings: [SubtitleQualityWarning]
+    var activeSegmentID: Int? = nil
     let onEdit: (TranscriptionSegment, String) -> Void
+    var onSeek: ((TranscriptionSegment) -> Void)? = nil
     @State private var searchText = ""
     @State private var replacementText = ""
     @State private var warningsOnly = false
@@ -48,8 +50,11 @@ struct TranscriptView: View {
                     SegmentEditorRow(
                         segment: segment,
                         warnings: warningsBySegment[segment.id] ?? [],
-                        onEdit: onEdit
+                        isActive: segment.id == activeSegmentID,
+                        onEdit: onEdit,
+                        onSeek: onSeek
                     )
+                    .id(segment.id)
                 }
             }
         }
@@ -81,7 +86,9 @@ struct TranscriptView: View {
 private struct SegmentEditorRow: View {
     let segment: TranscriptionSegment
     let warnings: [SubtitleQualityWarning]
+    var isActive: Bool = false
     let onEdit: (TranscriptionSegment, String) -> Void
+    var onSeek: ((TranscriptionSegment) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -94,10 +101,23 @@ private struct SegmentEditorRow: View {
                     .padding(.vertical, 2)
                     .background(.quaternary, in: Capsule())
 
-                Label("\(formatted(segment.start)) – \(formatted(segment.end))", systemImage: "clock")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .labelStyle(.titleAndIcon)
+                if let onSeek {
+                    Button {
+                        onSeek(segment)
+                    } label: {
+                        Label("\(formatted(segment.start)) – \(formatted(segment.end))", systemImage: "play.circle")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(isActive ? Color.accentColor : .secondary)
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Jump the video to this segment")
+                } else {
+                    Label("\(formatted(segment.start)) – \(formatted(segment.end))", systemImage: "clock")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .labelStyle(.titleAndIcon)
+                }
 
                 Spacer()
 
@@ -122,11 +142,19 @@ private struct SegmentEditorRow: View {
             .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
         }
         .padding(12)
-        .background(.background.secondary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+        .background(
+            isActive ? AnyShapeStyle(Color.accentColor.opacity(0.08)) : AnyShapeStyle(.background.secondary.opacity(0.4)),
+            in: RoundedRectangle(cornerRadius: 10)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(warnings.isEmpty ? Color.clear : Color.orange.opacity(0.4), lineWidth: 1)
+                .strokeBorder(borderColor, lineWidth: isActive ? 1.5 : 1)
         )
+    }
+
+    private var borderColor: Color {
+        if isActive { return Color.accentColor.opacity(0.7) }
+        return warnings.isEmpty ? Color.clear : Color.orange.opacity(0.4)
     }
 
     private func formatted(_ seconds: Double) -> String {

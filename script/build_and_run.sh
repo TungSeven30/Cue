@@ -76,7 +76,15 @@ PLIST
 
   /usr/bin/plutil -lint "$INFO_PLIST" >/dev/null
   if command -v codesign >/dev/null 2>&1; then
-    codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null
+    # A stable local identity keeps the app's code signature constant across
+    # rebuilds, so Keychain "Always Allow" grants persist. Ad-hoc signing (-)
+    # changes every build and re-triggers the password prompt each install.
+    local identity="${SIGN_IDENTITY:-WhisperDesk Local Signing}"
+    if security find-identity -v -p codesigning 2>/dev/null | grep -q "$identity"; then
+      codesign --force --deep --sign "$identity" "$APP_BUNDLE" >/dev/null 2>&1
+    else
+      codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null
+    fi
   fi
 }
 

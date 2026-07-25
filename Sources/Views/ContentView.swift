@@ -53,14 +53,6 @@ struct ContentView: View {
             .disabled(model.currentJob == nil)
             .help(model.isPlayerVisible ? "Hide the video preview" : "Show the video preview")
 
-            Button {
-                model.isShowingExportSheet = true
-            } label: {
-                Label("Export", systemImage: "square.and.arrow.up")
-            }
-            .disabled(model.transcriptSegments.isEmpty)
-            .help("Choose documents, formats, and file name to export")
-
             if model.canCancel {
                 Button(role: .destructive) {
                     model.cancelActiveJob()

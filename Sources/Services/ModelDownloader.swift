@@ -6,7 +6,7 @@ enum ModelDownloaderError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .downloadFailed(let model, let message):
-            return "Downloading \(model) failed: \(message) Check your internet connection and try again."
+            return "Downloading \(model) failed: \(message)"
         }
     }
 }
@@ -69,6 +69,14 @@ struct ModelDownloader: Sendable {
 
     /// Returns the local model file, downloading it first if needed. Already
     /// installed models return immediately without any network activity.
+    ///
+    /// - `onProgress` may fire on a background queue — callers must hop to
+    ///   the main actor before touching UI state.
+    /// - User cancellation throws `CancellationError` and leaves a `.resume`
+    ///   file behind so the next attempt continues the download.
+    ///
+    /// Concurrent calls for the same model are unguarded by design: the app
+    /// runs one transcription job at a time (single activeTask in AppModel).
     func ensureInstalled(
         model: String,
         onProgress: @escaping @Sendable (JobProgress) -> Void
@@ -110,10 +118,24 @@ struct ModelDownloader: Sendable {
             } else {
                 try? fileManager.removeItem(at: resumeFile)
             }
-            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+            if error is CancellationError {
                 throw error
             }
-            throw ModelDownloaderError.downloadFailed(model: model, message: error.localizedDescription)
+            switch (error as? URLError)?.code {
+            case .cancelled:
+                // Callers see exactly one cancellation shape; the resume data
+                // above already preserved the partial download.
+                throw CancellationError()
+            case .badServerResponse:
+                // Carries the HTTP status in its description — "check your
+                // internet connection" would be untruthful for a 404.
+                throw ModelDownloaderError.downloadFailed(model: model, message: error.localizedDescription)
+            default:
+                throw ModelDownloaderError.downloadFailed(
+                    model: model,
+                    message: "\(error.localizedDescription) Check your internet connection and try again."
+                )
+            }
         }
     }
 }
@@ -176,7 +198,10 @@ private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate, @unc
         // body; never hand that back as a model file.
         if let status = (downloadTask.response as? HTTPURLResponse)?.statusCode,
            !(200..<300).contains(status) {
-            result = .failure(URLError(.badServerResponse))
+            result = .failure(URLError(
+                .badServerResponse,
+                userInfo: [NSLocalizedDescriptionKey: "The server returned status \(status)."]
+            ))
             return
         }
         // The system deletes `location` once this callback returns, so the
@@ -197,6 +222,13 @@ private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate, @unc
         } else {
             continuation?.resume(with: result ?? .failure(URLError(.unknown)))
         }
+        continuation = nil
+    }
+
+    // Closes the theoretical hang if the session invalidates without ever
+    // delivering task completion.
+    func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
+        continuation?.resume(throwing: error ?? URLError(.unknown))
         continuation = nil
     }
 }

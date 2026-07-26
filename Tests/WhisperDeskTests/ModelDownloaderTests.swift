@@ -94,6 +94,29 @@ struct ModelDownloaderTests {
         #expect(try Data(contentsOf: resumeFile) == resumeData)
     }
 
+    // Callers must see exactly one cancellation shape (CancellationError, not
+    // ModelDownloaderError or URLError) with the partial download preserved.
+    @Test func cancellationThrowsCancellationErrorAndPersistsResumeData() async throws {
+        let base = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let resumeData = Data([8, 8, 8])
+        let network = FakeNetwork(results: [
+            .failure(URLError(
+                .cancelled,
+                userInfo: [NSURLSessionDownloadTaskResumeData: resumeData]
+            )),
+        ])
+        let downloader = ModelDownloader(baseDirectory: base, network: network)
+
+        await #expect(throws: CancellationError.self) {
+            try await downloader.ensureInstalled(model: "ggml-tiny.bin") { _ in }
+        }
+
+        let resumeFile = downloader.destinationURL(for: "ggml-tiny.bin")
+            .appendingPathExtension("resume")
+        #expect(try Data(contentsOf: resumeFile) == resumeData)
+    }
+
     @Test func retryConsumesPersistedResumeDataAndDeletesIt() async throws {
         let base = try scratchDirectory()
         defer { try? FileManager.default.removeItem(at: base) }

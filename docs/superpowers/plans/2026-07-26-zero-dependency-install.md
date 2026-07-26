@@ -387,7 +387,7 @@ Review notes for later tasks: (a) v1.7.2 ships `ggml-metal.metal` as a SwiftPM *
 - Create: `Sources/Services/WhisperCppEngine.swift`
 - Test: `Tests/WhisperDeskTests/WhisperCppEngineTests.swift` (segment-mapping logic only; full-model inference is not unit-testable in CI)
 
-- [ ] **Step 1: Failing test for timestamp mapping** (whisper.cpp reports centiseconds):
+- [x] **Step 1: Failing test for timestamp mapping** (whisper.cpp reports centiseconds):
 
 ```swift
 @Test func mapsCentisecondTimestampsToSeconds() {
@@ -399,8 +399,8 @@ Review notes for later tasks: (a) v1.7.2 ships `ggml-metal.metal` as a SwiftPM *
 }
 ```
 
-- [ ] **Step 2:** Run — fails (type missing).
-- [ ] **Step 3: Implement.** Core shape (verify each symbol against the pinned tag's `whisper.h` before use):
+- [x] **Step 2:** Run — fails (type missing).
+- [x] **Step 3: Implement.** Core shape (verify each symbol against the pinned tag's `whisper.h` before use):
 
 ```swift
 import Foundation
@@ -465,9 +465,9 @@ Implementation notes that are load-bearing:
 - **C callback plumbing:** `params.progress_callback` and `params.abort_callback` take C function pointers plus `*_user_data`; pass an `Unmanaged<Box>` pointer holding the two Swift closures. No Swift closures directly — C function pointers cannot capture.
 - **Language string lifetime:** `params.language` is `UnsafePointer<CChar>` — use `withCString` *around* the `whisper_full` call; a dangling pointer here is a classic crash.
 - **`loadPCM16AsFloat`**: read the WAV produced by `AudioExtractor`, skip the header by parsing the `data` chunk offset (do not hardcode 44 — some tools emit extended headers), convert Int16 LE → Float in [-1, 1].
-- [ ] **Step 4:** Run tests — mapping test passes.
-- [ ] **Step 5:** Manual end-to-end: download a tiny model by hand (`ggml-tiny.bin`), transcribe the Task 1 fixture, expect non-empty segments.
-- [ ] **Step 6:** Commit — `"Add native whisper.cpp transcription engine"`.
+- [x] **Step 4:** Run tests — mapping test passes.
+- [x] **Step 5:** Manual end-to-end: download a tiny model by hand (`ggml-tiny.bin`), transcribe the Task 1 fixture, expect non-empty segments.
+- [x] **Step 6:** Commit — `"Add native whisper.cpp transcription engine"`.
 
 ### Task 7: `ModelDownloader` with progress and resume
 

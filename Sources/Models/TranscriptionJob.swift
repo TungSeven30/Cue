@@ -198,6 +198,21 @@ extension JobSettingsSnapshot {
         return resolved
     }
 
+    /// A copy of `self` that adopts only the translation-facing fields from
+    /// `other`. Used when stamping a translation run so the record of what
+    /// produced the *transcript* (the transcriptionIdentity fields) is
+    /// preserved — otherwise a later skip-if-unchanged check would compare
+    /// against settings the transcript was never made with.
+    func updatingTranslationFields(from other: JobSettingsSnapshot) -> JobSettingsSnapshot {
+        var updated = self
+        updated.openAIModel = other.openAIModel
+        updated.translationSourceLanguage = other.translationSourceLanguage
+        updated.translationTargetLanguage = other.translationTargetLanguage
+        updated.translationChunkMode = other.translationChunkMode
+        updated.translationParallelism = other.translationParallelism
+        return updated
+    }
+
     /// The fields that determine what transcript a run produces. Two
     /// snapshots with equal identity yield the same transcript, so re-running
     /// can be skipped (spec §0.6). Translation and summary settings are

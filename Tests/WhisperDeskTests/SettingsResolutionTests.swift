@@ -192,4 +192,18 @@ struct SnapshotResolutionTests {
         o.sourceLanguage = "ja"
         #expect(base.applying(o).transcriptionIdentity != base.transcriptionIdentity)
     }
+
+    // A translation run must not rewrite the record of which settings
+    // produced the transcript, or a later skip check would trust a
+    // transcript the current model never made.
+    @Test func updatingTranslationFieldsPreservesTranscriptionIdentity() throws {
+        let original = try makeSnapshot()
+        var o = JobSettingsOverrides()
+        o.sourceLanguage = "ja"
+        o.translationTargetLanguage = "Vietnamese"
+        let resolved = original.applying(o)
+        let stamped = original.updatingTranslationFields(from: resolved)
+        #expect(stamped.transcriptionIdentity == original.transcriptionIdentity)
+        #expect(stamped.translationTargetLanguage == "Vietnamese")
+    }
 }

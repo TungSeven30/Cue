@@ -479,7 +479,7 @@ final class AppModel: ObservableObject {
         let resolved = JobSettingsSnapshot(settings: settings).applying(jobs[index].overrides)
         jobs[index].status = .translating
         jobs[index].progress = JobProgress(stage: .translating, detail: "Starting translation.", fraction: 0)
-        jobs[index].settings = resolved
+        jobs[index].settings = jobs[index].settings.updatingTranslationFields(from: resolved)
         appendLog(
             "Starting translation from \(resolved.translationSourceLanguage) to \(resolved.translationTargetLanguage) with \(resolved.openAIModel) using \(resolved.translationChunkMode.label.lowercased()) chunks and \(resolved.translationParallelism) worker(s).",
             to: jobID

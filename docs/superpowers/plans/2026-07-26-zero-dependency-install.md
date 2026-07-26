@@ -379,6 +379,8 @@ dependencies: [.product(name: "whisper", package: "whisper.cpp")]
 - [x] **Step 3:** Smoke-test linkage: temporarily call `whisper_print_system_info()` from app startup, run, check the log mentions `METAL = 1`, then remove the call. (Verified via a temporary test: `... NEON = -1 | ARM_FMA = 1 | METAL = 1 ...`; temp test removed.)
 - [x] **Step 4:** Commit — `"Add whisper.cpp as a pinned SwiftPM dependency"`.
 
+Review notes for later tasks: (a) v1.7.2 ships `ggml-metal.metal` as a SwiftPM *resource bundle* (`whisper_whisper.bundle`) compiled at runtime — Task 11's release build must confirm the bundle travels inside the .app or Metal silently falls back to CPU; (b) the upgrade path past v1.7.2 is upstream's prebuilt `whisper.xcframework` release artifacts, not a newer SwiftPM tag.
+
 ### Task 6: `WhisperCppEngine` — transcription actor over the C API
 
 **Files:**

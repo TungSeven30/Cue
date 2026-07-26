@@ -486,7 +486,7 @@ final class AppSettingsStore: ObservableObject {
         let model = whisperModel.trimmingCharacters(in: .whitespacesAndNewlines)
         switch whisperBackend {
         case .fasterWhisper:
-            return model.hasPrefix("mlx-community/") || model.hasPrefix("Qwen/")
+            return model.hasPrefix("mlx-community/") || model.hasPrefix("Qwen/") || model.hasPrefix("ggml-")
                 ? "Faster Whisper needs a Faster Whisper model such as \(Self.fasterTurboModel)."
                 : nil
         case .mlxWhisper:
@@ -602,11 +602,11 @@ final class AppSettingsStore: ObservableObject {
 
         switch whisperBackend {
         case .auto, .mlxWhisper:
-            if force || trimmedModel.isEmpty || trimmedModel == Self.fasterTurboModel || trimmedModel.hasPrefix("Qwen/") {
+            if force || trimmedModel.isEmpty || trimmedModel == Self.fasterTurboModel || trimmedModel.hasPrefix("Qwen/") || trimmedModel.hasPrefix("ggml-") {
                 whisperModel = Self.mlxTurboModel
             }
         case .fasterWhisper:
-            if force || trimmedModel.isEmpty || trimmedModel.hasPrefix("mlx-community/whisper-") || trimmedModel.hasPrefix("Qwen/") {
+            if force || trimmedModel.isEmpty || trimmedModel.hasPrefix("mlx-community/whisper-") || trimmedModel.hasPrefix("Qwen/") || trimmedModel.hasPrefix("ggml-") {
                 whisperModel = Self.fasterTurboModel
             }
         case .qwen3ASR:

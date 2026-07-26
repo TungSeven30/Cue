@@ -223,10 +223,19 @@ struct TranscriptionService {
         return try await withTaskCancellationHandler {
             let modelURL = try await ModelDownloader().ensureInstalled(model: snapshot.whisperModel) { update in
                 // ensureInstalled reports on a background queue; hop to the
-                // main actor in emission order before touching UI state.
+                // main actor in emission order before touching UI state. Its
+                // raw 0–1 download fraction is remapped into the 0.12–0.18
+                // band (the Python path pins loadingModel at 0.18) so the
+                // bar does not hit 100% mid-download; the detail text keeps
+                // the downloader's "(N%)" wording.
+                let remapped = JobProgress(
+                    stage: update.stage,
+                    detail: update.detail,
+                    fraction: update.fraction.map { 0.12 + $0 * 0.06 }
+                )
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
-                        progress(update)
+                        progress(remapped)
                     }
                 }
             }
@@ -254,6 +263,10 @@ struct TranscriptionService {
                 },
                 isCancelled: { cancelFlag.withLock { $0 } }
             )
+            // A cancel landing after whisper_full's last abort poll would
+            // otherwise report success; re-check like the Python path does
+            // after its subprocess exits.
+            try Task.checkCancellation()
             let cleanedSegments = TranscriptionPostProcessor.clean(result.segments, settings: snapshot)
             return TranscriptionResult(backend: WhisperBackend.native.rawValue, segments: cleanedSegments)
         } onCancel: {

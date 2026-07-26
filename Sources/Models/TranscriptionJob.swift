@@ -82,7 +82,9 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
 
 /// NOTE: any new field that changes the *transcript* (not translation or
 /// summary) must also be added to TranscriptionIdentity below, or the
-/// skip-if-unchanged check will miss it.
+/// skip-if-unchanged check will miss it. New translation-facing fields must
+/// instead be added to updatingTranslationFields(from:), or translation runs
+/// will stamp stale values for them.
 struct JobSettingsSnapshot: Codable, Hashable {
     static let currentTranscriptionProcessingVersion = 4
 

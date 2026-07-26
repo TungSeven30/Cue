@@ -247,6 +247,9 @@ final class AppSettingsStore: ObservableObject {
     @Published var translationTargetLanguage: String { didSet { save() } }
     @Published var translationPrompt: String { didSet { save() } }
     @Published var autoTranslateAfterTranscription: Bool { didSet { save() } }
+    /// Generate a spoiler-free intro from the subtitles when a job finishes,
+    /// shown as the first cue of SRT/VTT exports.
+    @Published var generateSummary: Bool { didSet { save() } }
     @Published var autoStartAddedJobs: Bool { didSet { save() } }
     @Published var autoExportSidecar: Bool { didSet { save() } }
     @Published var showAdvancedControls: Bool { didSet { save() } }
@@ -336,6 +339,7 @@ final class AppSettingsStore: ObservableObject {
         translationTargetLanguage = defaults.string(forKey: "translationTargetLanguage") ?? "English"
         translationPrompt = defaults.string(forKey: "translationPrompt") ?? Self.defaultTranslationPrompt
         autoTranslateAfterTranscription = defaults.bool(forKey: "autoTranslateAfterTranscription")
+        generateSummary = defaults.bool(forKey: "generateIntroSummary")
         autoStartAddedJobs = defaults.object(forKey: "autoStartAddedJobs") as? Bool ?? true
         autoExportSidecar = defaults.bool(forKey: "autoExportSidecar")
         showAdvancedControls = defaults.bool(forKey: "showAdvancedControls")
@@ -414,6 +418,7 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(translationTargetLanguage, forKey: "translationTargetLanguage")
         defaults.set(translationPrompt, forKey: "translationPrompt")
         defaults.set(autoTranslateAfterTranscription, forKey: "autoTranslateAfterTranscription")
+        defaults.set(generateSummary, forKey: "generateIntroSummary")
         defaults.set(autoStartAddedJobs, forKey: "autoStartAddedJobs")
         defaults.set(autoExportSidecar, forKey: "autoExportSidecar")
         defaults.set(showAdvancedControls, forKey: "showAdvancedControls")

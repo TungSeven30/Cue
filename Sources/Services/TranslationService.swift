@@ -320,6 +320,76 @@ struct TranslationService {
         }
     }
 
+    /// Generates a short spoiler-free introduction for the film from its
+    /// subtitle text, in `language`, using the configured translation model.
+    @MainActor
+    func summarize(
+        segments: [TranscriptionSegment],
+        language: String,
+        settings: AppSettingsStore
+    ) async throws -> String {
+        let model = settings.openAIModel
+        let provider = TranslationProvider.infer(from: model)
+        let apiKey = settings.translationAPIKey(for: provider)
+        guard !apiKey.isEmpty else {
+            throw TranslationServiceError.missingAPIKey(provider.label)
+        }
+
+        let systemPrompt = """
+        You write spoiler-free introductions for films based on their subtitles.
+        Write 1-3 short sentences introducing the setting, main characters, and premise — like the blurb on the back of a DVD box.
+        Do not reveal plot developments beyond the opening act, twists, or the ending.
+        Write the introduction in \(language).
+        Keep it under 280 characters so it fits on screen as a subtitle.
+        Return JSON only in the shape {"summary":"..."}.
+        """
+        // Even a 3-hour film's subtitles fit comfortably in a modern context
+        // window; the cap is a guard against pathological inputs.
+        let subtitleText = String(segments.map(\.text).joined(separator: "\n").prefix(200_000))
+
+        let request = try Self.makeRequest(
+            provider: provider,
+            model: model,
+            apiKey: apiKey,
+            systemPrompt: systemPrompt,
+            userText: "Subtitles:\n\(subtitleText)",
+            schemaName: "movie_intro_summary",
+            schema: Self.summarySchema
+        )
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TranslationServiceError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw Self.classifyAPIError(provider: provider, data: data, statusCode: httpResponse.statusCode, model: model)
+        }
+        return try Self.parseSummary(from: Self.extractOutputText(provider: provider, data: data))
+    }
+
+    /// Internal (not private) so the parsing can be unit-tested.
+    static func parseSummary(from raw: String) throws -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = extractJSONObject(from: trimmed).data(using: .utf8) else {
+            throw TranslationServiceError.invalidResponse
+        }
+        let payload = try JSONDecoder().decode(SummaryPayload.self, from: data)
+        let summary = payload.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !summary.isEmpty else {
+            throw TranslationServiceError.invalidResponse
+        }
+        return summary
+    }
+
+    private static let summarySchema: JSONValue = .object([
+        "type": .string("object"),
+        "properties": .object([
+            "summary": .object(["type": .string("string")])
+        ]),
+        "required": .array([.string("summary")]),
+        "additionalProperties": .bool(false)
+    ])
+
     private func translateChunk(
         _ segments: [TranscriptionSegment],
         chunkNumber: Int,
@@ -400,7 +470,9 @@ struct TranslationService {
         model: String,
         apiKey: String,
         systemPrompt: String,
-        userText: String
+        userText: String,
+        schemaName: String = "subtitle_translation",
+        schema: JSONValue = TranslationSchema.segments
     ) throws -> URLRequest {
         var request: URLRequest
         switch provider {
@@ -418,9 +490,9 @@ struct TranslationService {
                         verbosity: "low",
                         format: .init(
                             type: "json_schema",
-                            name: "subtitle_translation",
+                            name: schemaName,
                             strict: true,
-                            schema: TranslationSchema.segments
+                            schema: schema
                         )
                     )
                 )
@@ -435,7 +507,7 @@ struct TranslationService {
                     max_tokens: 16000,
                     system: systemPrompt,
                     messages: [.init(role: "user", content: userText)],
-                    output_config: .init(format: .init(type: "json_schema", schema: TranslationSchema.segments))
+                    output_config: .init(format: .init(type: "json_schema", schema: schema))
                 )
             )
         case .google:
@@ -451,7 +523,7 @@ struct TranslationService {
                     contents: [.init(role: "user", parts: [.init(text: userText)])],
                     generationConfig: .init(
                         responseMimeType: "application/json",
-                        responseJsonSchema: TranslationSchema.segments
+                        responseJsonSchema: schema
                     )
                 )
             )
@@ -794,6 +866,10 @@ private struct GeminiResponseEnvelope: Decodable {
 
 struct TranslatedSegmentsPayload: Decodable {
     let segments: [TranslatedSegment]
+}
+
+private struct SummaryPayload: Decodable {
+    let summary: String
 }
 
 struct TranslatedSegment: Decodable {

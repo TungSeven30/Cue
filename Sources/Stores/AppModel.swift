@@ -12,6 +12,11 @@ final class AppModel: ObservableObject {
     @Published var diagnostics: [EnvironmentDiagnostic] = []
     @Published var isRunningDiagnostics = false
     @Published var isShowingExportSheet = false
+    @Published var isShowingSetupGuide = false
+    @Published var isGeneratingSummary = false
+    /// The setup guide auto-opens once per launch (when something required is
+    /// missing); after that it is only reachable from the diagnostics popover.
+    private var didOfferSetupGuide = false
     @Published var isPlayerVisible: Bool {
         didSet {
             UserDefaults.standard.set(isPlayerVisible, forKey: "isPlayerVisible")
@@ -127,6 +132,16 @@ final class AppModel: ObservableObject {
 
     var canCancel: Bool {
         isProcessing
+    }
+
+    /// The manual summary action works on any finished job with a transcript,
+    /// independent of the auto-summary toggle.
+    var canGenerateSummary: Bool {
+        guard let job = currentJob else { return false }
+        return !job.transcriptSegments.isEmpty
+            && !job.status.isRunning
+            && !isGeneratingSummary
+            && !settings.currentTranslationAPIKey.isEmpty
     }
 
     var hasPendingWork: Bool {
@@ -274,6 +289,12 @@ final class AppModel: ObservableObject {
                 providerLabel: settings.currentTranslationProvider.label
             )
             isRunningDiagnostics = false
+            if !didOfferSetupGuide {
+                didOfferSetupGuide = true
+                if diagnostics.contains(where: { $0.state == .failed }) {
+                    isShowingSetupGuide = true
+                }
+            }
         }
     }
 
@@ -406,8 +427,19 @@ final class AppModel: ObservableObject {
                 let result = try await transcriptionService.transcribe(videoURL: videoURL, settings: settings) { [weak self] progress in
                     self?.updateProgress(progress, for: jobID)
                 }
-                finishTranscription(result, for: jobID)
-                if settings.autoTranslateAfterTranscription && !settings.currentTranslationAPIKey.isEmpty {
+                let willTranslate = settings.autoTranslateAfterTranscription && !settings.currentTranslationAPIKey.isEmpty
+                // When a translation follows, the summary is generated from
+                // the translated text instead, at the end of that step.
+                var summary: String?
+                if !willTranslate {
+                    summary = await makeIntroSummary(
+                        from: result.segments,
+                        language: "the same language as the subtitles",
+                        for: jobID
+                    )
+                }
+                finishTranscription(result, summary: summary, for: jobID)
+                if willTranslate {
                     activeTask = nil
                     activeJobID = nil
                     startTranslation(jobID: jobID)
@@ -475,7 +507,13 @@ final class AppModel: ObservableObject {
                 } onPartial: { [weak self] partial in
                     self?.updatePartialTranslation(partial, for: jobID)
                 }
-                finishTranslation(result, for: jobID)
+                let target = settings.translationTargetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+                let summary = await makeIntroSummary(
+                    from: result,
+                    language: target.isEmpty ? "English" : target,
+                    for: jobID
+                )
+                finishTranslation(result, summary: summary, for: jobID)
             } catch is CancellationError {
                 markCanceled(jobID)
             } catch {
@@ -577,7 +615,8 @@ final class AppModel: ObservableObject {
                     ? "\(baseName).\(document.suffix).\(format.fileExtension)"
                     : "\(baseName).\(format.fileExtension)"
                 let url = folder.appendingPathComponent(name)
-                writes.append((url, { try SubtitleWriter.write(segments: document.segments, format: format, to: url) }))
+                let segments = applyingIntro(document.segments, format: format, job: currentJob)
+                writes.append((url, { try SubtitleWriter.write(segments: segments, format: format, to: url) }))
             }
         }
         if options.includeLog {
@@ -635,6 +674,17 @@ final class AppModel: ObservableObject {
         alert.runModal()
     }
 
+    /// SRT/VTT exports lead with the intro-summary cue when the job has one;
+    /// plain-text, Markdown, and JSON exports are left untouched.
+    private func applyingIntro(
+        _ segments: [TranscriptionSegment],
+        format: SubtitleExportFormat,
+        job: TranscriptionJob?
+    ) -> [TranscriptionSegment] {
+        guard format == .srt || format == .vtt else { return segments }
+        return SubtitleWriter.segmentsPrependingIntro(job?.summary, to: segments)
+    }
+
     private func bilingualSegments() -> [TranscriptionSegment] {
         bilingualSegments(transcript: transcriptSegments, translated: translatedSegments)
     }
@@ -676,20 +726,30 @@ final class AppModel: ObservableObject {
             if includeOriginal, !job.transcriptSegments.isEmpty {
                 let code = Self.sidecarLanguageCode(for: job.settings.sourceLanguage) ?? "original"
                 let name = "\(base).\(code).srt"
-                try SubtitleWriter.writeSRT(segments: job.transcriptSegments, to: folder.appendingPathComponent(name))
+                try SubtitleWriter.writeSRT(
+                    segments: applyingIntro(job.transcriptSegments, format: .srt, job: job),
+                    to: folder.appendingPathComponent(name)
+                )
                 written.append(name)
             }
             if includeTranslation, !job.translatedSegments.isEmpty {
                 let code = Self.sidecarLanguageCode(for: job.settings.translationTargetLanguage)
                     ?? languageSuffix(job.settings.translationTargetLanguage)
                 let name = "\(base).\(code).srt"
-                try SubtitleWriter.writeSRT(segments: job.translatedSegments, to: folder.appendingPathComponent(name))
+                try SubtitleWriter.writeSRT(
+                    segments: applyingIntro(job.translatedSegments, format: .srt, job: job),
+                    to: folder.appendingPathComponent(name)
+                )
                 written.append(name)
             }
             if includeBilingual, !job.transcriptSegments.isEmpty, !job.translatedSegments.isEmpty {
                 let name = "\(base).bilingual.srt"
                 try SubtitleWriter.writeSRT(
-                    segments: bilingualSegments(transcript: job.transcriptSegments, translated: job.translatedSegments),
+                    segments: applyingIntro(
+                        bilingualSegments(transcript: job.transcriptSegments, translated: job.translatedSegments),
+                        format: .srt,
+                        job: job
+                    ),
                     to: folder.appendingPathComponent(name)
                 )
                 written.append(name)
@@ -762,25 +822,95 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func finishTranscription(_ result: TranscriptionResult, for id: UUID) {
+    private func finishTranscription(_ result: TranscriptionResult, summary: String?, for id: UUID) {
         updateJob(id) { job in
             job.transcriptSegments = result.segments
             job.translatedSegments = []
+            job.summary = summary
             job.status = .transcriptionComplete
             job.progress = JobProgress(stage: .complete, detail: "Transcription complete.", fraction: 1)
             job.log += "Transcription finished via \(result.backend). Produced \(result.segments.count) subtitle segments.\n"
         }
     }
 
-    private func finishTranslation(_ segments: [TranscriptionSegment], for id: UUID) {
+    private func finishTranslation(_ segments: [TranscriptionSegment], summary: String?, for id: UUID) {
         updateJob(id) { job in
             job.translatedSegments = segments
             job.partialTranslatedSegments = []
+            job.summary = summary
             job.status = .translationComplete
             job.progress = JobProgress(stage: .complete, detail: "Translation complete.", fraction: 1)
             job.log += "Translation finished. Produced \(segments.count) translated segments.\n"
         }
         autoExportSidecars(for: id)
+    }
+
+    /// Generates (or regenerates) the intro summary for the selected job on
+    /// demand — for jobs that finished before the toggle was on, or to redo
+    /// a summary after editing segments.
+    func generateSummaryNow() {
+        guard canGenerateSummary, let job = currentJob else { return }
+        let useTranslation = !job.translatedSegments.isEmpty
+        let segments = useTranslation ? job.translatedSegments : job.transcriptSegments
+        // Old jobs summarize in the language they were actually translated to
+        // (the job snapshot), not whatever the current settings say.
+        let target = job.settings.translationTargetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+        let language = useTranslation
+            ? (target.isEmpty ? "English" : target)
+            : "the same language as the subtitles"
+        let id = job.id
+
+        isGeneratingSummary = true
+        Task {
+            do {
+                let summary = try await translationService.summarize(
+                    segments: segments,
+                    language: language,
+                    settings: settings
+                )
+                updateJob(id) { job in
+                    job.summary = summary
+                    job.log += "Generated intro summary: \(summary)\n"
+                }
+            } catch {
+                appendLog("Intro summary failed: \(error.localizedDescription)", to: id)
+                let alert = NSAlert()
+                alert.messageText = "Could Not Write Intro Summary"
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .warning
+                alert.runModal()
+            }
+            isGeneratingSummary = false
+        }
+    }
+
+    /// Best-effort intro-summary generation: a failure logs and returns nil
+    /// rather than failing a job whose transcription/translation succeeded.
+    private func makeIntroSummary(
+        from segments: [TranscriptionSegment],
+        language: String,
+        for id: UUID
+    ) async -> String? {
+        guard settings.generateSummary, !segments.isEmpty else { return nil }
+        guard !settings.currentTranslationAPIKey.isEmpty else {
+            appendLog("Skipped the intro summary because no \(settings.currentTranslationProvider.label) API key is configured.", to: id)
+            return nil
+        }
+        updateJob(id, debouncePersist: true) { job in
+            job.progress = JobProgress(stage: job.progress.stage, detail: "Writing intro summary.", fraction: job.progress.fraction)
+        }
+        do {
+            let summary = try await translationService.summarize(
+                segments: segments,
+                language: language,
+                settings: settings
+            )
+            appendLog("Generated intro summary: \(summary)", to: id)
+            return summary
+        } catch {
+            appendLog("Intro summary failed (job still completed): \(error.localizedDescription)", to: id)
+            return nil
+        }
     }
 
     private func markCanceled(_ id: UUID) {
@@ -896,7 +1026,11 @@ final class AppModel: ObservableObject {
             let exportURL = normalizedExportURL(destination, expectedExtension: format.fileExtension)
             settings.lastExportDirectory = exportURL.deletingLastPathComponent().path
             do {
-                try SubtitleWriter.write(segments: segments, format: format, to: exportURL)
+                try SubtitleWriter.write(
+                    segments: applyingIntro(segments, format: format, job: currentJob),
+                    format: format,
+                    to: exportURL
+                )
                 appendLog("Exported subtitles to \(exportURL.path(percentEncoded: false)).")
             } catch {
                 appendLog("Export failed: \(error.localizedDescription)")

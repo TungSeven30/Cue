@@ -16,6 +16,12 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
     /// Spoiler-free intro generated from the subtitles; prepended as the
     /// first cue of SRT/VTT exports when present.
     var summary: String?
+    /// Per-job settings overrides; nil fields inherit globals at run time.
+    var overrides: JobSettingsOverrides
+    /// How this job entered the app (manual add vs. watch-folder ingest).
+    var origin: JobOrigin
+    /// Queue/list position; lower runs and displays first.
+    var orderIndex: Double
 
     var sourceURL: URL {
         URL(fileURLWithPath: sourcePath)
@@ -41,6 +47,9 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         self.sourceFingerprint = Self.fingerprint(for: sourceURL)
         self.log = "Choose a video to begin.\n"
         self.summary = nil
+        self.overrides = JobSettingsOverrides()
+        self.origin = .manual
+        self.orderIndex = -now.timeIntervalSince1970
     }
 
     init(from decoder: Decoder) throws {
@@ -58,6 +67,9 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         sourceFingerprint = try container.decodeIfPresent(String.self, forKey: .sourceFingerprint) ?? Self.fingerprint(for: URL(fileURLWithPath: sourcePath))
         log = try container.decode(String.self, forKey: .log)
         summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        overrides = try container.decodeIfPresent(JobSettingsOverrides.self, forKey: .overrides) ?? JobSettingsOverrides()
+        origin = try container.decodeIfPresent(JobOrigin.self, forKey: .origin) ?? .manual
+        orderIndex = try container.decodeIfPresent(Double.self, forKey: .orderIndex) ?? -createdAt.timeIntervalSince1970
     }
 
     static func fingerprint(for url: URL) -> String {

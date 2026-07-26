@@ -75,3 +75,56 @@ struct JobSettingsOverridesTests {
         #expect(back == o)
     }
 }
+
+struct TranscriptionJobMigrationTests {
+    private func decodeJob(_ json: String) throws -> TranscriptionJob {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(TranscriptionJob.self, from: Data(json.utf8))
+    }
+
+    private var legacyJobJSON: String {
+        """
+        {
+          "id": "\(UUID().uuidString)",
+          "sourcePath": "/tmp/example.mp4",
+          "createdAt": "2026-01-01T00:00:00Z",
+          "updatedAt": "2026-01-02T00:00:00Z",
+          "status": "idle",
+          "progress": {"stage": "idle", "detail": "x"},
+          "settings": {
+            "sourceLanguage": "auto",
+            "whisperModel": "m",
+            "whisperBackend": "auto",
+            "openAIModel": "gpt-5.5"
+          },
+          "transcriptSegments": [],
+          "translatedSegments": [],
+          "log": "log\\n"
+        }
+        """
+    }
+
+    @Test func legacyJobGetsDefaultsForNewFields() throws {
+        let job = try decodeJob(legacyJobJSON)
+        #expect(job.overrides.isEmpty)
+        #expect(job.origin == .manual)
+        // Spec §0.5: -createdAt reproduces today's newest-first ordering.
+        #expect(job.orderIndex == -job.createdAt.timeIntervalSince1970)
+    }
+
+    @Test func newFieldsRoundTrip() throws {
+        var job = try decodeJob(legacyJobJSON)
+        job.overrides.translationTargetLanguage = "Vietnamese"
+        job.origin = .watchFolder
+        job.orderIndex = 42.5
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let back = try decoder.decode(TranscriptionJob.self, from: try encoder.encode(job))
+        #expect(back.overrides.translationTargetLanguage == "Vietnamese")
+        #expect(back.origin == .watchFolder)
+        #expect(back.orderIndex == 42.5)
+    }
+}

@@ -1,28 +1,58 @@
 import Foundation
 
 struct EnvironmentDiagnosticsService {
-    func run(translationAPIKey: String, providerLabel: String) async -> [EnvironmentDiagnostic] {
+    /// Decides which probe genuinely blocks the user's configuration. The
+    /// built-in whisper.cpp engine ships in the app, so on `.native` (and
+    /// `.auto`, which resolves to native at dispatch) nothing is required.
+    /// When the user explicitly selected a Python backend, that backend's
+    /// own module probe is the one thing that can still fail hard — a
+    /// missing python3 surfaces through it, since the import probe runs
+    /// via python3.
+    static func isRequired(diagnosticID: String, selectedBackend: WhisperBackend) -> Bool {
+        switch selectedBackend {
+        case .native, .auto:
+            return false
+        case .mlxWhisper:
+            return diagnosticID == "mlx-whisper"
+        case .fasterWhisper:
+            return diagnosticID == "faster-whisper"
+        case .qwen3ASR:
+            return diagnosticID == "qwen3-asr"
+        }
+    }
+
+    func run(
+        translationAPIKey: String,
+        providerLabel: String,
+        selectedBackend: WhisperBackend
+    ) async -> [EnvironmentDiagnostic] {
+        func optional(_ id: String) -> Bool {
+            !Self.isRequired(diagnosticID: id, selectedBackend: selectedBackend)
+        }
+
         async let ffmpeg = commandDiagnostic(
             id: "ffmpeg",
             title: "ffmpeg",
             command: ["/usr/bin/env", "ffmpeg", "-version"],
             recovery: "Only needed for the Clean audio option and rare containers AVFoundation can't read.",
             repairCommand: "brew install ffmpeg",
-            optional: true
+            optional: optional("ffmpeg")
         )
         async let python = commandDiagnostic(
             id: "python3",
             title: "Python 3",
             command: ["/usr/bin/env", "python3", "--version"],
-            recovery: "Install Python 3 and make sure python3 is available on PATH.",
-            repairCommand: "brew install python"
+            recovery: "Only needed for the advanced Python engines (MLX Whisper, Faster Whisper, Qwen3 ASR).",
+            repairCommand: "brew install python",
+            optional: optional("python3")
         )
         async let mlx = pythonImportDiagnostic(
             id: "mlx-whisper",
             title: "MLX Whisper",
             module: "mlx_whisper",
-            recovery: "Install with pip install mlx-whisper for fast Apple Silicon transcription.",
-            repairCommand: "python3 -m pip install mlx-whisper"
+            recovery: "Optional engine: pip install mlx-whisper for fast Apple Silicon transcription.",
+            repairCommand: "python3 -m pip install mlx-whisper",
+            optional: optional("mlx-whisper")
         )
         async let faster = pythonImportDiagnostic(
             id: "faster-whisper",
@@ -30,7 +60,7 @@ struct EnvironmentDiagnosticsService {
             module: "faster_whisper",
             recovery: "Optional fallback: pip install faster-whisper.",
             repairCommand: "python3 -m pip install faster-whisper",
-            optional: true
+            optional: optional("faster-whisper")
         )
         async let qwen3 = pythonImportDiagnostic(
             id: "qwen3-asr",
@@ -38,10 +68,21 @@ struct EnvironmentDiagnosticsService {
             module: "mlx_qwen3_asr",
             recovery: "Optional: best transcription accuracy. pip install 'mlx-qwen3-asr[aligner]'.",
             repairCommand: "python3 -m pip install 'mlx-qwen3-asr[aligner]'",
-            optional: true
+            optional: optional("qwen3-asr")
         )
 
-        var results = await [ffmpeg, python, mlx, faster, qwen3]
+        // The built-in engine is compiled into the app, so there is nothing
+        // to probe: it always leads the list as passed.
+        var results = [
+            EnvironmentDiagnostic(
+                id: "built-in-engine",
+                title: "Built-in engine",
+                detail: "Ready — nothing to install.",
+                recovery: "The built-in whisper.cpp engine ships inside the app.",
+                state: .passed
+            )
+        ]
+        results.append(contentsOf: await [ffmpeg, python, mlx, faster, qwen3])
         results.append(
             EnvironmentDiagnostic(
                 id: "translation-key",

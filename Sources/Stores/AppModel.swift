@@ -286,11 +286,15 @@ final class AppModel: ObservableObject {
         Task {
             diagnostics = await diagnosticsService.run(
                 translationAPIKey: settings.currentTranslationAPIKey,
-                providerLabel: settings.currentTranslationProvider.label
+                providerLabel: settings.currentTranslationProvider.label,
+                selectedBackend: settings.whisperBackend
             )
             isRunningDiagnostics = false
             if !didOfferSetupGuide {
                 didOfferSetupGuide = true
+                // Only a required diagnostic reports .failed (the selected
+                // Python backend's missing module); missing optional tools
+                // are warnings, so a fresh install never auto-opens this.
                 if diagnostics.contains(where: { $0.state == .failed }) {
                     isShowingSetupGuide = true
                 }

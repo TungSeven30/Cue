@@ -42,6 +42,24 @@ build_bundle() {
   if [[ -f "$ICON_SOURCE" ]]; then
     cp "$ICON_SOURCE" "$APP_RESOURCES/$ICON_FILE"
   fi
+  # whisper.cpp compiles its Metal shaders at runtime from ggml-metal.metal.
+  # SwiftPM ships that file in a resource bundle whose accessor looks at the
+  # .app root (where codesign forbids content), and the raw file cannot
+  # compile anyway: Metal's runtime compiler has no include path for its
+  # `#include "ggml-common.h"`. Inline the header (upstream's embed step does
+  # the same merge) and ship the self-contained shader in Resources;
+  # WhisperCppEngine points ggml at it via GGML_METAL_PATH_RESOURCES.
+  local ggml_src="$ROOT_DIR/.build/checkouts/whisper.cpp/ggml/src"
+  awk '/#include "ggml-common.h"/ {
+         while ((getline line < common) > 0) print line
+         close(common); next
+       } { print }' \
+    common="$ggml_src/ggml-common.h" \
+    "$ggml_src/ggml-metal.metal" > "$APP_RESOURCES/ggml-metal.metal"
+  grep -q 'ggml-common.h' "$APP_RESOURCES/ggml-metal.metal" && {
+    echo "error: ggml-common.h was not inlined into ggml-metal.metal" >&2
+    exit 1
+  }
 
   cat >"$INFO_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

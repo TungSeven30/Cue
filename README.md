@@ -7,10 +7,10 @@ Everything runs locally except translation and summaries, which call the API pro
 ## Features
 
 **Transcription (on-device)**
-- Backends: [mlx-whisper](https://github.com/ml-explore/mlx-examples) (fast on Apple Silicon), [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (most compatible), and Qwen3-ASR (best accuracy)
+- Backends: a built-in [whisper.cpp](https://github.com/ggml-org/whisper.cpp) engine (Metal-accelerated, nothing to install) is the default; optional extras are [mlx-whisper](https://github.com/ml-explore/mlx-examples) (fast on Apple Silicon), [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (most compatible), and Qwen3-ASR (best accuracy, especially for CJK content)
 - Friendly presets pair backend + model; quality presets tune audio preprocessing, VAD, beam search, and no-speech thresholds for fast drafts, movie dialogue, noisy audio, or maximum accuracy
 - Automatic transcript cleanup: removes empty segments, collapses repeated text, merges tiny fragments, and repairs zero-length or overlong cues
-- Extracted audio is cached (capped at 10 GB), so re-runs skip the ffmpeg step
+- Audio is extracted natively (AVFoundation) and cached (capped at 10 GB), so re-runs skip the extraction step
 
 **Translation**
 - OpenAI, Anthropic (Claude), or Google (Gemini) — the provider is inferred from the model name, so switching is just picking a different model
@@ -31,14 +31,14 @@ Everything runs locally except translation and summaries, which call the API pro
 
 **Reliability**
 - Serial job queue for batch processing (one model on the GPU at a time) with per-job persistence — a crash or force-quit never loses finished work, and interrupted jobs resume
-- Built-in diagnostics verify ffmpeg, Python, and the whisper backends, with a guided first-run setup sheet that includes copyable install commands
+- Built-in diagnostics report "Ready — nothing to install" for the default engine and verify the optional extras (Python backends, ffmpeg) only if you opt into them, with a setup sheet of copyable install commands
 - API keys are stored in the macOS Keychain, never in files or exports
 
 ## How long does a 30-minute clip take?
 
 The two phases have completely different bottlenecks:
 
-- **Transcription** runs on your Mac's GPU — it scales with the chip. The table below is for the default **Balanced** preset with `whisper-large-v3-turbo` on MLX.
+- **Transcription** runs on your Mac's GPU — it scales with the chip. The table below is for the **Balanced** preset with `whisper-large-v3-turbo` on MLX; the built-in default engine is in the same ballpark (see the notes).
 - **Translation** is network-bound (cloud LLM APIs), so it takes about the same time on every Mac: typically **2–6 minutes** for a dialogue-heavy 30-minute clip with the default chunking and 2 parallel workers, varying with segment count and provider speed rather than hardware. The optional intro summary adds ~10 seconds.
 
 | Machine | Transcribe 30 min (Balanced preset) |
@@ -58,21 +58,29 @@ Notes on reading the table:
 - These are ballparks derived from published MLX Whisper benchmarks (e.g. ~55× real-time on an M4 Max with greedy decoding), discounted for the app's beam search and audio preprocessing. Run one of your own clips for real numbers.
 - **RAM doesn't matter here** — `large-v3-turbo` needs ~1.5 GB; a 512 GB Mac Studio wins on GPU cores and memory bandwidth, not memory size. Any listed machine has plenty of RAM for transcription.
 - Fanless MacBook Airs throttle on long runs — the top of each Air range reflects that.
+- The **built-in whisper.cpp engine** (the default) runs the same Whisper model family (`large-v3-turbo`, q5_0-quantized) with Metal acceleration — expect roughly MLX-comparable times on Apple Silicon. Intel Macs work too now (CPU-only, several times slower).
 - **Maximum Accuracy** and **Noisy Audio** presets are roughly 2× the listed times (wider beam search); the **Qwen3-ASR** backend is roughly 2–3× (larger model, better accuracy).
-- First run adds one-time costs: model download (~1.5 GB) and ffmpeg audio extraction (~30–60 s, cached for re-runs).
+- First run adds one-time costs: model download (~574 MB for the built-in default, ~1.5 GB for MLX) and audio extraction (~30–60 s, cached for re-runs).
 
 ## Installing (for users)
 
-Grab `WhisperDesk.dmg` (notarized, from a release or shared directly), drag the app to Applications, and launch it. On first run the app checks for its command-line dependencies and walks you through installing anything missing. The short version:
+Grab `WhisperDesk.dmg` (notarized, from a release or shared directly), drag the app to Applications, and launch it. That's it — no Homebrew, no Python: transcription runs on the built-in whisper.cpp engine out of the box. The first transcription downloads the default model (~574 MB, one-time) with progress shown on the job.
+
+To translate, add an OpenAI, Anthropic, or Google API key in Settings (⌘,).
+
+Requires macOS 14+. Apple Silicon recommended; Intel Macs run the built-in engine on CPU (slow).
+
+### Optional engines
+
+The Python backends are alternatives to the built-in engine — each is a pip module on Python 3:
 
 ```sh
-brew install ffmpeg python
-python3 -m pip install mlx-whisper
+python3 -m pip install mlx-whisper                # MLX Whisper (fast on Apple Silicon)
+python3 -m pip install faster-whisper             # faster-whisper (most compatible)
+python3 -m pip install 'mlx-qwen3-asr[aligner]'   # Qwen3-ASR (best accuracy, the pick for CJK content)
 ```
 
-Optional extras: `pip install faster-whisper` (Intel Macs / compatibility) and `pip install 'mlx-qwen3-asr[aligner]'` (best accuracy). To translate, add an OpenAI, Anthropic, or Google API key in Settings (⌘,).
-
-Requires macOS 14+. Apple Silicon strongly recommended for the MLX backends.
+ffmpeg (`brew install ffmpeg`) is only needed for the **Clean audio** preprocessing option and for rare containers the system decoders can't read.
 
 ## Building from source (for developers)
 
@@ -108,12 +116,12 @@ Other script modes:
 ## Architecture
 
 - **UI**: SwiftUI with AppKit panels, single-window, `@MainActor` state in `AppModel`
-- **Transcription**: a self-contained Python helper script (embedded in the app, written to disk at runtime) invoked as a subprocess; JSON progress events stream back over stderr
+- **Transcription**: the default backend calls whisper.cpp (pinned SwiftPM dependency, Metal) in-process; the optional Python backends use a self-contained helper script (embedded in the app, written to disk at runtime) invoked as a subprocess, with JSON progress events streaming back over stderr
 - **Translation/summaries**: direct HTTPS to the provider APIs with JSON-schema-constrained outputs; no SDK dependencies
 - **Persistence**: one JSON file per job under `~/Library/Application Support/WhisperDesk/jobs/`, written atomically off the main thread and flushed on quit; corrupt files are quarantined, never overwritten
 - **Layout**: `Sources/` — `App`, `Views`, `Stores`, `Services`, `Models`, `Support`; `Tests/` — swift-testing suite; `script/` — build, test, and release tooling
 
 ## Notes
 
-- The default transcription model is `mlx-community/whisper-large-v3-turbo`; the default translation model and languages are configurable in Settings, as are the translator prompt, chunk sizes, and parallelism.
+- The default transcription setup is the built-in engine with `ggml-large-v3-turbo-q5_0` (the MLX backend uses `mlx-community/whisper-large-v3-turbo`); the default translation model and languages are configurable in Settings, as are the translator prompt, chunk sizes, and parallelism.
 - `transcribe.py` at the repo root is a standalone CLI variant of the transcription helper for scripted use; the app uses its own embedded copy.

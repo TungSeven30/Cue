@@ -39,6 +39,21 @@ actor WhisperCppEngine {
         }
     }
 
+    /// whisper.cpp compiles its Metal shaders at runtime from ggml-metal.metal.
+    /// SwiftPM ships that file in whisper_whisper.bundle, but the generated
+    /// bundle accessor only looks at the .app root, where codesign forbids
+    /// unsealed content — so the build script ships a self-contained copy
+    /// (ggml-common.h inlined) in Contents/Resources and this points ggml at
+    /// it. Unset (tests, bare binaries), ggml tries the SwiftPM build-directory
+    /// bundle, whose un-inlined shader fails to compile, and runs on CPU.
+    private static let metalShaderPathConfigured: Void = {
+        guard let resources = Bundle.main.resourceURL,
+              FileManager.default.fileExists(
+                  atPath: resources.appendingPathComponent("ggml-metal.metal").path)
+        else { return }
+        setenv("GGML_METAL_PATH_RESOURCES", resources.path, 1)
+    }()
+
     /// whisper.cpp reports segment timestamps in centiseconds.
     static func mapSegment(index: Int, t0: Int64, t1: Int64, text: String) -> TranscriptionSegment {
         TranscriptionSegment(
@@ -65,6 +80,7 @@ actor WhisperCppEngine {
     ) throws -> Result {
         let samples = try Self.loadPCM16AsFloat(wavURL)
 
+        _ = Self.metalShaderPathConfigured
         let contextParams = whisper_context_default_params()  // Metal on by default
         guard let context = whisper_init_from_file_with_params(modelURL.path, contextParams) else {
             throw WhisperCppError.modelLoadFailed(modelURL.lastPathComponent)

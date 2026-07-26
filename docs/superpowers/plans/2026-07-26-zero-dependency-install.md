@@ -523,10 +523,12 @@ Steps: failing test → implement → full suite → manual end-to-end with the 
 - Regression checklist (manual, on the release build):
   - [ ] Fresh-user simulation: `defaults delete com.local.WhisperDesk` equivalent (new macOS user account), no ffmpeg/Python on PATH → drop a clip → transcription completes with model download progress.
   - [ ] Pristine-Mac check (from Task 10 review): on a Mac with no Command Line Tools, the diagnostics python3 probe invokes the `/usr/bin/python3` shim, which may pop Apple's "install developer tools?" dialog at first launch — verify on a clean VM/account; if it fires, gate the Python probes behind a dialog-free `xcode-select -p` check.
-  - [ ] Existing MLX user: settings preserved, Python path still works.
-  - [ ] Cancel mid-native-transcription stops within ~2 s.
+  - [x] Existing MLX user: settings preserved (automated: `AppSettingsStoreTests` decodes a stored `mlx-whisper` snapshot unchanged); Python-path runtime still a manual spot-check.
+  - [x] Cancel mid-native-transcription stops within ~2 s (measured 0.03 s from cancel to `CancellationError` on Metal with `ggml-tiny` over a 4-minute clip, via a temporary swift-testing check, since deleted; caveat: a cancel issued during model load / first-run Metal shader compile only takes effect once `whisper_full` starts servicing the abort callback — observed ~4 s in that window).
   - [ ] Translated job → export SRT with intro summary → cue timings sane.
 - Commit: `"Document the zero-dependency install"` and tag the release.
+
+Release-verification notes (2026-07-26): the review-note risk from Task 5 was real but understated — SwiftPM's `whisper_whisper.bundle` accessor looks for the bundle at the .app root, where codesign rejects it ("unsealed contents present in the bundle root"), and the raw `ggml-metal.metal` cannot compile at runtime anyway because Metal's `newLibraryWithSource` has no include path for `#include "ggml-common.h"` (so Metal silently fell back to CPU even in dev builds). Fix: `build_and_run.sh` now inlines `ggml-common.h` into the shader (the same merge as upstream's embed step) and ships it in `Contents/Resources`; `WhisperCppEngine` points ggml at it via `GGML_METAL_PATH_RESOURCES`. Verified end to end by a temp test compiling the shipped shader through `whisper_init` on Metal (`ggml_metal_init` loaded the staged copy, GPU initialized). DMG grew 3.6 → 4.1 MB (the 10–20 MB estimate assumed heavier payloads); notarization `Accepted`, stapled; `spctl` accepts both DMG (`Notarized Developer ID`) and .app.
 
 ---
 

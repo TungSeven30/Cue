@@ -6,8 +6,9 @@ struct EnvironmentDiagnosticsService {
             id: "ffmpeg",
             title: "ffmpeg",
             command: ["/usr/bin/env", "ffmpeg", "-version"],
-            recovery: "Install ffmpeg and make sure it is available on PATH.",
-            repairCommand: "brew install ffmpeg"
+            recovery: "Only needed for the Clean audio option and rare containers AVFoundation can't read.",
+            repairCommand: "brew install ffmpeg",
+            optional: true
         )
         async let python = commandDiagnostic(
             id: "python3",

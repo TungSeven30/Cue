@@ -97,6 +97,27 @@ enum SubtitleWriter {
         try data.write(to: url, options: .atomic)
     }
 
+    /// Prepends the intro-summary cue to a subtitle document. The intro runs
+    /// from 0s until the first dialogue, capped at 10s; a minimum of 3s keeps
+    /// it readable in fast-starting films (a brief overlap beats a flash).
+    /// Cue numbers are re-sequenced so the file stays valid.
+    static func segmentsPrependingIntro(_ summary: String?, to segments: [TranscriptionSegment]) -> [TranscriptionSegment] {
+        guard let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty else {
+            return segments
+        }
+        let end: Double
+        if let firstStart = segments.first?.start {
+            end = min(max(3.0, firstStart), 10.0)
+        } else {
+            end = 8.0
+        }
+        let intro = TranscriptionSegment(id: 1, start: 0, end: end, text: summary)
+        let renumbered = segments.enumerated().map { index, segment in
+            TranscriptionSegment(id: index + 2, start: segment.start, end: segment.end, text: segment.text)
+        }
+        return [intro] + renumbered
+    }
+
     /// A blank line terminates a cue in SRT/VTT, so a translation containing
     /// consecutive newlines would corrupt every cue after it. Collapse runs
     /// of newlines to a single line break (intentional two-line cues, e.g.

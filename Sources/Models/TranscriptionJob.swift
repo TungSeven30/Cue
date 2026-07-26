@@ -13,6 +13,9 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
     var partialTranslatedSegments: [TranscriptionSegment]
     var sourceFingerprint: String
     var log: String
+    /// Spoiler-free intro generated from the subtitles; prepended as the
+    /// first cue of SRT/VTT exports when present.
+    var summary: String?
 
     var sourceURL: URL {
         URL(fileURLWithPath: sourcePath)
@@ -37,6 +40,7 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         self.partialTranslatedSegments = []
         self.sourceFingerprint = Self.fingerprint(for: sourceURL)
         self.log = "Choose a video to begin.\n"
+        self.summary = nil
     }
 
     init(from decoder: Decoder) throws {
@@ -53,6 +57,7 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         partialTranslatedSegments = try container.decodeIfPresent([TranscriptionSegment].self, forKey: .partialTranslatedSegments) ?? []
         sourceFingerprint = try container.decodeIfPresent(String.self, forKey: .sourceFingerprint) ?? Self.fingerprint(for: URL(fileURLWithPath: sourcePath))
         log = try container.decode(String.self, forKey: .log)
+        summary = try container.decodeIfPresent(String.self, forKey: .summary)
     }
 
     static func fingerprint(for url: URL) -> String {

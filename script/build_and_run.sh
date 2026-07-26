@@ -29,8 +29,10 @@ build_bundle() {
     swift_args=(-c release)
   fi
 
-  swift build "${swift_args[@]}"
-  BUILD_DIR="$(swift build "${swift_args[@]}" --show-bin-path)"
+  # ${arr[@]+...} guards the empty-array case: macOS's bash 3.2 treats an
+  # empty "${arr[@]}" as an unbound variable under set -u.
+  swift build ${swift_args[@]+"${swift_args[@]}"}
+  BUILD_DIR="$(swift build ${swift_args[@]+"${swift_args[@]}"} --show-bin-path)"
   BUILD_BINARY="$BUILD_DIR/$APP_NAME"
 
   rm -rf "$APP_BUNDLE"
@@ -95,6 +97,54 @@ PLIST
       codesign --force --deep --sign - "$APP_BUNDLE"
     fi
   fi
+}
+
+# Builds a Developer ID-signed, notarized DMG ready to share with other Macs.
+# One-time setup (see script comments / README):
+#   1. Install a "Developer ID Application" certificate in the keychain.
+#   2. xcrun notarytool store-credentials whisperdesk-notary \
+#        --apple-id YOUR_APPLE_ID --team-id YOUR_TEAM_ID
+make_release_dmg() {
+  local identity="${DEV_ID_IDENTITY:-}"
+  if [[ -z "$identity" ]]; then
+    identity="$(security find-identity -v -p codesigning 2>/dev/null \
+      | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+  fi
+  if [[ -z "$identity" ]]; then
+    echo "error: no 'Developer ID Application' certificate in the keychain." >&2
+    echo "Create one at developer.apple.com (Account > Certificates > Developer ID Application)," >&2
+    echo "install it in Keychain Access, then re-run. Or pass DEV_ID_IDENTITY explicitly." >&2
+    exit 1
+  fi
+  local notary_profile="${NOTARY_PROFILE:-whisperdesk-notary}"
+
+  build_bundle release
+  # Replace the local dev signature with the distribution one: Developer ID,
+  # hardened runtime, and a secure timestamp are all required by notarization.
+  codesign --force --options runtime --timestamp --sign "$identity" "$APP_BUNDLE"
+  codesign --verify --strict --verbose=2 "$APP_BUNDLE"
+
+  local staging
+  staging="$(mktemp -d)"
+  cp -R "$APP_BUNDLE" "$staging/"
+  ln -s /Applications "$staging/Applications"
+  local dmg="$DIST_DIR/$APP_NAME.dmg"
+  rm -f "$dmg"
+  hdiutil create -volname "$APP_NAME" -srcfolder "$staging" -ov -format UDZO "$dmg"
+  rm -rf "$staging"
+
+  echo "Submitting $dmg to Apple for notarization (profile: $notary_profile)…"
+  if ! xcrun notarytool submit "$dmg" --keychain-profile "$notary_profile" --wait; then
+    echo "error: notarization failed. If credentials are missing, run the one-time setup:" >&2
+    echo "  xcrun notarytool store-credentials $notary_profile --apple-id YOUR_APPLE_ID --team-id YOUR_TEAM_ID" >&2
+    echo "On a rejected submission, inspect the log:" >&2
+    echo "  xcrun notarytool log <submission-id> --keychain-profile $notary_profile" >&2
+    exit 1
+  fi
+  xcrun stapler staple "$dmg"
+  echo ""
+  echo "Ready to share: $dmg"
+  echo "Recipients can open it on any Mac with no Gatekeeper warnings."
 }
 
 open_app() {
@@ -164,8 +214,11 @@ case "$MODE" in
     sleep 1
     pgrep -x "$APP_NAME" >/dev/null
     ;;
+  --release|release)
+    make_release_dmg
+    ;;
   *)
-    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify|--install]" >&2
+    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify|--install|--release]" >&2
     exit 2
     ;;
 esac

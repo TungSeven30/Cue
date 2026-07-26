@@ -44,6 +44,11 @@ struct WhisperDeskApp: App {
                 .keyboardShortcut("t")
                 .disabled(!model.canTranslate)
 
+                Button("Write Intro Summary") {
+                    model.generateSummaryNow()
+                }
+                .disabled(!model.canGenerateSummary)
+
                 Button("Cancel Current Job") {
                     model.cancelActiveJob()
                 }

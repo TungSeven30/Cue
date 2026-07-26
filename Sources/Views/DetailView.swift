@@ -431,7 +431,8 @@ private struct HeaderCard: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(!model.canTranscribe)
-        } else if model.translatedSegments.isEmpty {
+        }
+        if !model.transcriptSegments.isEmpty, model.translatedSegments.isEmpty {
             HStack(spacing: 10) {
                 Button {
                     model.startTranslation()
@@ -456,6 +457,36 @@ private struct HeaderCard: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+        if !model.transcriptSegments.isEmpty {
+            summaryRow
+        }
+    }
+
+    private var summaryRow: some View {
+        HStack(spacing: 10) {
+            Button {
+                model.generateSummaryNow()
+            } label: {
+                Label(
+                    model.currentJob?.summary == nil ? "Write Intro Summary" : "Redo Intro Summary",
+                    systemImage: "sparkles"
+                )
+            }
+            .disabled(!model.canGenerateSummary)
+            .help("Ask the translation LLM for a spoiler-free intro, shown as the first cue of SRT/VTT exports")
+
+            if model.isGeneratingSummary {
+                ProgressView()
+                    .controlSize(.small)
+            } else if let summary = model.currentJob?.summary {
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .help(summary)
+            }
+            Spacer(minLength: 0)
         }
     }
 }
@@ -561,6 +592,9 @@ private struct RunOptionsRow: View {
             HStack(spacing: 14) {
                 Toggle("Auto-translate", isOn: $model.settings.autoTranslateAfterTranscription)
                     .toggleStyle(.checkbox)
+                Toggle("Intro summary", isOn: $model.settings.generateSummary)
+                    .toggleStyle(.checkbox)
+                    .help("Generate a spoiler-free intro from the subtitles, shown at the start of exported SRT/VTT files")
                 Toggle("Advanced", isOn: $model.settings.showAdvancedControls)
                     .toggleStyle(.checkbox)
                 Text("\(model.settings.translationSourceLanguage) → \(model.settings.translationTargetLanguage)")
@@ -602,6 +636,7 @@ private struct RunOptionsRow: View {
 
 private struct DiagnosticsPopover: View {
     @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -609,6 +644,17 @@ private struct DiagnosticsPopover: View {
                 Text("System Check")
                     .font(.headline)
                 Spacer()
+                Button {
+                    // Close the popover before presenting the sheet so the
+                    // two do not fight over presentation.
+                    dismiss()
+                    DispatchQueue.main.async {
+                        model.isShowingSetupGuide = true
+                    }
+                } label: {
+                    Label("Setup Guide", systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.borderless)
                 Button {
                     model.runDiagnostics()
                 } label: {

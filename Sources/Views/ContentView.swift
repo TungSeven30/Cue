@@ -14,6 +14,9 @@ struct ContentView: View {
         .sheet(isPresented: $model.isShowingExportSheet) {
             ExportOptionsView(model: model)
         }
+        .sheet(isPresented: $model.isShowingSetupGuide) {
+            SetupGuideView(model: model)
+        }
     }
 
     @ToolbarContentBuilder

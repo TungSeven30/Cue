@@ -8,6 +8,13 @@ struct QueueOrderingTests {
         #expect(QueueOrdering.indexForManualAdd(existing: []) == -1)
     }
 
+    @Test func batchAddKeepsBatchOrderAboveExisting() {
+        // First URL gets the smallest index (topmost in ascending order).
+        #expect(QueueOrdering.indicesForBatchAdd(count: 3, existing: [0, 1, 2]) == [-3, -2, -1])
+        #expect(QueueOrdering.indicesForBatchAdd(count: 1, existing: []) == [-1])
+        #expect(QueueOrdering.indicesForBatchAdd(count: 0, existing: [5]) == [])
+    }
+
     @Test func watchAddGoesToBottom() {
         #expect(QueueOrdering.indexForWatchAdd(existing: [0, 1, 2]) == 3)
         #expect(QueueOrdering.indexForWatchAdd(existing: []) == 1)

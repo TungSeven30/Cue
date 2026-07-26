@@ -8,6 +8,13 @@ enum QueueOrdering {
         (existing.min() ?? 0) - 1
     }
 
+    /// Indices for a batch of manual adds: the whole batch lands above every
+    /// existing job, and the batch keeps its own order (first item topmost).
+    static func indicesForBatchAdd(count: Int, existing: [Double]) -> [Double] {
+        let base = (existing.min() ?? 0)
+        return (0..<count).map { base - Double(count - $0) }
+    }
+
     static func indexForWatchAdd(existing: [Double]) -> Double {
         (existing.max() ?? 0) + 1
     }

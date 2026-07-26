@@ -252,12 +252,11 @@ final class AppModel: ObservableObject {
 
     /// Adds videos as separate jobs. Used by the file picker and drag-and-drop.
     func addVideos(urls: [URL]) {
-        var minIndex = jobs.map(\.orderIndex).min() ?? 0
-        let newJobs = urls.map { url in
+        let batchIndices = QueueOrdering.indicesForBatchAdd(count: urls.count, existing: jobs.map(\.orderIndex))
+        let newJobs = zip(urls, batchIndices).map { url, orderIndex in
             var job = TranscriptionJob(sourceURL: url, settings: settings)
             job.log = "Selected \(url.path(percentEncoded: false)).\n"
-            minIndex = QueueOrdering.indexForManualAdd(existing: [minIndex])
-            job.orderIndex = minIndex
+            job.orderIndex = orderIndex
             return job
         }
         guard !newJobs.isEmpty else { return }

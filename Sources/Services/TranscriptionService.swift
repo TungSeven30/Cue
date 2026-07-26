@@ -25,8 +25,11 @@ struct TranscriptionService {
     /// whisper.cpp engine (always available); explicitly chosen backends run
     /// as stored. A legacy `.auto` setting can be paired with a non-GGML
     /// model, which the native engine cannot load, so the run substitutes
-    /// the built-in default model. Resolution is per-dispatch and never
-    /// rewrites the user's stored settings.
+    /// the built-in default model. A stored GGML model is kept as-is; the
+    /// store's normalization makes an `.auto` + GGML pairing unreachable
+    /// today, but it is handled here anyway so this function does not
+    /// depend on that invariant (hand-edited plists exist). Resolution is
+    /// per-dispatch and never rewrites the user's stored settings.
     static func resolveDispatch(
         backend: WhisperBackend,
         model: String

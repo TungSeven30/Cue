@@ -62,6 +62,24 @@ struct AppSettingsStoreTests {
         #expect(store.whisperBackend == .auto)
         #expect(store.whisperModel == AppSettingsStore.mlxTurboModel)
         #expect(store.transcriptionPreset == .custom)
+        // The init-time save() must persist the stored value back, not
+        // rewrite it.
+        #expect(defaults.string(forKey: "whisperBackend") == "auto")
+    }
+
+    @Test func unknownBackendStringDecodesToAutoNotFreshInstall() {
+        let (defaults, name) = makeSuite()
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set("not-a-backend", forKey: "whisperBackend")
+
+        let store = makeStore(defaults: defaults)
+
+        // A present-but-unknown value takes the legacy decode path (the
+        // `?? .auto` fallback); the fresh-install defaults fire only when
+        // the key is genuinely absent.
+        #expect(store.whisperBackend == .auto)
+        #expect(store.transcriptionPreset == .fastAppleSilicon)
+        #expect(store.whisperModel == AppSettingsStore.mlxTurboModel)
     }
 
     // MARK: - .auto dispatch resolution
@@ -75,6 +93,9 @@ struct AppSettingsStoreTests {
         #expect(resolved.model == ModelDownloader.defaultModel)
     }
 
+    // The store's normalization makes an `.auto` + GGML pairing unreachable
+    // through the app today; resolveDispatch handles it anyway so it does
+    // not depend on that invariant (hand-edited plists exist).
     @Test func autoDispatchKeepsStoredGGMLModel() {
         let resolved = TranscriptionService.resolveDispatch(backend: .auto, model: "ggml-small.bin")
         #expect(resolved.backend == .native)

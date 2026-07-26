@@ -15,9 +15,23 @@ let package = Package(
     products: [
         .executable(name: "WhisperDesk", targets: ["WhisperDesk"])
     ],
+    dependencies: [
+        // Pinned to v1.7.2 (commit 6266a9f): the newest whisper.cpp tag whose
+        // Package.swift builds the C/C++/Metal sources via SwiftPM. v1.7.3+
+        // replaced the manifest with a systemLibrary that requires a
+        // pkg-config-installed libwhisper, which would break the
+        // zero-dependency install. Pinned by revision rather than
+        // `exact: "1.7.2"` because SwiftPM forbids the unsafe build flags in
+        // whisper.cpp's manifest for version-based dependencies.
+        .package(
+            url: "https://github.com/ggml-org/whisper.cpp",
+            revision: "6266a9f9e56a5b925e9892acf650f3eb1245814d" // tag v1.7.2
+        )
+    ],
     targets: [
         .executableTarget(
             name: "WhisperDesk",
+            dependencies: [.product(name: "whisper", package: "whisper.cpp")],
             path: "Sources",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

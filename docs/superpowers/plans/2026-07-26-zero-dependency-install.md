@@ -365,19 +365,19 @@ Steps: change → run app → confirm diagnostics pill shows warning (not failur
 **Files:**
 - Modify: `Package.swift`
 
-- [ ] **Step 1:** Add the dependency, pinned to an exact release (choose the newest tagged release at implementation time and record it here):
+- [x] **Step 1:** Add the dependency, pinned to an exact release (choose the newest tagged release at implementation time and record it here). Pinned: **v1.7.2** (commit `6266a9f9e56a5b925e9892acf650f3eb1245814d`) — the newest tag whose `Package.swift` builds the sources via SwiftPM; v1.7.3 through v1.9.1 (latest release) either replace the manifest with a `systemLibrary` requiring a pkg-config-installed libwhisper or drop `Package.swift` entirely. Pinned by revision rather than `exact:` because SwiftPM forbids the unsafe build flags in whisper.cpp's manifest for version-based dependencies:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/ggml-org/whisper.cpp", exact: "<PINNED — newest release at implementation time>")
+    .package(url: "https://github.com/ggml-org/whisper.cpp", revision: "6266a9f9e56a5b925e9892acf650f3eb1245814d") // tag v1.7.2
 ],
 // target WhisperDesk:
 dependencies: [.product(name: "whisper", package: "whisper.cpp")]
 ```
 
-- [ ] **Step 2:** `swift build` — expect a long first compile (C/C++/Metal). If the package product name differs on the pinned tag, take the name from that tag's `Package.swift`, not from this document.
-- [ ] **Step 3:** Smoke-test linkage: temporarily call `whisper_print_system_info()` from app startup, run, check the log mentions `METAL = 1`, then remove the call.
-- [ ] **Step 4:** Commit — `"Add whisper.cpp as a pinned SwiftPM dependency"`.
+- [x] **Step 2:** `swift build` — expect a long first compile (C/C++/Metal). If the package product name differs on the pinned tag, take the name from that tag's `Package.swift`, not from this document. (Product name on v1.7.2 is `whisper`.)
+- [x] **Step 3:** Smoke-test linkage: temporarily call `whisper_print_system_info()` from app startup, run, check the log mentions `METAL = 1`, then remove the call. (Verified via a temporary test: `... NEON = -1 | ARM_FMA = 1 | METAL = 1 ...`; temp test removed.)
+- [x] **Step 4:** Commit — `"Add whisper.cpp as a pinned SwiftPM dependency"`.
 
 ### Task 6: `WhisperCppEngine` — transcription actor over the C API
 

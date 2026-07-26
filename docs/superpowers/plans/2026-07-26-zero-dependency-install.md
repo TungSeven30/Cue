@@ -132,10 +132,31 @@ enum AudioExtractor {
             throw AudioExtractorError.readerFailed(reader.error?.localizedDescription ?? "could not start reading")
         }
 
-        // Stream PCM into the file behind a placeholder header, then patch
-        // the header with the final sizes — avoids buffering hours of audio.
-        FileManager.default.createFile(atPath: destinationURL.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: destinationURL)
+        // Stream into a same-volume temp file and move it into place only
+        // after the header patch succeeds, so an interrupted extraction never
+        // leaves a partial WAV at the destination (downstream cache logic
+        // treats file-existence as validity).
+        let tempURL = destinationURL.deletingLastPathComponent()
+            .appendingPathComponent(destinationURL.lastPathComponent + ".partial-\(UUID().uuidString)")
+        do {
+            try Self.writeWAV(from: output, reader: reader, to: tempURL)
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                _ = try FileManager.default.replaceItemAt(destinationURL, withItemAt: tempURL)
+            } else {
+                try FileManager.default.moveItem(at: tempURL, to: destinationURL)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: tempURL)
+            throw error
+        }
+    }
+
+    /// Streams decoded PCM into `fileURL` behind a placeholder header, then
+    /// patches the header with the final sizes — avoids buffering hours of audio.
+    private static func writeWAV(from output: AVAssetReaderTrackOutput,
+                                 reader: AVAssetReader, to fileURL: URL) throws {
+        FileManager.default.createFile(atPath: fileURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: fileURL)
         defer { try? handle.close() }
         try handle.write(contentsOf: Self.wavHeader(dataLength: 0))
 
@@ -148,6 +169,9 @@ enum AudioExtractor {
             CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: nil,
                                         totalLengthOut: &length, dataPointerOut: &pointer)
             if let pointer, length > 0 {
+                guard UInt64(pcmBytes) + UInt64(length) <= UInt64(UInt32.max) - 36 else {
+                    throw AudioExtractorError.readerFailed("audio exceeds the 4 GiB WAV limit")
+                }
                 try handle.write(contentsOf: Data(bytes: pointer, count: length))
                 pcmBytes += UInt32(length)
             }
@@ -317,7 +341,7 @@ if FileManager.default.fileExists(atPath: cachedWav.path) {
 // ffmpeg filter chain exactly as today.
 ```
 
-`ProcessEnvironment.hasFFmpeg` is a new small helper: `which ffmpeg` against `ProcessEnvironment.withToolPaths()`'s PATH, cached per launch. If native extraction throws (exotic container), log via a progress event and fall through to passing nothing (Python/ffmpeg path) — behavior is never worse than today.
+`ProcessEnvironment.hasFFmpeg` is a new small helper: `which ffmpeg` against `ProcessEnvironment.withToolPaths()`'s PATH, cached per launch. If native extraction throws (exotic container), log via a progress event and fall through to passing nothing (Python/ffmpeg path) — behavior is never worse than today. The cache-hit existence check above is safe because `AudioExtractor.extract` is atomic: it writes to a temp file and moves it into place only on success, so a file at the cached path is always a complete WAV.
 
 - [ ] **Step 3: Manual verification.** Transcribe one real clip with "Clean audio" off and ffmpeg renamed away (`sudo mv` not needed — just run with `PATH=/usr/bin`): the job must complete. Expected log line: `Extracting audio.` from Swift, none from ffmpeg.
 - [ ] **Step 4: Run the full suite** — `./script/run_tests.sh` all green.

@@ -51,4 +51,24 @@ struct AudioExtractorTests {
             try await AudioExtractor.extract(from: source, to: destination)
         }
     }
+
+    @Test func leavesNoFileBehindWhenExtractionFails() async throws {
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent("empty-\(UUID().uuidString).txt")
+        try Data("not audio".utf8).write(to: source)
+        defer { try? FileManager.default.removeItem(at: source) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("extractor-fail-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let destination = directory.appendingPathComponent("out.wav")
+
+        await #expect(throws: (any Error).self) {
+            try await AudioExtractor.extract(from: source, to: destination)
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        #expect(leftovers.isEmpty)
+    }
 }

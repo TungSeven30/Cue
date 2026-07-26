@@ -39,10 +39,31 @@ enum AudioExtractor {
             throw AudioExtractorError.readerFailed(reader.error?.localizedDescription ?? "could not start reading")
         }
 
-        // Stream PCM into the file behind a placeholder header, then patch
-        // the header with the final sizes — avoids buffering hours of audio.
-        FileManager.default.createFile(atPath: destinationURL.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: destinationURL)
+        // Stream into a same-volume temp file and move it into place only
+        // after the header patch succeeds, so an interrupted extraction never
+        // leaves a partial WAV at the destination (downstream cache logic
+        // treats file-existence as validity).
+        let tempURL = destinationURL.deletingLastPathComponent()
+            .appendingPathComponent(destinationURL.lastPathComponent + ".partial-\(UUID().uuidString)")
+        do {
+            try Self.writeWAV(from: output, reader: reader, to: tempURL)
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                _ = try FileManager.default.replaceItemAt(destinationURL, withItemAt: tempURL)
+            } else {
+                try FileManager.default.moveItem(at: tempURL, to: destinationURL)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: tempURL)
+            throw error
+        }
+    }
+
+    /// Streams decoded PCM into `fileURL` behind a placeholder header, then
+    /// patches the header with the final sizes — avoids buffering hours of audio.
+    private static func writeWAV(from output: AVAssetReaderTrackOutput,
+                                 reader: AVAssetReader, to fileURL: URL) throws {
+        FileManager.default.createFile(atPath: fileURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: fileURL)
         defer { try? handle.close() }
         try handle.write(contentsOf: Self.wavHeader(dataLength: 0))
 
@@ -55,6 +76,9 @@ enum AudioExtractor {
             CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: nil,
                                         totalLengthOut: &length, dataPointerOut: &pointer)
             if let pointer, length > 0 {
+                guard UInt64(pcmBytes) + UInt64(length) <= UInt64(UInt32.max) - 36 else {
+                    throw AudioExtractorError.readerFailed("audio exceeds the 4 GiB WAV limit")
+                }
                 try handle.write(contentsOf: Data(bytes: pointer, count: length))
                 pcmBytes += UInt32(length)
             }

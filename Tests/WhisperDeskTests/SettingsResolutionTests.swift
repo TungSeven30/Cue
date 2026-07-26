@@ -128,3 +128,68 @@ struct TranscriptionJobMigrationTests {
         #expect(back.orderIndex == 42.5)
     }
 }
+
+struct SnapshotResolutionTests {
+    /// Decodes a baseline snapshot without touching AppSettingsStore
+    /// (UserDefaults/Keychain). decodeIfPresent fills defaults.
+    private func makeSnapshot() throws -> JobSettingsSnapshot {
+        let json = """
+        {
+          "sourceLanguage": "auto",
+          "whisperModel": "mlx-community/whisper-large-v3-turbo",
+          "whisperBackend": "mlx-whisper",
+          "openAIModel": "gpt-5.5"
+        }
+        """
+        return try JSONDecoder().decode(JobSettingsSnapshot.self, from: Data(json.utf8))
+    }
+
+    @Test func emptyOverridesChangeNothing() throws {
+        let base = try makeSnapshot()
+        #expect(base.applying(JobSettingsOverrides()) == base)
+    }
+
+    @Test func languageOverridesWin() throws {
+        var o = JobSettingsOverrides()
+        o.sourceLanguage = "ja"
+        o.translationTargetLanguage = "Vietnamese"
+        let resolved = try makeSnapshot().applying(o)
+        #expect(resolved.sourceLanguage == "ja")
+        #expect(resolved.translationTargetLanguage == "Vietnamese")
+        // Untouched fields inherit.
+        #expect(resolved.whisperModel == "mlx-community/whisper-large-v3-turbo")
+    }
+
+    @Test func transcriptionPresetExpandsToBackendAndModel() throws {
+        var o = JobSettingsOverrides()
+        o.transcriptionPreset = .bestAccuracy
+        let resolved = try makeSnapshot().applying(o)
+        #expect(resolved.transcriptionPreset == .bestAccuracy)
+        #expect(resolved.whisperBackend == .qwen3ASR)
+        #expect(resolved.whisperModel == AppSettingsStore.qwen3DefaultModel)
+    }
+
+    @Test func qualityPresetExpandsToParameters() throws {
+        var o = JobSettingsOverrides()
+        o.transcriptionQualityPreset = .noisyAudio
+        let resolved = try makeSnapshot().applying(o)
+        #expect(resolved.transcriptionQualityPreset == .noisyAudio)
+        #expect(resolved.beamSize == 7)
+        #expect(resolved.noSpeechThreshold == 0.45)
+        #expect(resolved.minSegmentDuration == 1.0)
+    }
+
+    @Test func identityIgnoresTranslationFields() throws {
+        let base = try makeSnapshot()
+        var o = JobSettingsOverrides()
+        o.translationTargetLanguage = "Vietnamese"
+        #expect(base.applying(o).transcriptionIdentity == base.transcriptionIdentity)
+    }
+
+    @Test func identityChangesWithTranscriptionFields() throws {
+        let base = try makeSnapshot()
+        var o = JobSettingsOverrides()
+        o.sourceLanguage = "ja"
+        #expect(base.applying(o).transcriptionIdentity != base.transcriptionIdentity)
+    }
+}

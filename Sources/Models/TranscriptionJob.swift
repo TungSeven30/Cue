@@ -158,3 +158,82 @@ struct JobSettingsSnapshot: Codable, Hashable {
         noSpeechThreshold = try container.decodeIfPresent(Double.self, forKey: .noSpeechThreshold) ?? 0.6
     }
 }
+
+extension JobSettingsSnapshot {
+    /// Layers per-job overrides over this (global-derived) snapshot.
+    /// Spec §0.3: presets expand to their constituent fields so services
+    /// never need to interpret presets themselves.
+    func applying(_ overrides: JobSettingsOverrides) -> JobSettingsSnapshot {
+        var resolved = self
+        if let language = overrides.sourceLanguage {
+            resolved.sourceLanguage = language
+        }
+        if let target = overrides.translationTargetLanguage {
+            resolved.translationTargetLanguage = target
+        }
+        if let preset = overrides.transcriptionPreset,
+           let backend = preset.backend, let model = preset.model {
+            resolved.transcriptionPreset = preset
+            resolved.whisperBackend = backend
+            resolved.whisperModel = model
+        }
+        if let quality = overrides.transcriptionQualityPreset,
+           let params = quality.parameters {
+            resolved.transcriptionQualityPreset = quality
+            resolved.preprocessAudio = params.preprocessAudio
+            resolved.vadFilter = params.vadFilter
+            resolved.removeEmptySegments = params.removeEmptySegments
+            resolved.removeRepeatedText = params.removeRepeatedText
+            resolved.mergeShortSegments = params.mergeShortSegments
+            resolved.minSegmentDuration = params.minSegmentDuration
+            resolved.maxMergeGap = params.maxMergeGap
+            resolved.beamSize = params.beamSize
+            resolved.bestOf = params.bestOf
+            resolved.temperature = params.temperature
+            resolved.noSpeechThreshold = params.noSpeechThreshold
+        }
+        return resolved
+    }
+
+    /// The fields that determine what transcript a run produces. Two
+    /// snapshots with equal identity yield the same transcript, so re-running
+    /// can be skipped (spec §0.6). Translation and summary settings are
+    /// deliberately excluded.
+    struct TranscriptionIdentity: Hashable {
+        let processingVersion: Int
+        let sourceLanguage: String
+        let whisperModel: String
+        let whisperBackend: WhisperBackend
+        let preprocessAudio: Bool
+        let vadFilter: Bool
+        let removeEmptySegments: Bool
+        let removeRepeatedText: Bool
+        let mergeShortSegments: Bool
+        let minSegmentDuration: Double
+        let maxMergeGap: Double
+        let beamSize: Int
+        let bestOf: Int
+        let temperature: Double
+        let noSpeechThreshold: Double
+    }
+
+    var transcriptionIdentity: TranscriptionIdentity {
+        TranscriptionIdentity(
+            processingVersion: transcriptionProcessingVersion,
+            sourceLanguage: sourceLanguage,
+            whisperModel: whisperModel,
+            whisperBackend: whisperBackend,
+            preprocessAudio: preprocessAudio,
+            vadFilter: vadFilter,
+            removeEmptySegments: removeEmptySegments,
+            removeRepeatedText: removeRepeatedText,
+            mergeShortSegments: mergeShortSegments,
+            minSegmentDuration: minSegmentDuration,
+            maxMergeGap: maxMergeGap,
+            beamSize: beamSize,
+            bestOf: bestOf,
+            temperature: temperature,
+            noSpeechThreshold: noSpeechThreshold
+        )
+    }
+}

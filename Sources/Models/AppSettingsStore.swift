@@ -198,15 +198,16 @@ enum AppSettingPresets {
     // The provider (OpenAI, Anthropic, Google) is inferred from the model
     // name; each provider uses its own API key from Settings.
     static let translationModels: [SettingsPreset] = [
+        SettingsPreset(label: "GPT-5.6 Sol", value: "gpt-5.6-sol"),
+        SettingsPreset(label: "GPT-5.6 Terra", value: "gpt-5.6-terra"),
+        SettingsPreset(label: "GPT-5.6 Luna", value: "gpt-5.6-luna"),
         SettingsPreset(label: "GPT-5.5", value: "gpt-5.5"),
-        SettingsPreset(label: "GPT-5.4 Mini", value: "gpt-5.4-mini"),
-        SettingsPreset(label: "GPT-5.4 Nano", value: "gpt-5.4-nano"),
-        SettingsPreset(label: "GPT-5.2", value: "gpt-5.2"),
-        SettingsPreset(label: "Claude Opus 4.8", value: "claude-opus-4-8"),
+        SettingsPreset(label: "Claude Opus 5", value: "claude-opus-5"),
         SettingsPreset(label: "Claude Sonnet 5", value: "claude-sonnet-5"),
         SettingsPreset(label: "Claude Haiku 4.5", value: "claude-haiku-4-5"),
         SettingsPreset(label: "Gemini 3.1 Pro", value: "gemini-3.1-pro-preview"),
-        SettingsPreset(label: "Gemini 3.5 Flash", value: "gemini-3.5-flash")
+        SettingsPreset(label: "Gemini 3.6 Flash", value: "gemini-3.6-flash"),
+        SettingsPreset(label: "Gemini 3.5 Flash-Lite", value: "gemini-3.5-flash-lite")
     ]
 }
 
@@ -330,7 +331,7 @@ final class AppSettingsStore: ObservableObject {
         sourceLanguage = defaults.string(forKey: "sourceLanguage") ?? "auto"
         whisperModel = defaults.string(forKey: "whisperModel") ?? Self.mlxTurboModel
         whisperBackend = WhisperBackend(rawValue: defaults.string(forKey: "whisperBackend") ?? "auto") ?? .auto
-        openAIModel = defaults.string(forKey: "openAIModel") ?? "gpt-5.2"
+        openAIModel = defaults.string(forKey: "openAIModel") ?? "gpt-5.5"
         translationSourceLanguage = defaults.string(forKey: "translationSourceLanguage") ?? "auto"
         translationTargetLanguage = defaults.string(forKey: "translationTargetLanguage") ?? "English"
         translationPrompt = defaults.string(forKey: "translationPrompt") ?? Self.defaultTranslationPrompt

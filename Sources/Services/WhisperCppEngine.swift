@@ -9,15 +9,18 @@ enum WhisperCppError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .modelLoadFailed(let name):
-            return "Could not load the model \(name)."
+            return "Could not load the model \(name). Try re-downloading the model."
         case .inferenceFailed(let status):
-            return "Transcription failed (whisper.cpp status \(status))."
+            return "Transcription failed unexpectedly (status \(status))."
         case .invalidWAV(let reason):
             return "Invalid WAV file: \(reason)."
         }
     }
 }
 
+// The actor serializes inference: one transcription at a time. transcribe
+// knowingly parks its executor thread for the whole whisper_full call — it is
+// the only heavy work in flight, so a dedicated blocking thread is fine.
 actor WhisperCppEngine {
     struct Result {
         let segments: [TranscriptionSegment]
@@ -46,6 +49,11 @@ actor WhisperCppEngine {
         )
     }
 
+    /// - Parameter isCancelled: Fires on whisper's worker threads, so it must
+    ///   read thread-independent state (a flag set via
+    ///   withTaskCancellationHandler, or an atomic) — NOT `Task.isCancelled`,
+    ///   which has no current task in that context and would silently never
+    ///   cancel.
     func transcribe(
         wavURL: URL,
         modelURL: URL,
@@ -66,7 +74,7 @@ actor WhisperCppEngine {
         var params = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH)
         params.beam_search.beam_size = Int32(beamSize)
         params.no_speech_thold = Float(noSpeechThreshold)
-        params.n_threads = Int32(max(4, ProcessInfo.processInfo.activeProcessorCount - 2))
+        params.n_threads = Int32(max(4, ProcessInfo.processInfo.activeProcessorCount - 2))  // reserve a couple of cores for UI/system; floor of 4 matches whisper.cpp's default
         params.print_progress = false
         params.no_context = true  // match condition_on_previous_text=False
 
@@ -117,7 +125,7 @@ actor WhisperCppEngine {
     /// Reads a 16-bit mono PCM WAV into normalized Float32 samples, walking
     /// the RIFF chunks rather than assuming the canonical 44-byte layout.
     static func loadPCM16AsFloat(_ url: URL) throws -> [Float] {
-        let data = try Data(contentsOf: url)
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
         func readU16(_ offset: Int) -> UInt16 {
             UInt16(data[offset]) | UInt16(data[offset + 1]) << 8
         }

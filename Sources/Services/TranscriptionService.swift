@@ -44,6 +44,38 @@ struct TranscriptionService {
         )
 
         let scriptURL = try BackendScriptWriter.ensureScript()
+
+        // Extract audio natively (AVFoundation) so the helper skips its ffmpeg
+        // step. "Clean audio" preprocessing is ffmpeg-only, so when it is on
+        // and ffmpeg exists the helper keeps running its own filter chain.
+        let wantsPreprocess = snapshot.preprocessAudio && ProcessEnvironment.hasFFmpeg
+        let cachedWav = try AudioCache.cachedAudioURL(for: videoURL, preprocess: wantsPreprocess)
+        var audioArgument: [String] = []
+        if FileManager.default.fileExists(atPath: cachedWav.path) {
+            // Safe: extraction is atomic (temp file + move), so existence == validity.
+            audioArgument = ["--audio-wav", cachedWav.path]
+        } else if !wantsPreprocess {
+            progress(JobProgress(stage: .extractingAudio, detail: "Extracting audio.", fraction: 0.08))
+            do {
+                try await AudioExtractor.extract(from: videoURL, to: cachedWav)
+                AudioCache.prune(directory: AudioCache.directory, keeping: cachedWav)
+                audioArgument = ["--audio-wav", cachedWav.path]
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Exotic container AVFoundation can't read: fall back to the
+                // Python/ffmpeg path by passing nothing. Never worse than today.
+                progress(JobProgress(
+                    stage: .extractingAudio,
+                    detail: "Native extraction failed (\(error.localizedDescription)); falling back to ffmpeg.",
+                    fraction: 0.08
+                ))
+            }
+        }
+        // wantsPreprocess && no cache → pass nothing; the Python helper runs
+        // its ffmpeg filter chain exactly as today.
+        let audioArguments = audioArgument
+
         let processBox = ProcessBox()
 
         return try await withTaskCancellationHandler {
@@ -73,7 +105,7 @@ struct TranscriptionService {
                 "\(snapshot.temperature)",
                 "--no-speech-threshold",
                 "\(snapshot.noSpeechThreshold)",
-            ]
+            ] + audioArguments
             processBox.process = process
 
             let stdout = PipeCollector()

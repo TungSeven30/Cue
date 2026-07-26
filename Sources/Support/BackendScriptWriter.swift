@@ -167,7 +167,11 @@ def prune_audio_cache(cache_dir: Path, keep: Path, max_bytes: int = 10 * 1024**3
         pass
 
 
-def prepare_audio(input_path: Path, temp_dir: Path, preprocess_audio: bool) -> Path:
+def prepare_audio(input_path: Path, temp_dir: Path, preprocess_audio: bool, audio_wav: Path | None = None) -> Path:
+    if audio_wav is not None and audio_wav.exists():
+        emit("extractingAudio", "Using pre-extracted audio.", 0.12)
+        return audio_wav
+
     cache_path = audio_cache_path(input_path, preprocess_audio)
     if cache_path.exists() and cache_path.stat().st_size > 0:
         emit("extractingAudio", "Using cached extracted audio.", 0.12)
@@ -356,6 +360,7 @@ def main() -> int:
     parser.add_argument("--model", default="mlx-community/whisper-large-v3-turbo")
     parser.add_argument("--backend", default="auto", choices=["auto", "mlx-whisper", "faster-whisper", "qwen3-asr"])
     parser.add_argument("--preprocess-audio", default="true")
+    parser.add_argument("--audio-wav", default=None, help="Path to a pre-extracted 16 kHz mono WAV; skips ffmpeg extraction.")
     parser.add_argument("--vad-filter", default="true")
     parser.add_argument("--beam-size", type=int, default=5)
     parser.add_argument("--best-of", type=int, default=5)
@@ -372,7 +377,12 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="whisperdesk_") as temp_dir:
         emit("preflight", "Preparing transcription helper.", 0.02)
         try:
-            audio_path = prepare_audio(input_path, Path(temp_dir), bool_arg(args.preprocess_audio))
+            audio_path = prepare_audio(
+                input_path,
+                Path(temp_dir),
+                bool_arg(args.preprocess_audio),
+                audio_wav=Path(args.audio_wav) if args.audio_wav else None,
+            )
         except FileNotFoundError:
             print("ffmpeg was not found. Install ffmpeg and make sure it is on your PATH.", file=sys.stderr)
             return 1

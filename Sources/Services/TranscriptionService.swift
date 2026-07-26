@@ -21,16 +21,34 @@ enum TranscriptionServiceError: LocalizedError {
 }
 
 struct TranscriptionService {
+    /// Decides which engine runs a job. `.auto` resolves to the built-in
+    /// whisper.cpp engine (always available); explicitly chosen backends run
+    /// as stored. A legacy `.auto` setting can be paired with a non-GGML
+    /// model, which the native engine cannot load, so the run substitutes
+    /// the built-in default model. Resolution is per-dispatch and never
+    /// rewrites the user's stored settings.
+    static func resolveDispatch(
+        backend: WhisperBackend,
+        model: String
+    ) -> (backend: WhisperBackend, model: String) {
+        guard backend == .auto else {
+            return (backend, model)
+        }
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (.native, trimmed.hasPrefix("ggml-") ? trimmed : ModelDownloader.defaultModel)
+    }
+
     @MainActor
     func transcribe(
         videoURL: URL,
         settings: AppSettingsStore,
         progress: @escaping @MainActor (JobProgress) -> Void
     ) async throws -> TranscriptionResult {
+        let resolved = Self.resolveDispatch(backend: settings.whisperBackend, model: settings.whisperModel)
         let snapshot = TranscriptionSettingsSnapshot(
             sourceLanguage: settings.sourceLanguage,
-            whisperModel: settings.whisperModel,
-            whisperBackendRawValue: settings.whisperBackend.rawValue,
+            whisperModel: resolved.model,
+            whisperBackendRawValue: resolved.backend.rawValue,
             preprocessAudio: settings.preprocessAudio,
             vadFilter: settings.vadFilter,
             removeEmptySegments: settings.removeEmptySegments,
@@ -44,7 +62,7 @@ struct TranscriptionService {
             noSpeechThreshold: settings.noSpeechThreshold
         )
 
-        if settings.whisperBackend == .native {
+        if resolved.backend == .native {
             return try await transcribeNatively(videoURL: videoURL, snapshot: snapshot, progress: progress)
         }
 

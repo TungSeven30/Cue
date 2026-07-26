@@ -351,14 +351,29 @@ final class AppSettingsStore: ObservableObject {
     Do not add explanations, notes, censorship, markdown, or extra segments.
     """
 
-    init() {
-        let defaults = UserDefaults.standard
+    init(
+        defaults: UserDefaults = .standard,
+        readSecret: @escaping (String) -> String? = { KeychainStore.read(account: $0) },
+        writeSecret: @escaping (String, String) -> Void = { KeychainStore.write($0, account: $1) }
+    ) {
         self.defaults = defaults
-        transcriptionPreset = TranscriptionPreset(rawValue: defaults.string(forKey: "transcriptionPreset") ?? "") ?? .fastAppleSilicon
+        self.readSecret = readSecret
+        self.writeSecret = writeSecret
+        // save() always writes the whisperBackend key, so its absence means a
+        // fresh install: default to the zero-setup built-in engine. Any stored
+        // value — including legacy "auto" or an unknown string — takes the
+        // existing decode path so nothing changes for current users.
+        if defaults.string(forKey: "whisperBackend") == nil {
+            transcriptionPreset = .builtIn
+            whisperModel = ModelDownloader.defaultModel
+            whisperBackend = .native
+        } else {
+            transcriptionPreset = TranscriptionPreset(rawValue: defaults.string(forKey: "transcriptionPreset") ?? "") ?? .fastAppleSilicon
+            whisperModel = defaults.string(forKey: "whisperModel") ?? Self.mlxTurboModel
+            whisperBackend = WhisperBackend(rawValue: defaults.string(forKey: "whisperBackend") ?? "auto") ?? .auto
+        }
         transcriptionQualityPreset = TranscriptionQualityPreset(rawValue: defaults.string(forKey: "transcriptionQualityPreset") ?? "") ?? .balanced
         sourceLanguage = defaults.string(forKey: "sourceLanguage") ?? "auto"
-        whisperModel = defaults.string(forKey: "whisperModel") ?? Self.mlxTurboModel
-        whisperBackend = WhisperBackend(rawValue: defaults.string(forKey: "whisperBackend") ?? "auto") ?? .auto
         openAIModel = defaults.string(forKey: "openAIModel") ?? "gpt-5.5"
         translationSourceLanguage = defaults.string(forKey: "translationSourceLanguage") ?? "auto"
         translationTargetLanguage = defaults.string(forKey: "translationTargetLanguage") ?? "English"
@@ -386,11 +401,11 @@ final class AppSettingsStore: ObservableObject {
         // The API keys live in the Keychain. Migrate any legacy plaintext key
         // that earlier builds stored in UserDefaults, then scrub it.
         let resolvedOpenAIKey: String
-        if let stored = KeychainStore.read(account: Self.apiKeyAccount) {
+        if let stored = readSecret(Self.apiKeyAccount) {
             resolvedOpenAIKey = stored
         } else if let legacy = defaults.string(forKey: "openAIAPIKey"), !legacy.isEmpty {
             resolvedOpenAIKey = legacy
-            KeychainStore.write(legacy, account: Self.apiKeyAccount)
+            writeSecret(legacy, Self.apiKeyAccount)
             defaults.removeObject(forKey: "openAIAPIKey")
         } else {
             resolvedOpenAIKey = ""
@@ -399,10 +414,10 @@ final class AppSettingsStore: ObservableObject {
         openAIAPIKey = resolvedOpenAIKey
         persistedAPIKey = resolvedOpenAIKey
 
-        let resolvedAnthropicKey = KeychainStore.read(account: Self.anthropicKeyAccount) ?? ""
+        let resolvedAnthropicKey = readSecret(Self.anthropicKeyAccount) ?? ""
         anthropicAPIKey = resolvedAnthropicKey
         persistedAnthropicKey = resolvedAnthropicKey
-        let resolvedGoogleKey = KeychainStore.read(account: Self.googleKeyAccount) ?? ""
+        let resolvedGoogleKey = readSecret(Self.googleKeyAccount) ?? ""
         googleAPIKey = resolvedGoogleKey
         persistedGoogleKey = resolvedGoogleKey
 
@@ -410,6 +425,8 @@ final class AppSettingsStore: ObservableObject {
         save()
     }
 
+    private let readSecret: (String) -> String?
+    private let writeSecret: (String, String) -> Void
     private var isApplyingPreset = false
     private var isApplyingQualityPreset = false
     private var persistedAPIKey = ""
@@ -465,15 +482,15 @@ final class AppSettingsStore: ObservableObject {
         // when a key itself changed so typing elsewhere (e.g. the prompt
         // editor) does not trigger a Keychain write per keystroke.
         if openAIAPIKey != persistedAPIKey {
-            KeychainStore.write(openAIAPIKey, account: Self.apiKeyAccount)
+            writeSecret(openAIAPIKey, Self.apiKeyAccount)
             persistedAPIKey = openAIAPIKey
         }
         if anthropicAPIKey != persistedAnthropicKey {
-            KeychainStore.write(anthropicAPIKey, account: Self.anthropicKeyAccount)
+            writeSecret(anthropicAPIKey, Self.anthropicKeyAccount)
             persistedAnthropicKey = anthropicAPIKey
         }
         if googleAPIKey != persistedGoogleKey {
-            KeychainStore.write(googleAPIKey, account: Self.googleKeyAccount)
+            writeSecret(googleAPIKey, Self.googleKeyAccount)
             persistedGoogleKey = googleAPIKey
         }
     }

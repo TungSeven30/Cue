@@ -66,9 +66,12 @@ struct AudioCacheTests {
                 ofItemAtPath: url.path
             )
         }
-        AudioCache.prune(directory: dir, maxBytes: 2_500, keeping: dir.appendingPathComponent("f2.wav"))
+        // Keep the OLDEST file so the exemption branch actually fires: prune
+        // must skip f0 (first candidate) and evict f1 instead. 3,000 bytes
+        // against a 2,500 cap forces exactly one eviction, so f2 survives.
+        AudioCache.prune(directory: dir, maxBytes: 2_500, keeping: dir.appendingPathComponent("f0.wav"))
         let remaining = try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted()
-        #expect(remaining == ["f1.wav", "f2.wav"])
+        #expect(remaining == ["f0.wav", "f2.wav"])
     }
 
     @Test func pruneSweepsStalePartialFiles() throws {

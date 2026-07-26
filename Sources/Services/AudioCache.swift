@@ -54,6 +54,9 @@ enum AudioCache {
             includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]
         ) else { return }
 
+        // Safe to sweep unconditionally: the app runs one extraction at a time
+        // (single activeTask in AppModel), so no in-flight temp file can exist
+        // when prune runs.
         for url in entries where url.lastPathComponent.contains(".partial-") {
             try? fileManager.removeItem(at: url)
         }
@@ -71,8 +74,9 @@ enum AudioCache {
         for file in wavs {
             if total <= maxBytes { break }
             if file.url.standardizedFileURL.path == keepPath { continue }
-            try? fileManager.removeItem(at: file.url)
-            total -= file.size
+            if (try? fileManager.removeItem(at: file.url)) != nil {
+                total -= file.size
+            }
         }
     }
 }

@@ -132,6 +132,9 @@ make_release_dmg() {
   rm -f "$dmg"
   hdiutil create -volname "$APP_NAME" -srcfolder "$staging" -ov -format UDZO "$dmg"
   rm -rf "$staging"
+  # Sign the DMG container too, so the image itself passes signature
+  # evaluation (the app inside is what Gatekeeper ultimately assesses).
+  codesign --force --timestamp --sign "$identity" "$dmg"
 
   echo "Submitting $dmg to Apple for notarization (profile: $notary_profile)…"
   if ! xcrun notarytool submit "$dmg" --keychain-profile "$notary_profile" --wait; then

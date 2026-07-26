@@ -58,7 +58,7 @@ Notes on reading the table:
 - These are ballparks derived from published MLX Whisper benchmarks (e.g. ~55× real-time on an M4 Max with greedy decoding), discounted for the app's beam search and audio preprocessing. Run one of your own clips for real numbers.
 - **RAM doesn't matter here** — `large-v3-turbo` needs ~1.5 GB; a 512 GB Mac Studio wins on GPU cores and memory bandwidth, not memory size. Any listed machine has plenty of RAM for transcription.
 - Fanless MacBook Airs throttle on long runs — the top of each Air range reflects that.
-- The **built-in whisper.cpp engine** (the default) runs the same Whisper model family (`large-v3-turbo`, q5_0-quantized) with Metal acceleration — expect roughly MLX-comparable times on Apple Silicon. Intel Macs work too now (CPU-only, several times slower).
+- The **built-in whisper.cpp engine** (the default) runs the same Whisper model family (`large-v3-turbo`, q5_0-quantized) with Metal acceleration — expect roughly MLX-comparable times on Apple Silicon. On Intel Macs, build from source — the built-in engine runs CPU-only there (several times slower).
 - **Maximum Accuracy** and **Noisy Audio** presets are roughly 2× the listed times (wider beam search); the **Qwen3-ASR** backend is roughly 2–3× (larger model, better accuracy).
 - First run adds one-time costs: model download (~574 MB for the built-in default, ~1.5 GB for MLX) and audio extraction (~30–60 s, cached for re-runs).
 
@@ -68,7 +68,7 @@ Grab `WhisperDesk.dmg` (notarized, from a release or shared directly), drag the 
 
 To translate, add an OpenAI, Anthropic, or Google API key in Settings (⌘,).
 
-Requires macOS 14+. Apple Silicon recommended; Intel Macs run the built-in engine on CPU (slow).
+Requires macOS 14+ and Apple Silicon (the DMG is arm64-only). On Intel Macs, build from source — the built-in engine runs CPU-only there (slow).
 
 ### Optional engines
 

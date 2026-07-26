@@ -50,6 +50,11 @@ build_bundle() {
   # the same merge) and ship the self-contained shader in Resources;
   # WhisperCppEngine points ggml at it via GGML_METAL_PATH_RESOURCES.
   local ggml_src="$ROOT_DIR/.build/checkouts/whisper.cpp/ggml/src"
+  if [[ ! -f "$ggml_src/ggml-common.h" || ! -f "$ggml_src/ggml-metal.metal" ]]; then
+    echo "error: whisper.cpp shader sources not found under $ggml_src;" >&2
+    echo "the checkout layout changed — update the shader-merge step." >&2
+    exit 1
+  fi
   awk '/#include "ggml-common.h"/ {
          while ((getline line < common) > 0) print line
          close(common); next

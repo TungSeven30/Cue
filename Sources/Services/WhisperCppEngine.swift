@@ -47,11 +47,12 @@ actor WhisperCppEngine {
     /// it. Unset (tests, bare binaries), ggml tries the SwiftPM build-directory
     /// bundle, whose un-inlined shader fails to compile, and runs on CPU.
     private static let metalShaderPathConfigured: Void = {
+        guard getenv("GGML_METAL_PATH_RESOURCES") == nil else { return }  // a user override wins
         guard let resources = Bundle.main.resourceURL,
               FileManager.default.fileExists(
                   atPath: resources.appendingPathComponent("ggml-metal.metal").path)
         else { return }
-        setenv("GGML_METAL_PATH_RESOURCES", resources.path, 1)
+        setenv("GGML_METAL_PATH_RESOURCES", resources.path, 0)
     }()
 
     /// whisper.cpp reports segment timestamps in centiseconds.

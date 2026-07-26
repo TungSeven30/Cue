@@ -21,4 +21,14 @@ enum ProcessEnvironment {
             .joined(separator: ":")
         return environment
     }
+
+    /// Whether ffmpeg is reachable on the PATH spawned helpers see. Computed
+    /// once per launch: installing ffmpeg mid-session is not worth re-probing
+    /// the filesystem on every transcription.
+    static let hasFFmpeg: Bool = {
+        let path = withToolPaths()["PATH"] ?? ""
+        return path.split(separator: ":").contains { directory in
+            FileManager.default.isExecutableFile(atPath: "\(directory)/ffmpeg")
+        }
+    }()
 }

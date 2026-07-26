@@ -33,6 +33,7 @@ struct SettingsView: View {
                     )
                     TextField("Custom Whisper model", text: $settings.whisperModel)
                     Toggle("Clean audio before transcription", isOn: $settings.preprocessAudio)
+                        .help("Cleans audio with an ffmpeg filter before transcription; skipped when ffmpeg is not installed")
                     Toggle("Voice activity detection", isOn: $settings.vadFilter)
                     Toggle("Remove empty segments", isOn: $settings.removeEmptySegments)
                     Toggle("Remove repeated text", isOn: $settings.removeRepeatedText)

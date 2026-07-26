@@ -1,10 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// First-run walkthrough for installing the command-line dependencies the
-/// app drives (ffmpeg, Python 3, and a whisper backend). Shown automatically
-/// after the launch diagnostics when a required dependency is missing, and
-/// reachable any time from the diagnostics popover.
+/// Walkthrough for installing the optional command-line tools the app can
+/// drive (ffmpeg, Python 3, and the Python whisper engines). Transcription
+/// works out of the box with the built-in engine; this sheet auto-opens
+/// only when the user's selected Python backend is broken, and is reachable
+/// any time from the diagnostics popover.
 struct SetupGuideView: View {
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -23,7 +24,7 @@ struct SetupGuideView: View {
                 Spacer()
             }
 
-            Text("WhisperDesk transcribes with free command-line tools that are installed once. Open Terminal (Applications → Utilities), paste each command below, press Return, and wait for it to finish. Then come back and hit Check Again.")
+            Text("WhisperDesk works out of the box. The items below are optional engines and features. To add one, open Terminal (Applications → Utilities), paste its command, press Return, and wait for it to finish. Then come back and hit Check Again.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

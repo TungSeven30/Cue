@@ -56,6 +56,17 @@ final class AppModel: ObservableObject {
         NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
             .sink { [weak self] _ in self?.flushPendingWork() }
             .store(in: &cancellables)
+        // Diagnostics classify probes as required/optional based on the
+        // selected backend, so a backend switch must re-run them or the
+        // pill keeps a stale verdict. dropFirst skips the value replayed
+        // on subscription (the runDiagnostics() below covers launch); the
+        // sink fires during willSet, but runDiagnostics reads the setting
+        // inside a Task, which runs after the assignment lands.
+        settings.$whisperBackend
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] _ in self?.runDiagnostics() }
+            .store(in: &cancellables)
         runDiagnostics()
     }
 
@@ -193,13 +204,11 @@ final class AppModel: ObservableObject {
         guard !diagnostics.isEmpty else {
             return "Not checked"
         }
+        // Only hard failures count against the summary: missing optional
+        // tools are warnings in the popover list, not toolbar alarms.
         let failures = diagnostics.filter { $0.state == .failed }.count
-        let warnings = diagnostics.filter { $0.state == .warning }.count
         if failures > 0 {
             return "\(failures) missing"
-        }
-        if warnings > 0 {
-            return "\(warnings) warning"
         }
         return "Ready"
     }
@@ -286,11 +295,15 @@ final class AppModel: ObservableObject {
         Task {
             diagnostics = await diagnosticsService.run(
                 translationAPIKey: settings.currentTranslationAPIKey,
-                providerLabel: settings.currentTranslationProvider.label
+                providerLabel: settings.currentTranslationProvider.label,
+                selectedBackend: settings.whisperBackend
             )
             isRunningDiagnostics = false
             if !didOfferSetupGuide {
                 didOfferSetupGuide = true
+                // Only a required diagnostic reports .failed (the selected
+                // Python backend's missing module); missing optional tools
+                // are warnings, so a fresh install never auto-opens this.
                 if diagnostics.contains(where: { $0.state == .failed }) {
                     isShowingSetupGuide = true
                 }

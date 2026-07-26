@@ -51,8 +51,11 @@ struct TranscriptionService {
         let wantsPreprocess = snapshot.preprocessAudio && ProcessEnvironment.hasFFmpeg
         let cachedWav = try AudioCache.cachedAudioURL(for: videoURL, preprocess: wantsPreprocess)
         var audioArgument: [String] = []
-        if FileManager.default.fileExists(atPath: cachedWav.path) {
-            // Safe: extraction is atomic (temp file + move), so existence == validity.
+        let cachedWavSize = (try? FileManager.default.attributesOfItem(atPath: cachedWav.path)[.size] as? UInt64) ?? 0
+        if cachedWavSize > 0 {
+            // Safe: extraction is atomic (temp file + move), so existence == validity;
+            // the size > 0 check mirrors the Python helper's cache-hit rule, since
+            // the cache is shared with entries it writes.
             audioArgument = ["--audio-wav", cachedWav.path]
         } else if !wantsPreprocess {
             progress(JobProgress(stage: .extractingAudio, detail: "Extracting audio.", fraction: 0.08))
@@ -65,16 +68,20 @@ struct TranscriptionService {
             } catch {
                 // Exotic container AVFoundation can't read: fall back to the
                 // Python/ffmpeg path by passing nothing. Never worse than today.
+                let fallback = ProcessEnvironment.hasFFmpeg
+                    ? "falling back to ffmpeg."
+                    : "this file may need ffmpeg installed."
                 progress(JobProgress(
                     stage: .extractingAudio,
-                    detail: "Native extraction failed (\(error.localizedDescription)); falling back to ffmpeg.",
+                    detail: "Native extraction failed (\(error.localizedDescription)); \(fallback)",
                     fraction: 0.08
                 ))
             }
         }
         // wantsPreprocess && no cache → pass nothing; the Python helper runs
         // its ffmpeg filter chain exactly as today.
-        let audioArguments = audioArgument
+        // Freezes the value so the @Sendable closure below captures a `let`.
+        let finalAudioArguments = audioArgument
 
         let processBox = ProcessBox()
 
@@ -105,7 +112,7 @@ struct TranscriptionService {
                 "\(snapshot.temperature)",
                 "--no-speech-threshold",
                 "\(snapshot.noSpeechThreshold)",
-            ] + audioArguments
+            ] + finalAudioArguments
             processBox.process = process
 
             let stdout = PipeCollector()

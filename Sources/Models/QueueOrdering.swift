@@ -37,4 +37,12 @@ enum QueueOrdering {
     static func renormalized(count: Int) -> [Double] {
         (0..<count).map(Double.init)
     }
+
+    /// Where a block moved with Array.move(fromOffsets:toOffset:) lands:
+    /// the destination offset is expressed in pre-removal coordinates, so
+    /// the landing position shifts down by the number of moved items that
+    /// were originally above it.
+    static func movedBlockStart(source: IndexSet, destination: Int) -> Int {
+        destination - source.count(where: { $0 < destination })
+    }
 }

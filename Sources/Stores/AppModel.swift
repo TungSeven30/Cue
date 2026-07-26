@@ -44,7 +44,7 @@ final class AppModel: ObservableObject {
 
     init() {
         isPlayerVisible = UserDefaults.standard.object(forKey: "isPlayerVisible") as? Bool ?? true
-        jobs = jobStore.loadJobs().sorted { $0.updatedAt > $1.updatedAt }
+        jobs = jobStore.loadJobs().sorted { $0.orderIndex < $1.orderIndex }
         selectedJobID = jobs.first?.id
         // `settings` is a nested ObservableObject; changes to its fields do not
         // fire AppModel's objectWillChange on their own, so forward them.
@@ -252,9 +252,12 @@ final class AppModel: ObservableObject {
 
     /// Adds videos as separate jobs. Used by the file picker and drag-and-drop.
     func addVideos(urls: [URL]) {
+        var minIndex = jobs.map(\.orderIndex).min() ?? 0
         let newJobs = urls.map { url in
             var job = TranscriptionJob(sourceURL: url, settings: settings)
             job.log = "Selected \(url.path(percentEncoded: false)).\n"
+            minIndex = QueueOrdering.indexForManualAdd(existing: [minIndex])
+            job.orderIndex = minIndex
             return job
         }
         guard !newJobs.isEmpty else { return }
@@ -334,7 +337,7 @@ final class AppModel: ObservableObject {
     /// a time.
     private func processQueue() {
         guard activeJobID == nil, !queuePaused else { return }
-        guard let next = jobs.first(where: { $0.status == .queued }) else {
+        guard let next = jobs.filter({ $0.status == .queued }).min(by: { $0.orderIndex < $1.orderIndex }) else {
             if didProcessQueuedJob {
                 didProcessQueuedJob = false
                 notify(title: "WhisperDesk", body: "All queued jobs finished.")
@@ -352,6 +355,71 @@ final class AppModel: ObservableObject {
         if activeJobID == nil, let job = jobs.first(where: { $0.id == next.id }), job.status == .queued {
             markFailed(next.id, message: "Could not start this job. Check the file and settings.")
             processQueue()
+        }
+    }
+
+    // MARK: - Ordering
+
+    /// Moves jobs for SwiftUI's onMove. Only the moved block is re-persisted,
+    /// unless index precision is exhausted, which forces a full pass.
+    func moveJobs(from source: IndexSet, to destination: Int) {
+        guard !source.isEmpty else { return }
+        jobs.move(fromOffsets: source, toOffset: destination)
+        let start = QueueOrdering.movedBlockStart(source: source, destination: destination)
+        reindex(block: start..<(start + source.count))
+    }
+
+    func moveJobToTop(_ id: UUID) {
+        guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
+        moveJobs(from: IndexSet(integer: index), to: 0)
+    }
+
+    func moveJobToBottom(_ id: UUID) {
+        guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
+        moveJobs(from: IndexSet(integer: index), to: jobs.count)
+    }
+
+    func removeFromQueue(_ id: UUID) {
+        guard let job = jobs.first(where: { $0.id == id }), job.status == .queued else { return }
+        updateJob(id) { job in
+            job.status = .idle
+            job.progress = .idle
+        }
+    }
+
+    /// Restamps exactly the moved block. Its outside neighbours kept their
+    /// relative order, so their indices are trustworthy brackets; stale
+    /// indices inside the block are overwritten without ever being read.
+    private func reindex(block: Range<Int>) {
+        guard !block.isEmpty, block.upperBound <= jobs.count else { return }
+        let before = block.lowerBound > 0 ? jobs[block.lowerBound - 1].orderIndex : nil
+        let after = block.upperBound < jobs.count ? jobs[block.upperBound].orderIndex : nil
+        if QueueOrdering.needsRenormalization(before: before, after: after) {
+            renormalizeAllIndices()
+            return
+        }
+        var previous = before
+        for i in block {
+            let stamped = QueueOrdering.destinationIndex(before: previous, after: after)
+            // Multi-item blocks halve the gap per item; bail to a full pass
+            // the moment a midpoint stops landing strictly inside.
+            let fitsBefore = previous.map { $0 < stamped } ?? true
+            let fitsAfter = after.map { stamped < $0 } ?? true
+            if !fitsBefore || !fitsAfter {
+                renormalizeAllIndices()
+                return
+            }
+            jobs[i].orderIndex = stamped
+            persistJob(jobs[i].id)
+            previous = stamped
+        }
+    }
+
+    private func renormalizeAllIndices() {
+        let indices = QueueOrdering.renormalized(count: jobs.count)
+        for i in jobs.indices {
+            jobs[i].orderIndex = indices[i]
+            persistJob(jobs[i].id)
         }
     }
 

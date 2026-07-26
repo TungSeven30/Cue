@@ -40,4 +40,22 @@ struct QueueOrderingTests {
         #expect(QueueOrdering.renormalized(count: 4) == [0, 1, 2, 3])
         #expect(QueueOrdering.renormalized(count: 0) == [])
     }
+
+    @Test func movedBlockStartMatchesArrayMove() {
+        // Moving [1] to offset 4 in a 5-element array lands the item at 3.
+        var a = [0, 1, 2, 3, 4]
+        a.move(fromOffsets: IndexSet(integer: 1), toOffset: 4)
+        #expect(a[3] == 1)
+        #expect(QueueOrdering.movedBlockStart(source: IndexSet(integer: 1), destination: 4) == 3)
+        // Moving down-to-up keeps the raw destination.
+        var b = [0, 1, 2, 3, 4]
+        b.move(fromOffsets: IndexSet(integer: 3), toOffset: 1)
+        #expect(b[1] == 3)
+        #expect(QueueOrdering.movedBlockStart(source: IndexSet(integer: 3), destination: 1) == 1)
+        // Multi-item block from both sides of the destination.
+        var c = [0, 1, 2, 3, 4]
+        c.move(fromOffsets: IndexSet([0, 4]), toOffset: 2)
+        #expect(Array(c[1...2]) == [0, 4])
+        #expect(QueueOrdering.movedBlockStart(source: IndexSet([0, 4]), destination: 2) == 1)
+    }
 }

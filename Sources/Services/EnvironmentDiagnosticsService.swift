@@ -50,7 +50,9 @@ struct EnvironmentDiagnosticsService {
             id: "mlx-whisper",
             title: "MLX Whisper",
             module: "mlx_whisper",
-            recovery: "Optional engine: pip install mlx-whisper for fast Apple Silicon transcription.",
+            recovery: optional("mlx-whisper")
+                ? "Optional engine: pip install mlx-whisper for fast Apple Silicon transcription."
+                : "Required by your selected engine: pip install mlx-whisper.",
             repairCommand: "python3 -m pip install mlx-whisper",
             optional: optional("mlx-whisper")
         )
@@ -58,7 +60,9 @@ struct EnvironmentDiagnosticsService {
             id: "faster-whisper",
             title: "Faster Whisper",
             module: "faster_whisper",
-            recovery: "Optional fallback: pip install faster-whisper.",
+            recovery: optional("faster-whisper")
+                ? "Optional fallback: pip install faster-whisper."
+                : "Required by your selected engine: pip install faster-whisper.",
             repairCommand: "python3 -m pip install faster-whisper",
             optional: optional("faster-whisper")
         )
@@ -66,7 +70,9 @@ struct EnvironmentDiagnosticsService {
             id: "qwen3-asr",
             title: "Qwen3 ASR",
             module: "mlx_qwen3_asr",
-            recovery: "Optional: best transcription accuracy. pip install 'mlx-qwen3-asr[aligner]'.",
+            recovery: optional("qwen3-asr")
+                ? "Optional: best transcription accuracy. pip install 'mlx-qwen3-asr[aligner]'."
+                : "Required by your selected engine: pip install 'mlx-qwen3-asr[aligner]'.",
             repairCommand: "python3 -m pip install 'mlx-qwen3-asr[aligner]'",
             optional: optional("qwen3-asr")
         )

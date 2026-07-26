@@ -36,5 +36,9 @@ struct EnvironmentDiagnosticsTests {
         // With the built-in backend selected, no probe result may block:
         // every other diagnostic is optional (warning at worst).
         #expect(!diagnostics.contains { $0.state == .failed })
+        // The engine IDs run() emits are the same strings isRequired keys
+        // on — pin them so the seam cannot drift silently.
+        let ids = Set(diagnostics.map(\.id))
+        #expect(ids.isSuperset(of: ["mlx-whisper", "faster-whisper", "qwen3-asr"]))
     }
 }

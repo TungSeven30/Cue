@@ -351,29 +351,21 @@ private struct HeaderCard: View {
         }
     }
 
-    private var diagnosticsIcon: String {
-        guard let worst = model.diagnostics.map(\.state).max(by: severityOrder) else {
-            return "stethoscope"
+    /// The pill only escalates for hard failures; missing optional tools
+    /// stay discoverable as per-item warnings inside the popover.
+    private var diagnosticsPillState: DiagnosticState? {
+        guard !model.diagnostics.isEmpty else {
+            return nil
         }
-        return worst.systemImage
+        return model.diagnostics.contains { $0.state == .failed } ? .failed : .passed
+    }
+
+    private var diagnosticsIcon: String {
+        diagnosticsPillState?.systemImage ?? "stethoscope"
     }
 
     private var diagnosticsColor: Color {
-        guard let worst = model.diagnostics.map(\.state).max(by: severityOrder) else {
-            return .secondary
-        }
-        return worst.tint
-    }
-
-    private func severityOrder(_ lhs: DiagnosticState, _ rhs: DiagnosticState) -> Bool {
-        func rank(_ state: DiagnosticState) -> Int {
-            switch state {
-            case .passed: return 0
-            case .warning: return 1
-            case .failed: return 2
-            }
-        }
-        return rank(lhs) < rank(rhs)
+        diagnosticsPillState?.tint ?? .secondary
     }
 
     @ViewBuilder

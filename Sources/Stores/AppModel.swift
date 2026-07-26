@@ -378,31 +378,21 @@ final class AppModel: ObservableObject {
         }
 
         let currentFingerprint = TranscriptionJob.fingerprint(for: videoURL)
+        let resolved = JobSettingsSnapshot(settings: settings).applying(jobs[index].overrides)
+        // Per-job autoTranslate wins over the global toggle (spec §0.3).
+        let autoTranslate = jobs[index].overrides.autoTranslate ?? settings.autoTranslateAfterTranscription
+
         if !force,
            !jobs[index].transcriptSegments.isEmpty,
            jobs[index].sourceFingerprint == currentFingerprint,
-           jobs[index].settings.transcriptionProcessingVersion == JobSettingsSnapshot.currentTranscriptionProcessingVersion,
-           jobs[index].settings.sourceLanguage == settings.sourceLanguage,
-           jobs[index].settings.whisperModel == settings.whisperModel,
-           jobs[index].settings.whisperBackend == settings.whisperBackend,
-           jobs[index].settings.preprocessAudio == settings.preprocessAudio,
-           jobs[index].settings.vadFilter == settings.vadFilter,
-           jobs[index].settings.removeEmptySegments == settings.removeEmptySegments,
-           jobs[index].settings.removeRepeatedText == settings.removeRepeatedText,
-           jobs[index].settings.mergeShortSegments == settings.mergeShortSegments,
-           jobs[index].settings.minSegmentDuration == settings.minSegmentDuration,
-           jobs[index].settings.maxMergeGap == settings.maxMergeGap,
-           jobs[index].settings.beamSize == settings.beamSize,
-           jobs[index].settings.bestOf == settings.bestOf,
-           jobs[index].settings.temperature == settings.temperature,
-           jobs[index].settings.noSpeechThreshold == settings.noSpeechThreshold {
+           jobs[index].settings.transcriptionIdentity == resolved.transcriptionIdentity {
             let hasTranslation = !jobs[index].translatedSegments.isEmpty
             jobs[index].status = hasTranslation ? .translationComplete : .transcriptionComplete
             jobs[index].progress = JobProgress(stage: .complete, detail: "Using existing transcript for unchanged file and settings.", fraction: 1)
             appendLog("Skipped transcription because this file and transcription settings already have a transcript.", to: jobID)
             // Same guard as the real completion path: auto-translating with
             // no API key would immediately mark this finished job as Failed.
-            if settings.autoTranslateAfterTranscription && !hasTranslation && !settings.currentTranslationAPIKey.isEmpty {
+            if autoTranslate && !hasTranslation && !settings.currentTranslationAPIKey.isEmpty {
                 startTranslation(jobID: jobID)
             } else {
                 processQueue()
@@ -415,19 +405,19 @@ final class AppModel: ObservableObject {
         jobs[index].translatedSegments = []
         jobs[index].partialTranslatedSegments = []
         jobs[index].sourceFingerprint = currentFingerprint
-        jobs[index].settings = JobSettingsSnapshot(settings: settings)
+        jobs[index].settings = resolved
         if let validationMessage {
             jobs[index].log += "Adjusted transcription settings: \(validationMessage)\n"
         }
-        appendLog("Starting transcription with \(settings.whisperBackend.label) and model \(settings.whisperModel).", to: jobID)
+        appendLog("Starting transcription with \(resolved.whisperBackend.label) and model \(resolved.whisperModel).", to: jobID)
 
         activeJobID = jobID
         activeTask = Task {
             do {
-                let result = try await transcriptionService.transcribe(videoURL: videoURL, settings: JobSettingsSnapshot(settings: settings)) { [weak self] progress in
+                let result = try await transcriptionService.transcribe(videoURL: videoURL, settings: resolved) { [weak self] progress in
                     self?.updateProgress(progress, for: jobID)
                 }
-                let willTranslate = settings.autoTranslateAfterTranscription && !settings.currentTranslationAPIKey.isEmpty
+                let willTranslate = autoTranslate && !settings.currentTranslationAPIKey.isEmpty
                 // When a translation follows, the summary is generated from
                 // the translated text instead, at the end of that step.
                 var summary: String?
@@ -486,11 +476,12 @@ final class AppModel: ObservableObject {
         let existingTranslations = jobs[index].partialTranslatedSegments.isEmpty
             ? jobs[index].translatedSegments
             : jobs[index].partialTranslatedSegments
+        let resolved = JobSettingsSnapshot(settings: settings).applying(jobs[index].overrides)
         jobs[index].status = .translating
         jobs[index].progress = JobProgress(stage: .translating, detail: "Starting translation.", fraction: 0)
-        jobs[index].settings = JobSettingsSnapshot(settings: settings)
+        jobs[index].settings = resolved
         appendLog(
-            "Starting translation from \(settings.translationSourceLanguage) to \(settings.translationTargetLanguage) with \(settings.openAIModel) using \(settings.translationChunkMode.label.lowercased()) chunks and \(settings.translationParallelism) worker(s).",
+            "Starting translation from \(resolved.translationSourceLanguage) to \(resolved.translationTargetLanguage) with \(resolved.openAIModel) using \(resolved.translationChunkMode.label.lowercased()) chunks and \(resolved.translationParallelism) worker(s).",
             to: jobID
         )
 
@@ -499,8 +490,8 @@ final class AppModel: ObservableObject {
             do {
                 let result = try await translationService.translate(
                     segments: segments,
-                    sourceLanguage: settings.sourceLanguage,
-                    settings: JobSettingsSnapshot(settings: settings),
+                    sourceLanguage: resolved.sourceLanguage,
+                    settings: resolved,
                     credentials: makeTranslationCredentials(),
                     existingTranslations: existingTranslations
                 ) { [weak self] progress in
@@ -508,7 +499,7 @@ final class AppModel: ObservableObject {
                 } onPartial: { [weak self] partial in
                     self?.updatePartialTranslation(partial, for: jobID)
                 }
-                let target = settings.translationTargetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+                let target = resolved.translationTargetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
                 let summary = await makeIntroSummary(
                     from: result,
                     language: target.isEmpty ? "English" : target,
@@ -860,6 +851,7 @@ final class AppModel: ObservableObject {
             ? (target.isEmpty ? "English" : target)
             : "the same language as the subtitles"
         let id = job.id
+        let resolvedSettings = JobSettingsSnapshot(settings: settings).applying(job.overrides)
 
         isGeneratingSummary = true
         Task {
@@ -867,7 +859,7 @@ final class AppModel: ObservableObject {
                 let summary = try await translationService.summarize(
                     segments: segments,
                     language: language,
-                    settings: JobSettingsSnapshot(settings: settings),
+                    settings: resolvedSettings,
                     credentials: makeTranslationCredentials()
                 )
                 updateJob(id) { job in
@@ -901,11 +893,12 @@ final class AppModel: ObservableObject {
         updateJob(id, debouncePersist: true) { job in
             job.progress = JobProgress(stage: job.progress.stage, detail: "Writing intro summary.", fraction: job.progress.fraction)
         }
+        let overrides = jobs.first(where: { $0.id == id })?.overrides ?? JobSettingsOverrides()
         do {
             let summary = try await translationService.summarize(
                 segments: segments,
                 language: language,
-                settings: JobSettingsSnapshot(settings: settings),
+                settings: JobSettingsSnapshot(settings: settings).applying(overrides),
                 credentials: makeTranslationCredentials()
             )
             appendLog("Generated intro summary: \(summary)", to: id)

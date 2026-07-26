@@ -346,7 +346,7 @@ struct TranscriptionJobMigrationTests {
         let job = try decodeJob(legacyJobJSON)
         #expect(job.overrides.isEmpty)
         #expect(job.origin == .manual)
-        // Spec §0.5: -createdAt reproduces today's newest-first ordering.
+        // Spec §0.5: -createdAt approximates today's newest-first ordering.
         #expect(job.orderIndex == -job.createdAt.timeIntervalSince1970)
     }
 

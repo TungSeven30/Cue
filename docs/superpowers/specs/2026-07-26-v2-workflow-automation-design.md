@@ -171,8 +171,9 @@ existing migration style:
 
 - `overrides` → `JobSettingsOverrides()`
 - `origin` → `.manual`
-- `orderIndex` → `-createdAt.timeIntervalSince1970`, which reproduces today's
-  newest-first ordering exactly for existing jobs.
+- `orderIndex` → `-createdAt.timeIntervalSince1970`, which approximates today's
+  newest-first ordering for existing jobs (the old sort keyed on `updatedAt`;
+  creation order is the stable choice, since `updatedAt` churns on every edit).
 
 ### 0.6 Skip-if-unchanged
 

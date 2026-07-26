@@ -13,6 +13,7 @@ struct ExportOptionsView: View {
     @AppStorage("exportIncludeBilingual") private var includeBilingual = false
     @AppStorage("exportIncludeLog") private var includeLog = false
     @AppStorage("exportFormatSRT") private var formatSRT = true
+    @AppStorage("exportFormatVTT") private var formatVTT = false
     @AppStorage("exportFormatTXT") private var formatTXT = false
     @AppStorage("exportFormatMD") private var formatMD = false
     @AppStorage("exportFormatJSON") private var formatJSON = false
@@ -44,6 +45,7 @@ struct ExportOptionsView: View {
 
                 Section("Formats") {
                     Toggle("SRT (subtitles)", isOn: $formatSRT)
+                    Toggle("WebVTT (web subtitles)", isOn: $formatVTT)
                     Toggle("Plain text", isOn: $formatTXT)
                     Toggle("Markdown", isOn: $formatMD)
                     Toggle("JSON", isOn: $formatJSON)
@@ -86,6 +88,7 @@ struct ExportOptionsView: View {
     private var selectedFormats: [SubtitleExportFormat] {
         var formats: [SubtitleExportFormat] = []
         if formatSRT { formats.append(.srt) }
+        if formatVTT { formats.append(.vtt) }
         if formatTXT { formats.append(.text) }
         if formatMD { formats.append(.markdown) }
         if formatJSON { formats.append(.json) }
@@ -113,7 +116,9 @@ struct ExportOptionsView: View {
     }
 
     private var nameHint: String {
-        if documentCount * selectedFormats.count == 1 {
+        // Matches performExport: suffixes are used for more than one file OR
+        // whenever the log is included.
+        if documentCount * selectedFormats.count == 1 && !includeLog {
             let ext = selectedFormats.first?.fileExtension ?? "srt"
             return "Will be saved as \(displayBase).\(ext)"
         }

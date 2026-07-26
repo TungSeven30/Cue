@@ -15,8 +15,6 @@ final class PlayerController: ObservableObject {
     private var timeObserver: Any?
 
     init() {
-        // The controller lives for the app's lifetime (owned by AppModel),
-        // so the observer is never removed.
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
             queue: .main
@@ -25,6 +23,15 @@ final class PlayerController: ObservableObject {
             Task { @MainActor [weak self] in
                 self?.refresh(at: seconds)
             }
+        }
+    }
+
+    deinit {
+        // The controller currently lives for the app's lifetime (owned by
+        // AppModel), but AVFoundation raises if a player deallocates with a
+        // live observer, so remove it defensively.
+        if let timeObserver {
+            player.removeTimeObserver(timeObserver)
         }
     }
 
@@ -39,7 +46,11 @@ final class PlayerController: ObservableObject {
     /// The segments the overlay and highlight follow — the original
     /// transcript or the translation, depending on the visible tab.
     func updateSegments(_ newSegments: [TranscriptionSegment]) {
-        segments = newSegments
+        // The binary search below requires ordering by start time; backends
+        // emit segments in order today, but nothing in the Swift layer
+        // enforces it.
+        let isSorted = zip(newSegments, newSegments.dropFirst()).allSatisfy { $0.start <= $1.start }
+        segments = isSorted ? newSegments : newSegments.sorted { $0.start < $1.start }
         refresh(at: player.currentTime().seconds)
     }
 

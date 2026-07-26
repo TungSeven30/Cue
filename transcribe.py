@@ -49,10 +49,14 @@ def extract_audio(input_path: Path, output_path: Path) -> None:
 
 
 def format_timestamp(seconds: float) -> str:
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int(round((seconds - int(seconds)) * 1000))
+    # Round to whole milliseconds first so the carry rolls into seconds;
+    # rounding the fraction alone can produce an invalid ",1000" field.
+    total_millis = max(0, round(seconds * 1000))
+    millis = total_millis % 1000
+    total_seconds = total_millis // 1000
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 

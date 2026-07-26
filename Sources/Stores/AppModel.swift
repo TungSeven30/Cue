@@ -46,7 +46,21 @@ final class AppModel: ObservableObject {
         settings.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
+        // Debounced edits and queued background writes must reach the disk
+        // before the process exits, or the last ~400ms of changes are lost.
+        NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
+            .sink { [weak self] _ in self?.flushPendingWork() }
+            .store(in: &cancellables)
         runDiagnostics()
+    }
+
+    /// Writes every pending job mutation to disk synchronously. Called on
+    /// app termination.
+    func flushPendingWork() {
+        persistTask?.cancel()
+        persistTask = nil
+        flushDirtyJobs()
+        jobStore.flush()
     }
 
     var currentJob: TranscriptionJob? {
@@ -188,7 +202,13 @@ final class AppModel: ObservableObject {
 
     func selectVideo() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.movie, .mpeg4Movie, .audio]
+        // Drag-and-drop accepts any file, so the picker should too for
+        // containers macOS has no built-in type for (notably MKV).
+        var types: [UTType] = [.movie, .mpeg4Movie, .audio, .audiovisualContent]
+        if let mkv = UTType(filenameExtension: "mkv") {
+            types.append(mkv)
+        }
+        panel.allowedContentTypes = types
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
         panel.prompt = "Add"
@@ -359,7 +379,9 @@ final class AppModel: ObservableObject {
             jobs[index].status = hasTranslation ? .translationComplete : .transcriptionComplete
             jobs[index].progress = JobProgress(stage: .complete, detail: "Using existing transcript for unchanged file and settings.", fraction: 1)
             appendLog("Skipped transcription because this file and transcription settings already have a transcript.", to: jobID)
-            if settings.autoTranslateAfterTranscription && !hasTranslation {
+            // Same guard as the real completion path: auto-translating with
+            // no API key would immediately mark this finished job as Failed.
+            if settings.autoTranslateAfterTranscription && !hasTranslation && !settings.currentTranslationAPIKey.isEmpty {
                 startTranslation(jobID: jobID)
             } else {
                 processQueue()
@@ -397,8 +419,15 @@ final class AppModel: ObservableObject {
             } catch is CancellationError {
                 markCanceled(jobID)
             } catch {
-                markFailed(jobID, message: "Transcription failed: \(error.localizedDescription)")
-                notifyJobFinished(jobID)
+                // A killed helper can surface its exit error in a race with
+                // the cancellation check; don't overwrite "Canceled" with
+                // "Failed" in that case.
+                if Task.isCancelled {
+                    markCanceled(jobID)
+                } else {
+                    markFailed(jobID, message: "Transcription failed: \(error.localizedDescription)")
+                    notifyJobFinished(jobID)
+                }
             }
             activeTask = nil
             activeJobID = nil
@@ -450,7 +479,11 @@ final class AppModel: ObservableObject {
             } catch is CancellationError {
                 markCanceled(jobID)
             } catch {
-                markFailed(jobID, message: "Translation failed: \(error.localizedDescription)")
+                if Task.isCancelled {
+                    markCanceled(jobID)
+                } else {
+                    markFailed(jobID, message: "Translation failed: \(error.localizedDescription)")
+                }
             }
             notifyJobFinished(jobID)
             activeTask = nil
@@ -466,7 +499,9 @@ final class AppModel: ObservableObject {
             queuePaused = true
         }
         activeTask?.cancel()
-        if let id = activeJobID ?? selectedJobID {
+        // Only the actively running job may be stamped canceled; falling back
+        // to the selection could cancel a completed job.
+        if let id = activeJobID {
             updateJob(id) { job in
                 job.status = .canceled
                 job.progress = JobProgress(stage: .canceled, detail: "Canceling current operation.", fraction: nil)
@@ -518,6 +553,7 @@ final class AppModel: ObservableObject {
             documents.append(("bilingual.\(target)", bilingualSegments()))
         }
 
+        let baseName = Self.sanitizedBaseName(options.baseName)
         let fileCount = documents.count * options.formats.count + (options.includeLog ? 1 : 0)
         guard fileCount > 0 else { return }
         let useSuffixes = documents.count * options.formats.count > 1 || options.includeLog
@@ -533,30 +569,70 @@ final class AppModel: ObservableObject {
 
         guard panel.runModal() == .OK, let folder = panel.url else { return }
         settings.lastExportDirectory = folder.path
-        do {
-            for document in documents {
-                for format in options.formats {
-                    let name = useSuffixes
-                        ? "\(options.baseName).\(document.suffix).\(format.fileExtension)"
-                        : "\(options.baseName).\(format.fileExtension)"
-                    try SubtitleWriter.write(
-                        segments: document.segments,
-                        format: format,
-                        to: folder.appendingPathComponent(name)
-                    )
-                }
+
+        var writes: [(url: URL, write: () throws -> Void)] = []
+        for document in documents {
+            for format in options.formats {
+                let name = useSuffixes
+                    ? "\(baseName).\(document.suffix).\(format.fileExtension)"
+                    : "\(baseName).\(format.fileExtension)"
+                let url = folder.appendingPathComponent(name)
+                writes.append((url, { try SubtitleWriter.write(segments: document.segments, format: format, to: url) }))
             }
-            if options.includeLog {
-                try log.write(
-                    to: folder.appendingPathComponent("\(options.baseName).log.txt"),
-                    atomically: true,
-                    encoding: .utf8
-                )
+        }
+        if options.includeLog {
+            let url = folder.appendingPathComponent("\(baseName).log.txt")
+            let logText = log
+            writes.append((url, { try logText.write(to: url, atomically: true, encoding: .utf8) }))
+        }
+
+        // The folder picker skips NSSavePanel's built-in replace warning, so
+        // confirm before silently overwriting anything that already exists.
+        let existing = writes.map(\.url).filter { FileManager.default.fileExists(atPath: $0.path) }
+        if !existing.isEmpty, !confirmReplacingExistingFiles(existing.map(\.lastPathComponent)) {
+            return
+        }
+
+        do {
+            for entry in writes {
+                try entry.write()
             }
             appendLog("Exported \(fileCount) file(s) to \(folder.path(percentEncoded: false)).")
         } catch {
             appendLog("Export failed: \(error.localizedDescription)")
+            presentExportError("Export failed: \(error.localizedDescription)")
         }
+    }
+
+    /// Path separators in the base name would silently redirect (and usually
+    /// fail) the writes.
+    private static func sanitizedBaseName(_ name: String) -> String {
+        let cleaned = name
+            .components(separatedBy: CharacterSet(charactersIn: "/:"))
+            .joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? "subtitles" : cleaned
+    }
+
+    private func confirmReplacingExistingFiles(_ names: [String]) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = names.count == 1
+            ? "Replace \"\(names[0])\"?"
+            : "Replace \(names.count) existing files?"
+        alert.informativeText = "The chosen folder already contains \(names.joined(separator: ", ")). Exporting will replace the existing file(s)."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Replace")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Export problems must be visible without opening the Log tab.
+    private func presentExportError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Export Failed"
+        alert.informativeText = message
+        alert.alertStyle = .critical
+        alert.runModal()
     }
 
     private func bilingualSegments() -> [TranscriptionSegment] {
@@ -653,6 +729,7 @@ final class AppModel: ObservableObject {
                 appendLog("Exported log to \(destination.path(percentEncoded: false)).")
             } catch {
                 appendLog("Export log failed: \(error.localizedDescription)")
+                presentExportError("Could not save the log: \(error.localizedDescription)")
             }
         }
     }
@@ -823,6 +900,7 @@ final class AppModel: ObservableObject {
                 appendLog("Exported subtitles to \(exportURL.path(percentEncoded: false)).")
             } catch {
                 appendLog("Export failed: \(error.localizedDescription)")
+                presentExportError("Could not save the subtitles: \(error.localizedDescription)")
             }
         }
     }
@@ -831,6 +909,8 @@ final class AppModel: ObservableObject {
         switch format {
         case .srt:
             return UTType(filenameExtension: "srt", conformingTo: .plainText) ?? .plainText
+        case .vtt:
+            return UTType(filenameExtension: "vtt", conformingTo: .plainText) ?? .plainText
         case .text:
             return .plainText
         case .markdown:

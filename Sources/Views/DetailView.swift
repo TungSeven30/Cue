@@ -32,6 +32,7 @@ struct DetailView: View {
     @AppStorage("followPlayback") private var followPlayback = true
     @AppStorage("playerHeight") private var playerHeight = 280.0
     @State private var dragStartHeight: Double?
+    @State private var isHoveringResizeHandle = false
 
     var body: some View {
         Group {
@@ -135,9 +136,18 @@ struct DetailView: View {
             .padding(.vertical, 4)
             .contentShape(Rectangle())
             .onHover { inside in
+                isHoveringResizeHandle = inside
                 if inside {
                     NSCursor.resizeUpDown.push()
                 } else {
+                    NSCursor.pop()
+                }
+            }
+            .onDisappear {
+                // Hiding the player while hovered would otherwise leave the
+                // resize cursor stuck (the matching un-hover never fires).
+                if isHoveringResizeHandle {
+                    isHoveringResizeHandle = false
                     NSCursor.pop()
                 }
             }

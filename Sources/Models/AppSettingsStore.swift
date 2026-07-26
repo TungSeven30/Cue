@@ -430,7 +430,6 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(bestOf, forKey: "bestOf")
         defaults.set(temperature, forKey: "temperature")
         defaults.set(noSpeechThreshold, forKey: "noSpeechThreshold")
-        defaults.synchronize()
         // save() runs on every settings mutation; only touch the Keychain
         // when a key itself changed so typing elsewhere (e.g. the prompt
         // editor) does not trigger a Keychain write per keystroke.

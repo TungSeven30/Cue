@@ -35,15 +35,23 @@ enum KeychainStore {
         }
 
         let data = Data(value.utf8)
-        let status = SecItemUpdate(
-            baseQuery as CFDictionary,
-            [kSecValueData as String: data] as CFDictionary
-        )
+        // WhisperDesk only reads keys while in the foreground, so the item
+        // never needs to be readable before unlock. Setting the attribute on
+        // update too migrates items created by earlier builds.
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked,
+        ]
+        var status = SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
             var addQuery = baseQuery
             addQuery[kSecValueData as String] = data
-            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-            SecItemAdd(addQuery as CFDictionary, nil)
+            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
+            status = SecItemAdd(addQuery as CFDictionary, nil)
+        }
+        if status != errSecSuccess {
+            // A silently failed write means the key vanishes on next launch.
+            NSLog("WhisperDesk: Keychain write for %@ failed with status %d.", account, status)
         }
     }
 }

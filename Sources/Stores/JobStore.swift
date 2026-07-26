@@ -12,37 +12,54 @@ final class JobStore {
     private let fileManager: FileManager
     private let ioQueue = DispatchQueue(label: "WhisperDesk.JobStore", qos: .utility)
 
-    init(fileManager: FileManager = .default) {
+    init(fileManager: FileManager = .default, baseURL: URL? = nil) {
         self.fileManager = fileManager
-        let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        let resolvedBase = baseURL
+            ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
-        folderURL = baseURL.appendingPathComponent("WhisperDesk", isDirectory: true)
+        folderURL = resolvedBase.appendingPathComponent("WhisperDesk", isDirectory: true)
         jobsFolderURL = folderURL.appendingPathComponent("jobs", isDirectory: true)
         legacyFileURL = folderURL.appendingPathComponent("jobs.json")
-        try? fileManager.createDirectory(at: jobsFolderURL, withIntermediateDirectories: true)
+        do {
+            try fileManager.createDirectory(at: jobsFolderURL, withIntermediateDirectories: true)
+        } catch {
+            NSLog("WhisperDesk: could not create the jobs folder at %@ (%@); job history will not persist.", jobsFolderURL.path, "\(error)")
+        }
     }
 
     func loadJobs() -> [TranscriptionJob] {
-        var jobs = migrateLegacyStoreIfNeeded()
+        migrateLegacyStoreIfNeeded()
 
-        if jobs.isEmpty {
-            let files = (try? fileManager.contentsOfDirectory(at: jobsFolderURL, includingPropertiesForKeys: nil)) ?? []
-            for file in files where file.pathExtension == "json" && !file.lastPathComponent.contains("corrupt") {
-                guard let data = try? Data(contentsOf: file) else { continue }
-                do {
-                    jobs.append(try Self.makeDecoder().decode(TranscriptionJob.self, from: data))
-                } catch {
-                    // Preserve the unreadable job instead of overwriting it on
-                    // the next save, so the data can still be recovered by hand.
-                    let backupURL = file.deletingPathExtension().appendingPathExtension("corrupt.json")
-                    try? fileManager.removeItem(at: backupURL)
-                    try? fileManager.copyItem(at: file, to: backupURL)
-                    NSLog("WhisperDesk: job file %@ could not be decoded (%@); preserved at %@", file.lastPathComponent, "\(error)", backupURL.path)
-                }
+        var jobs: [TranscriptionJob] = []
+        let files = (try? fileManager.contentsOfDirectory(at: jobsFolderURL, includingPropertiesForKeys: nil)) ?? []
+        for file in files where file.pathExtension == "json" && !file.lastPathComponent.contains("corrupt") {
+            guard let data = try? Data(contentsOf: file) else { continue }
+            do {
+                jobs.append(try Self.makeDecoder().decode(TranscriptionJob.self, from: data))
+            } catch {
+                // Preserve the unreadable job instead of overwriting it on
+                // the next save, so the data can still be recovered by hand.
+                let backupURL = file.deletingPathExtension().appendingPathExtension("corrupt.json")
+                try? fileManager.removeItem(at: backupURL)
+                try? fileManager.copyItem(at: file, to: backupURL)
+                NSLog("WhisperDesk: job file %@ could not be decoded (%@); preserved at %@", file.lastPathComponent, "\(error)", backupURL.path)
             }
         }
 
-        return jobs.sorted { $0.updatedAt > $1.updatedAt }
+        return jobs.map(Self.sanitizedAfterRelaunch).sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// A job persisted mid-run stays "Transcribing"/"Translating" forever
+    /// after a crash or force-quit — unstartable, uncancelable, and only
+    /// recoverable by deleting it. Mark it canceled instead so it can be
+    /// re-run, keeping any segments it already produced.
+    static func sanitizedAfterRelaunch(_ job: TranscriptionJob) -> TranscriptionJob {
+        guard job.status.isRunning else { return job }
+        var job = job
+        job.status = .canceled
+        job.progress = JobProgress(stage: .canceled, detail: "Interrupted — the app quit while this job was running.", fraction: nil)
+        job.log += "This job was interrupted by an app quit and marked as canceled.\n"
+        return job
     }
 
     /// Saves one job. Encoding and writing happen off the main thread; calls
@@ -50,9 +67,19 @@ final class JobStore {
     func saveJob(_ job: TranscriptionJob) {
         let url = fileURL(for: job.id)
         ioQueue.async {
-            guard let data = try? Self.makeEncoder().encode(job) else { return }
-            try? data.write(to: url, options: .atomic)
+            do {
+                let data = try Self.makeEncoder().encode(job)
+                try data.write(to: url, options: .atomic)
+            } catch {
+                NSLog("WhisperDesk: failed to save job %@ (%@); its latest state will be lost on quit.", job.id.uuidString, "\(error)")
+            }
         }
+    }
+
+    /// Blocks until every write enqueued so far has hit the disk. Called on
+    /// app termination so debounced edits and final job states are not lost.
+    func flush() {
+        ioQueue.sync {}
     }
 
     func deleteJob(_ id: UUID) {
@@ -66,32 +93,34 @@ final class JobStore {
         jobsFolderURL.appendingPathComponent("\(id.uuidString).json")
     }
 
-    /// One-time migration from the old single jobs.json. The legacy file is
-    /// renamed (never deleted) after a successful split, so the original data
-    /// survives even if something goes wrong later.
-    private func migrateLegacyStoreIfNeeded() -> [TranscriptionJob] {
+    /// One-time migration from the old single jobs.json: split it into
+    /// per-job files, then rename it (never delete) so the original data
+    /// survives even if something goes wrong later. A job that already has a
+    /// per-job file is skipped — that file is newer than the legacy snapshot
+    /// and must not be clobbered.
+    private func migrateLegacyStoreIfNeeded() {
         guard let data = try? Data(contentsOf: legacyFileURL) else {
-            return []
+            return
         }
         do {
             let jobs = try Self.makeDecoder().decode([TranscriptionJob].self, from: data)
             let encoder = Self.makeEncoder()
             for job in jobs {
+                let url = fileURL(for: job.id)
+                guard !fileManager.fileExists(atPath: url.path) else { continue }
                 if let encoded = try? encoder.encode(job) {
-                    try? encoded.write(to: fileURL(for: job.id), options: .atomic)
+                    try? encoded.write(to: url, options: .atomic)
                 }
             }
             let backupURL = folderURL.appendingPathComponent("jobs.migrated.json")
             try? fileManager.removeItem(at: backupURL)
             try? fileManager.moveItem(at: legacyFileURL, to: backupURL)
             NSLog("WhisperDesk: migrated %d job(s) to per-job storage.", jobs.count)
-            return jobs
         } catch {
             let backupURL = folderURL.appendingPathComponent("jobs.corrupt.json")
             try? fileManager.removeItem(at: backupURL)
             try? fileManager.copyItem(at: legacyFileURL, to: backupURL)
             NSLog("WhisperDesk: legacy job history could not be decoded (%@); preserved at %@", "\(error)", backupURL.path)
-            return []
         }
     }
 

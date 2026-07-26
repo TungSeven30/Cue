@@ -79,8 +79,12 @@ struct TranscriptionService {
             let stdout = PipeCollector()
             let stderr = PipeCollector { line in
                 if let event = TranscriptionProgressEvent.decode(line) {
-                    Task { @MainActor in
-                        progress(event.progress)
+                    // A serial hop to the main queue keeps progress updates in
+                    // emission order; unstructured Tasks are not ordered.
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            progress(event.progress)
+                        }
                     }
                 }
             }
@@ -89,6 +93,12 @@ struct TranscriptionService {
             process.standardError = stderr.pipe
 
             try process.run()
+            // A cancellation that landed between storing the process and
+            // run() found isRunning == false and did nothing; catch up now
+            // so the helper does not run a full transcription after cancel.
+            if Task.isCancelled {
+                processBox.terminate()
+            }
             let terminationStatus = await process.waitForTermination()
             // The process has exited, but the readability handlers run on a
             // background queue and may still have buffered pipe data that has
@@ -120,16 +130,32 @@ struct TranscriptionService {
                 )
             }
 
-            let payload = try JSONDecoder().decode(TranscriptionPayload.self, from: stdoutData)
+            let payload = try Self.decodePayload(from: stdoutData)
             let cleanedSegments = TranscriptionPostProcessor.clean(payload.segments, settings: snapshot)
             return TranscriptionResult(backend: payload.backend, segments: cleanedSegments)
         } onCancel: {
             processBox.terminate()
         }
     }
+
+    /// The helper writes exactly one JSON object as its last stdout line, but
+    /// a stray print from a Python dependency must not fail the whole run:
+    /// fall back to decoding the last line that parses as the payload.
+    private static func decodePayload(from data: Data) throws -> TranscriptionPayload {
+        let decoder = JSONDecoder()
+        if let payload = try? decoder.decode(TranscriptionPayload.self, from: data) {
+            return payload
+        }
+        for line in data.split(separator: UInt8(ascii: "\n")).reversed() {
+            if let payload = try? decoder.decode(TranscriptionPayload.self, from: Data(line)) {
+                return payload
+            }
+        }
+        throw TranscriptionServiceError.malformedResponse
+    }
 }
 
-private struct TranscriptionSettingsSnapshot: Sendable {
+struct TranscriptionSettingsSnapshot: Sendable {
     let sourceLanguage: String
     let whisperModel: String
     let whisperBackendRawValue: String
@@ -151,7 +177,7 @@ private struct TranscriptionPayload: Decodable {
     let segments: [TranscriptionSegment]
 }
 
-private enum TranscriptionPostProcessor {
+enum TranscriptionPostProcessor {
     static func clean(_ segments: [TranscriptionSegment], settings: TranscriptionSettingsSnapshot) -> [TranscriptionSegment] {
         var cleaned = segments.map { segment in
             TranscriptionSegment(
@@ -214,7 +240,7 @@ private enum TranscriptionPostProcessor {
     /// duration (word-level alignment of an isolated word). A subtitle that
     /// displays for 0s is useless in a player, so extend it to a readable
     /// minimum without overlapping the next segment.
-    private static func repairInvalidTimings(
+    static func repairInvalidTimings(
         _ segments: [TranscriptionSegment],
         minimumDuration: Double = 0.8,
         gapToNext: Double = 0.05
@@ -225,9 +251,13 @@ private enum TranscriptionPostProcessor {
             guard segment.end - segment.start < 0.2 else { continue }
             var end = segment.start + minimumDuration
             if index + 1 < result.count {
-                end = min(end, result[index + 1].start - gapToNext)
+                let capped = min(end, result[index + 1].start - gapToNext)
+                // When the next segment starts at or before this one, a
+                // brief overlap beats leaving a zero-length cue in place.
+                if capped > segment.start {
+                    end = capped
+                }
             }
-            guard end > segment.start else { continue }
             result[index] = TranscriptionSegment(
                 id: segment.id,
                 start: segment.start,
@@ -471,7 +501,10 @@ private final class PipeCollector: @unchecked Sendable {
 
     private let lock = NSLock()
     private var storage = Data()
-    private var pendingLine = ""
+    // Line buffering happens on raw bytes: a chunk boundary can split a
+    // multibyte UTF-8 character, and decoding such a chunk in isolation
+    // silently drops it.
+    private var pendingData = Data()
     private let onLine: ((String) -> Void)?
     private var didReachEOF = false
     private var eofContinuation: CheckedContinuation<Void, Never>?
@@ -530,16 +563,15 @@ private final class PipeCollector: @unchecked Sendable {
     }
 
     private func append(_ data: Data) {
-        let newText = String(data: data, encoding: .utf8) ?? ""
         var completeLines: [String] = []
 
         lock.lock()
         storage.append(data)
-        pendingLine += newText
-        while let newlineIndex = pendingLine.firstIndex(of: "\n") {
-            let line = String(pendingLine[..<newlineIndex])
+        pendingData.append(data)
+        while let newlineIndex = pendingData.firstIndex(of: UInt8(ascii: "\n")) {
+            let line = String(decoding: pendingData[pendingData.startIndex..<newlineIndex], as: UTF8.self)
             completeLines.append(line)
-            pendingLine.removeSubrange(...newlineIndex)
+            pendingData.removeSubrange(pendingData.startIndex...newlineIndex)
         }
         lock.unlock()
 

@@ -101,6 +101,10 @@ private struct ProcessProbeResult {
     let message: String
 }
 
+private final class PipeDataBox: @unchecked Sendable {
+    var data = Data()
+}
+
 private func runProcess(_ command: [String]) -> ProcessProbeResult {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: command[0])
@@ -114,16 +118,35 @@ private func runProcess(_ command: [String]) -> ProcessProbeResult {
 
     do {
         try process.run()
-        process.waitUntilExit()
     } catch {
         return ProcessProbeResult(succeeded: false, output: "", message: error.localizedDescription)
     }
 
-    let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+    // Drain both pipes while the probe runs. Waiting for exit before reading
+    // deadlocks when the probe writes more than the ~64KB pipe buffer (e.g.
+    // a long Python traceback): the child blocks on the full pipe and
+    // waitUntilExit never returns, wedging diagnostics for the session.
+    let outputBox = PipeDataBox()
+    let errorBox = PipeDataBox()
+    let drainGroup = DispatchGroup()
+    drainGroup.enter()
+    DispatchQueue.global(qos: .utility).async {
+        outputBox.data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        drainGroup.leave()
+    }
+    drainGroup.enter()
+    DispatchQueue.global(qos: .utility).async {
+        errorBox.data = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        drainGroup.leave()
+    }
+    process.waitUntilExit()
+    drainGroup.wait()
+
+    let output = String(data: outputBox.data, encoding: .utf8)?
         .components(separatedBy: .newlines)
         .first?
         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    let error = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+    let error = String(data: errorBox.data, encoding: .utf8)?
         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
     return ProcessProbeResult(

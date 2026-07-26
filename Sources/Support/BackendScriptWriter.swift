@@ -39,6 +39,14 @@ PIP_PACKAGES = {
     "qwen3-asr": "'mlx-qwen3-asr[aligner]'",
 }
 
+# Top-level module each backend imports, used to tell "the backend is not
+# installed" apart from "one of its dependencies is broken".
+BACKEND_MODULES = {
+    "mlx-whisper": "mlx_whisper",
+    "faster-whisper": "faster_whisper",
+    "qwen3-asr": "mlx_qwen3_asr",
+}
+
 
 def emit(stage: str, detail: str, fraction=None) -> None:
     payload = {"stage": stage, "detail": detail, "fraction": fraction}
@@ -141,6 +149,24 @@ def extract_audio(input_path: Path, output_path: Path, preprocess_audio: bool) -
         raise RuntimeError(stderr.strip() or stdout.strip() or "ffmpeg failed")
 
 
+def prune_audio_cache(cache_dir: Path, keep: Path, max_bytes: int = 10 * 1024**3) -> None:
+    """Extracted WAVs are ~110 MB per source hour and nothing else deletes
+    them; drop the oldest entries once the cache passes max_bytes."""
+    try:
+        files = sorted(cache_dir.glob("*.wav"), key=lambda p: p.stat().st_mtime)
+        total = sum(p.stat().st_size for p in files)
+        for path in files:
+            if total <= max_bytes:
+                break
+            if path == keep:
+                continue
+            size = path.stat().st_size
+            path.unlink(missing_ok=True)
+            total -= size
+    except OSError:
+        pass
+
+
 def prepare_audio(input_path: Path, temp_dir: Path, preprocess_audio: bool) -> Path:
     cache_path = audio_cache_path(input_path, preprocess_audio)
     if cache_path.exists() and cache_path.stat().st_size > 0:
@@ -150,6 +176,7 @@ def prepare_audio(input_path: Path, temp_dir: Path, preprocess_audio: bool) -> P
     temp_audio = temp_dir / "audio.wav"
     extract_audio(input_path, temp_audio, preprocess_audio)
     temp_audio.replace(cache_path)
+    prune_audio_cache(cache_path.parent, keep=cache_path)
     return cache_path
 
 
@@ -385,7 +412,13 @@ def main() -> int:
                 sys.stdout.write("\n")
                 return 0
             except ModuleNotFoundError as exc:
-                errors.append(f"{backend} is not installed (pip install {PIP_PACKAGES.get(backend, backend)}).")
+                if exc.name == BACKEND_MODULES.get(backend):
+                    errors.append(f"{backend} is not installed (pip install {PIP_PACKAGES.get(backend, backend)}).")
+                else:
+                    # A missing transitive dependency is a broken install, not
+                    # a missing backend; naming the real module avoids sending
+                    # users down the wrong fix path.
+                    errors.append(f"{backend} failed: its dependency '{exc.name}' is missing or broken ({exc}).")
             except Exception as exc:  # pragma: no cover
                 errors.append(f"{backend} failed: {exc}")
 

@@ -59,6 +59,7 @@ enum JobStatus: String, Codable, CaseIterable {
 }
 
 enum JobStage: String, Codable, Hashable {
+    case idle
     case queued
     case preflight
     case extractingAudio
@@ -71,6 +72,8 @@ enum JobStage: String, Codable, Hashable {
 
     var label: String {
         switch self {
+        case .idle:
+            return "Ready"
         case .queued:
             return "Queued"
         case .preflight:
@@ -98,5 +101,5 @@ struct JobProgress: Codable, Hashable {
     var detail: String
     var fraction: Double?
 
-    static let idle = JobProgress(stage: .queued, detail: "Ready", fraction: nil)
+    static let idle = JobProgress(stage: .idle, detail: "Waiting to start.", fraction: nil)
 }

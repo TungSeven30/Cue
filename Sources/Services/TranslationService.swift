@@ -34,6 +34,9 @@ enum TranslationServiceError: LocalizedError {
     /// An error retrying cannot fix (bad key, unknown model, malformed request).
     case fatalAPIError(String)
     case validationFailed(String)
+    /// The chunk was too large for the model's input or output limits.
+    /// Retrying at the same size cannot succeed, but splitting the chunk can.
+    case responseTooLarge(String)
 
     var errorDescription: String? {
         switch self {
@@ -43,7 +46,7 @@ enum TranslationServiceError: LocalizedError {
             return "The translation response could not be parsed."
         case .apiError(let message), .fatalAPIError(let message):
             return message
-        case .validationFailed(let message):
+        case .validationFailed(let message), .responseTooLarge(let message):
             return message
         }
     }
@@ -127,36 +130,58 @@ struct TranslationService {
                 )
             )
 
-            let results = try await withThrowingTaskGroup(of: TranslationChunkResult.self) { group in
+            // Collect per-chunk outcomes instead of letting the first failure
+            // abandon the group: successful sibling chunks are applied (and
+            // persisted upstream as partial results) before the error is
+            // rethrown, so a retry or resume does not re-translate them.
+            let outcomes = await withTaskGroup(of: Result<TranslationChunkResult, Error>.self) { group in
                 for (index, chunk) in indexedChunks {
                     let chunkNumber = index + 1
                     let context = Self.contextPairs(before: chunk, in: segments, translatedByID: translatedByID)
                     group.addTask {
-                        let translatedChunk = try await translateChunkWithRetry(
-                            chunk,
-                            chunkNumber: chunkNumber,
-                            totalChunks: chunks.count,
-                            sourceLanguage: translationSourceLanguage,
-                            targetLanguage: targetLanguage.isEmpty ? "English" : targetLanguage,
-                            prompt: prompt,
-                            apiKey: apiKey,
-                            model: model,
-                            context: context
-                        )
-                        return TranslationChunkResult(chunkNumber: chunkNumber, segments: translatedChunk)
+                        do {
+                            let translatedChunk = try await translateChunkWithRetry(
+                                chunk,
+                                chunkNumber: chunkNumber,
+                                totalChunks: chunks.count,
+                                sourceLanguage: translationSourceLanguage,
+                                targetLanguage: targetLanguage.isEmpty ? "English" : targetLanguage,
+                                prompt: prompt,
+                                apiKey: apiKey,
+                                model: model,
+                                context: context
+                            )
+                            return .success(TranslationChunkResult(chunkNumber: chunkNumber, segments: translatedChunk))
+                        } catch {
+                            return .failure(error)
+                        }
                     }
                 }
 
-                var collected: [TranslationChunkResult] = []
-                for try await result in group {
+                var collected: [Result<TranslationChunkResult, Error>] = []
+                for await result in group {
                     collected.append(result)
                 }
-                return collected.sorted { $0.chunkNumber < $1.chunkNumber }
+                return collected
+            }
+
+            var firstError: Error?
+            let results = outcomes
+                .compactMap { try? $0.get() }
+                .sorted { $0.chunkNumber < $1.chunkNumber }
+            for outcome in outcomes {
+                if case .failure(let error) = outcome, firstError == nil {
+                    firstError = error
+                }
             }
 
             for result in results {
                 result.segments.forEach { translatedByID[$0.id] = $0.text }
                 onPartialResult(translatedByID: translatedByID, source: segments, progress: progress, onPartial: onPartial)
+            }
+
+            if let firstError {
+                throw firstError
             }
         }
 
@@ -233,16 +258,22 @@ struct TranslationService {
                 if Task.isCancelled {
                     throw CancellationError()
                 }
+                // An over-limit chunk fails identically at the same size;
+                // skip straight to splitting instead of retrying.
+                if case TranslationServiceError.responseTooLarge = error {
+                    break
+                }
                 if attempt < 3 {
                     try await Task.sleep(nanoseconds: UInt64(attempt) * 700_000_000)
                 }
             }
         }
 
-        // A model that persistently drops or invents segment ids usually
-        // succeeds on smaller batches, so split the chunk in half rather
+        // A chunk that is too large for the model's limits, or one where the
+        // model persistently drops or invents segment ids or returns broken
+        // JSON, usually succeeds on smaller batches — split it in half rather
         // than failing the whole run over one bad response.
-        if segments.count >= 8, let error = lastError, case TranslationServiceError.validationFailed = error {
+        if segments.count >= 2, let error = lastError, Self.isSplittable(error) {
             let midpoint = segments.count / 2
             let firstHalf = try await translateChunkWithRetry(
                 Array(segments[..<midpoint]),
@@ -270,6 +301,23 @@ struct TranslationService {
         }
 
         throw lastError ?? TranslationServiceError.invalidResponse
+    }
+
+    /// Whether splitting the chunk in half is worth attempting: true for
+    /// size-limit failures and for responses the model got structurally
+    /// wrong (bad ids, truncated or malformed JSON).
+    private static func isSplittable(_ error: Error) -> Bool {
+        if error is DecodingError {
+            return true
+        }
+        switch error {
+        case TranslationServiceError.validationFailed,
+             TranslationServiceError.responseTooLarge,
+             TranslationServiceError.invalidResponse:
+            return true
+        default:
+            return false
+        }
     }
 
     private func translateChunk(
@@ -337,7 +385,7 @@ struct TranslationService {
         }
 
         let translated = try JSONDecoder().decode(TranslatedSegmentsPayload.self, from: jsonData)
-        try validate(translated.segments, expected: segments)
+        try Self.validate(translated.segments, expected: segments)
         // Drop empties so they fall back to the original text upstream rather
         // than failing the whole chunk on a single untranslatable segment.
         return translated.segments.filter {
@@ -416,25 +464,38 @@ struct TranslationService {
     }
 
     /// Pulls the model's text reply out of the provider-specific envelope.
-    private static func extractOutputText(provider: TranslationProvider, data: Data) throws -> String {
+    /// Internal (not private) so the parsing can be unit-tested.
+    static func extractOutputText(provider: TranslationProvider, data: Data) throws -> String {
         switch provider {
         case .openai:
-            return try JSONDecoder().decode(OpenAIResponseEnvelope.self, from: data).outputText
+            let decoded = try JSONDecoder().decode(OpenAIResponseEnvelope.self, from: data)
+            if decoded.status == "incomplete", decoded.incomplete_details?.reason == "max_output_tokens" {
+                throw TranslationServiceError.responseTooLarge("The model's reply was cut off at its output-token limit.")
+            }
+            return decoded.outputText
         case .anthropic:
             let decoded = try JSONDecoder().decode(AnthropicResponseEnvelope.self, from: data)
+            if decoded.stop_reason == "max_tokens" {
+                throw TranslationServiceError.responseTooLarge("The model's reply was cut off at its output-token limit.")
+            }
             if decoded.stop_reason == "refusal" {
-                throw TranslationServiceError.apiError("Claude declined to translate this chunk (refusal). Try a different model or rephrase the prompt.")
+                // An identical retry refuses again, so treat it as fatal.
+                throw TranslationServiceError.fatalAPIError("Claude declined to translate this chunk (refusal). Try a different model or rephrase the prompt.")
             }
             return decoded.outputText
         case .google:
-            return try JSONDecoder().decode(GeminiResponseEnvelope.self, from: data).outputText
+            let decoded = try JSONDecoder().decode(GeminiResponseEnvelope.self, from: data)
+            if decoded.candidates?.first?.finishReason == "MAX_TOKENS" {
+                throw TranslationServiceError.responseTooLarge("The model's reply was cut off at its output-token limit.")
+            }
+            return decoded.outputText
         }
     }
 
     /// Turns a provider error response into a single actionable sentence
     /// instead of dumping raw JSON into the run log, and marks errors that
     /// retrying cannot fix as fatal so the retry loop stops immediately.
-    private static func classifyAPIError(
+    static func classifyAPIError(
         provider: TranslationProvider,
         data: Data,
         statusCode: Int,
@@ -458,6 +519,14 @@ struct TranslationService {
             return .fatalAPIError("\(name) does not recognize the model \"\(model)\". Set a valid model in Settings.")
         }
         if statusCode == 400 {
+            // A 400 caused by input-size limits is fixable by splitting the
+            // chunk; every other 400 is a request-shape problem retrying
+            // cannot fix.
+            let lowered = (message ?? "").lowercased()
+            let sizeHints = ["token", "too long", "length", "exceed", "context"]
+            if sizeHints.contains(where: lowered.contains) {
+                return .responseTooLarge("\(name) rejected the request as too large (400): \(message ?? "request too large").")
+            }
             return .fatalAPIError("\(name) rejected the request (400): \(message ?? "invalid request"). Check the model in Settings supports structured JSON output.")
         }
         if let message {
@@ -490,7 +559,7 @@ struct TranslationService {
         )
     }
 
-    private func validate(_ translated: [TranslatedSegment], expected segments: [TranscriptionSegment]) throws {
+    static func validate(_ translated: [TranslatedSegment], expected segments: [TranscriptionSegment]) throws {
         let expectedIDs = Set(segments.map(\.id))
         let actualIDs = Set(translated.map(\.id))
 
@@ -498,6 +567,10 @@ struct TranslationService {
             let missing = expectedIDs.subtracting(actualIDs).sorted()
             let extra = actualIDs.subtracting(expectedIDs).sorted()
             throw TranslationServiceError.validationFailed("Translation returned mismatched segment ids. Missing: \(missing). Extra: \(extra).")
+        }
+        // Set comparison alone would let a duplicated id mask a dropped one.
+        guard translated.count == segments.count else {
+            throw TranslationServiceError.validationFailed("Translation returned \(translated.count) segment(s) for \(segments.count) input segment(s) (duplicate ids).")
         }
     }
 
@@ -612,18 +685,25 @@ private enum TranslationSchema {
 }
 
 private struct OpenAIResponseEnvelope: Decodable {
+    struct IncompleteDetails: Decodable {
+        let reason: String?
+    }
+
     let output: [OpenAIOutputItem]
+    let status: String?
+    let incomplete_details: IncompleteDetails?
 
     var outputText: String {
         output
-            .flatMap(\.content)
+            .flatMap { $0.content ?? [] }
             .compactMap(\.text)
             .joined(separator: "")
     }
 }
 
 private struct OpenAIOutputItem: Decodable {
-    let content: [OpenAIOutputContent]
+    // Reasoning models emit {"type":"reasoning"} items with no content key.
+    let content: [OpenAIOutputContent]?
 }
 
 private struct OpenAIOutputContent: Decodable {
@@ -692,6 +772,7 @@ private struct GeminiRequest: Encodable {
 private struct GeminiResponseEnvelope: Decodable {
     struct Candidate: Decodable {
         let content: CandidateContent?
+        let finishReason: String?
     }
     struct CandidateContent: Decodable {
         let parts: [CandidatePart]?
@@ -711,13 +792,18 @@ private struct GeminiResponseEnvelope: Decodable {
     }
 }
 
-private struct TranslatedSegmentsPayload: Decodable {
+struct TranslatedSegmentsPayload: Decodable {
     let segments: [TranslatedSegment]
 }
 
-private struct TranslatedSegment: Decodable {
+struct TranslatedSegment: Decodable {
     let id: Int
     let text: String
+
+    init(id: Int, text: String) {
+        self.id = id
+        self.text = text
+    }
 }
 
 private extension Array {

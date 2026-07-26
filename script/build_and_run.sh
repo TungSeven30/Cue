@@ -70,6 +70,10 @@ build_bundle() {
   <true/>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.video</string>
+  <key>NSHumanReadableCopyright</key>
+  <string>Copyright © $(date +%Y). All rights reserved.</string>
 </dict>
 </plist>
 PLIST
@@ -81,9 +85,14 @@ PLIST
     # changes every build and re-triggers the password prompt each install.
     local identity="${SIGN_IDENTITY:-WhisperDesk Local Signing}"
     if security find-identity -v -p codesigning 2>/dev/null | grep -q "$identity"; then
-      codesign --force --deep --sign "$identity" "$APP_BUNDLE" >/dev/null 2>&1
+      # An expired or untrusted local cert must not abort the build silently
+      # (set -e); report it and fall back to ad-hoc signing.
+      if ! codesign --force --deep --sign "$identity" "$APP_BUNDLE"; then
+        echo "warning: signing with '$identity' failed; falling back to ad-hoc signing" >&2
+        codesign --force --deep --sign - "$APP_BUNDLE"
+      fi
     else
-      codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null
+      codesign --force --deep --sign - "$APP_BUNDLE"
     fi
   fi
 }

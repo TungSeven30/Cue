@@ -115,7 +115,9 @@ def run_child(command: list[str]) -> tuple[int, str, str]:
     return process.returncode, stdout, stderr
 
 
-def extract_audio(input_path: Path, output_path: Path, preprocess_audio: bool) -> None:
+def extract_audio(input_path: Path, output_path: Path, preprocess_audio: bool) -> bool:
+    """Extracts audio; returns whether the cleanup filter chain was actually
+    applied (the filtered run can fail and fall back to plain extraction)."""
     detail = "Extracting and cleaning audio with ffmpeg." if preprocess_audio else "Extracting audio with ffmpeg."
     emit("extractingAudio", detail, 0.08)
     base_command = [
@@ -141,12 +143,15 @@ def extract_audio(input_path: Path, output_path: Path, preprocess_audio: bool) -
         str(output_path),
     ]
     returncode, stdout, stderr = run_child(base_command + filter_args + output_args)
+    used_preprocess = preprocess_audio
     if returncode != 0 and preprocess_audio:
         emit("extractingAudio", "Audio cleanup failed; retrying plain extraction.", 0.1)
         returncode, stdout, stderr = run_child(base_command + output_args)
-    
+        used_preprocess = False
+
     if returncode != 0:
         raise RuntimeError(stderr.strip() or stdout.strip() or "ffmpeg failed")
+    return used_preprocess
 
 
 def prune_audio_cache(cache_dir: Path, keep: Path, max_bytes: int = 10 * 1024**3) -> None:
@@ -178,7 +183,12 @@ def prepare_audio(input_path: Path, temp_dir: Path, preprocess_audio: bool, audi
         return cache_path
 
     temp_audio = temp_dir / "audio.wav"
-    extract_audio(input_path, temp_audio, preprocess_audio)
+    used_preprocess = extract_audio(input_path, temp_audio, preprocess_audio)
+    if used_preprocess != preprocess_audio:
+        # The filter chain failed and plain extraction was used: cache under
+        # the key that matches the actual content, so a later Clean-audio run
+        # retries the filters instead of silently reusing unfiltered audio.
+        cache_path = audio_cache_path(input_path, used_preprocess)
     temp_audio.replace(cache_path)
     prune_audio_cache(cache_path.parent, keep=cache_path)
     return cache_path

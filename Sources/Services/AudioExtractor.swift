@@ -18,11 +18,19 @@ enum AudioExtractorError: LocalizedError {
 /// Decodes any AVFoundation-readable container to the 16 kHz mono 16-bit
 /// PCM WAV the transcription engines expect. Replaces the ffmpeg step.
 enum AudioExtractor {
-    static func extract(from sourceURL: URL, to destinationURL: URL) async throws {
+    /// `onProgress` receives coarse fractions (0–1) derived from sample-buffer
+    /// timestamps vs the asset duration, throttled to 5% steps; it fires
+    /// synchronously on the decoding task's thread.
+    static func extract(
+        from sourceURL: URL,
+        to destinationURL: URL,
+        onProgress: (@Sendable (Double) -> Void)? = nil
+    ) async throws {
         let asset = AVURLAsset(url: sourceURL)
         guard let track = try await asset.loadTracks(withMediaType: .audio).first else {
             throw AudioExtractorError.noAudioTrack
         }
+        let durationSeconds = (try? await asset.load(.duration).seconds) ?? 0
 
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
@@ -46,7 +54,13 @@ enum AudioExtractor {
         let tempURL = destinationURL.deletingLastPathComponent()
             .appendingPathComponent(destinationURL.lastPathComponent + ".partial-\(UUID().uuidString)")
         do {
-            try Self.writeWAV(from: output, reader: reader, to: tempURL)
+            try Self.writeWAV(
+                from: output,
+                reader: reader,
+                to: tempURL,
+                durationSeconds: durationSeconds,
+                onProgress: onProgress
+            )
             if FileManager.default.fileExists(atPath: destinationURL.path) {
                 _ = try FileManager.default.replaceItemAt(destinationURL, withItemAt: tempURL)
             } else {
@@ -61,15 +75,28 @@ enum AudioExtractor {
     /// Streams decoded PCM into `fileURL` behind a placeholder header, then
     /// patches the header with the final sizes — avoids buffering hours of audio.
     private static func writeWAV(from output: AVAssetReaderTrackOutput,
-                                 reader: AVAssetReader, to fileURL: URL) throws {
+                                 reader: AVAssetReader, to fileURL: URL,
+                                 durationSeconds: Double = 0,
+                                 onProgress: (@Sendable (Double) -> Void)? = nil) throws {
         FileManager.default.createFile(atPath: fileURL.path, contents: nil)
         let handle = try FileHandle(forWritingTo: fileURL)
         defer { try? handle.close() }
         try handle.write(contentsOf: Self.wavHeader(dataLength: 0))
 
         var pcmBytes: UInt32 = 0
+        var lastReportedFraction = 0.0
         while let sampleBuffer = output.copyNextSampleBuffer() {
             try Task.checkCancellation()
+            if let onProgress, durationSeconds > 0 {
+                let seconds = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
+                if seconds.isFinite {
+                    let fraction = max(0, min(1, seconds / durationSeconds))
+                    if fraction - lastReportedFraction >= 0.05 {
+                        lastReportedFraction = fraction
+                        onProgress(fraction)
+                    }
+                }
+            }
             guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
             var length = 0
             var pointer: UnsafeMutablePointer<CChar>?

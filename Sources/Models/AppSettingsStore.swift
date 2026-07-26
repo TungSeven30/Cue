@@ -5,6 +5,7 @@ enum WhisperBackend: String, CaseIterable, Identifiable, Codable, Hashable {
     case mlxWhisper = "mlx-whisper"
     case fasterWhisper = "faster-whisper"
     case qwen3ASR = "qwen3-asr"
+    case native = "whisper-cpp"
 
     var id: String { rawValue }
 
@@ -18,11 +19,16 @@ enum WhisperBackend: String, CaseIterable, Identifiable, Codable, Hashable {
             return "Faster Whisper"
         case .qwen3ASR:
             return "Qwen3 ASR"
+        case .native:
+            return "Built-in (whisper.cpp)"
         }
     }
 }
 
 enum TranscriptionPreset: String, CaseIterable, Identifiable, Codable, Hashable {
+    // Declaration order drives allCases and therefore picker order; raw
+    // values (the persisted case names) are unaffected by ordering.
+    case builtIn
     case bestAccuracy
     case fastAppleSilicon
     case mostCompatible
@@ -34,6 +40,7 @@ enum TranscriptionPreset: String, CaseIterable, Identifiable, Codable, Hashable 
 
     var label: String {
         switch self {
+        case .builtIn: return "Built-in (no setup)"
         case .bestAccuracy: return "Best Accuracy (Qwen3)"
         case .fastAppleSilicon: return "Fast Apple Silicon"
         case .mostCompatible: return "Most Compatible"
@@ -45,6 +52,7 @@ enum TranscriptionPreset: String, CaseIterable, Identifiable, Codable, Hashable 
 
     var backend: WhisperBackend? {
         switch self {
+        case .builtIn: return .native
         case .bestAccuracy: return .qwen3ASR
         case .fastAppleSilicon, .higherAccuracy: return .mlxWhisper
         case .mostCompatible, .draft: return .fasterWhisper
@@ -54,6 +62,7 @@ enum TranscriptionPreset: String, CaseIterable, Identifiable, Codable, Hashable 
 
     var model: String? {
         switch self {
+        case .builtIn: return ModelDownloader.defaultModel
         case .bestAccuracy: return AppSettingsStore.qwen3DefaultModel
         case .fastAppleSilicon: return "mlx-community/whisper-large-v3-turbo"
         case .mostCompatible: return "large-v3-turbo"
@@ -151,6 +160,22 @@ enum AppSettingPresets {
                 SettingsPreset(label: "Qwen3 ASR 1.7B (best)", value: AppSettingsStore.qwen3DefaultModel),
                 SettingsPreset(label: "Qwen3 ASR 0.6B (fast)", value: "Qwen/Qwen3-ASR-0.6B")
             ]
+        case .native:
+            return ModelDownloader.models.map { model in
+                SettingsPreset(label: nativeModelLabel(for: model), value: model)
+            }
+        }
+    }
+
+    private static func nativeModelLabel(for model: String) -> String {
+        switch model {
+        case "ggml-large-v3-turbo-q5_0.bin": return "Large v3 Turbo (quantized, recommended)"
+        case "ggml-large-v3-turbo.bin": return "Large v3 Turbo"
+        case "ggml-medium.bin": return "Medium"
+        case "ggml-small.bin": return "Small"
+        case "ggml-base.bin": return "Base"
+        case "ggml-tiny.bin": return "Tiny"
+        default: return model
         }
     }
 
@@ -472,6 +497,10 @@ final class AppSettingsStore: ObservableObject {
             return model.hasPrefix("Qwen/Qwen3-ASR")
                 ? nil
                 : "Qwen3 ASR needs a Qwen3 model such as \(Self.qwen3DefaultModel)."
+        case .native:
+            return model.hasPrefix("ggml-")
+                ? nil
+                : "The built-in engine needs a GGML model such as \(ModelDownloader.defaultModel)."
         case .auto:
             return nil
         }
@@ -583,6 +612,10 @@ final class AppSettingsStore: ObservableObject {
         case .qwen3ASR:
             if force || !trimmedModel.hasPrefix("Qwen/Qwen3-ASR") {
                 whisperModel = Self.qwen3DefaultModel
+            }
+        case .native:
+            if force || !trimmedModel.hasPrefix("ggml-") {
+                whisperModel = ModelDownloader.defaultModel
             }
         }
     }

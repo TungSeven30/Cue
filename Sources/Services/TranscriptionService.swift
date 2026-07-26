@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 struct TranscriptionResult {
     let backend: String
@@ -42,6 +43,10 @@ struct TranscriptionService {
             temperature: settings.temperature,
             noSpeechThreshold: settings.noSpeechThreshold
         )
+
+        if settings.whisperBackend == .native {
+            return try await transcribeNatively(videoURL: videoURL, snapshot: snapshot, progress: progress)
+        }
 
         let scriptURL = try BackendScriptWriter.ensureScript()
 
@@ -174,6 +179,85 @@ struct TranscriptionService {
             return TranscriptionResult(backend: payload.backend, segments: cleanedSegments)
         } onCancel: {
             processBox.terminate()
+        }
+    }
+
+    /// Fully in-process path for the built-in whisper.cpp backend: native
+    /// audio extraction → model download (short-circuits when installed) →
+    /// WhisperCppEngine → the same TranscriptionPostProcessor cleanup the
+    /// Python backends get. "Clean audio" preprocessing is ffmpeg-only by
+    /// design, so this path always uses plain extraction under the
+    /// preprocess=false cache key regardless of the toggle.
+    @MainActor
+    private func transcribeNatively(
+        videoURL: URL,
+        snapshot: TranscriptionSettingsSnapshot,
+        progress: @escaping @MainActor (JobProgress) -> Void
+    ) async throws -> TranscriptionResult {
+        let cachedWav = try AudioCache.cachedAudioURL(for: videoURL, preprocess: false)
+        let cachedWavSize = (try? FileManager.default.attributesOfItem(atPath: cachedWav.path)[.size] as? UInt64) ?? 0
+        if cachedWavSize > 0 {
+            progress(JobProgress(stage: .extractingAudio, detail: "Using cached extracted audio.", fraction: 0.12))
+        } else {
+            progress(JobProgress(stage: .extractingAudio, detail: "Extracting audio.", fraction: 0.08))
+            // The extractor throttles to 5% steps; mapped into the same
+            // 0.08–0.12 band the Python helper uses for extraction.
+            try await AudioExtractor.extract(from: videoURL, to: cachedWav) { fraction in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        progress(JobProgress(
+                            stage: .extractingAudio,
+                            detail: "Extracting audio.",
+                            fraction: 0.08 + fraction * 0.04
+                        ))
+                    }
+                }
+            }
+            AudioCache.prune(directory: AudioCache.directory, keeping: cachedWav)
+        }
+
+        // whisper_full's abort callback fires on whisper's worker threads,
+        // which have no current Task; cancellation travels through this
+        // thread-independent flag instead of Task.isCancelled.
+        let cancelFlag = OSAllocatedUnfairLock(initialState: false)
+        return try await withTaskCancellationHandler {
+            let modelURL = try await ModelDownloader().ensureInstalled(model: snapshot.whisperModel) { update in
+                // ensureInstalled reports on a background queue; hop to the
+                // main actor in emission order before touching UI state.
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        progress(update)
+                    }
+                }
+            }
+            try Task.checkCancellation()
+            progress(JobProgress(stage: .transcribing, detail: "Transcribing with the built-in engine.", fraction: 0.2))
+            let result = try await WhisperCppEngine().transcribe(
+                wavURL: cachedWav,
+                modelURL: modelURL,
+                language: snapshot.sourceLanguage,
+                beamSize: snapshot.beamSize,
+                noSpeechThreshold: snapshot.noSpeechThreshold,
+                onProgress: { fraction in
+                    // Inference 0→1 mapped into the 0.2–0.92 transcribing
+                    // band, matching the Python helpers' fraction range.
+                    let clamped = max(0, min(1, fraction))
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            progress(JobProgress(
+                                stage: .transcribing,
+                                detail: "Transcribing with the built-in engine.",
+                                fraction: 0.2 + clamped * 0.72
+                            ))
+                        }
+                    }
+                },
+                isCancelled: { cancelFlag.withLock { $0 } }
+            )
+            let cleanedSegments = TranscriptionPostProcessor.clean(result.segments, settings: snapshot)
+            return TranscriptionResult(backend: WhisperBackend.native.rawValue, segments: cleanedSegments)
+        } onCancel: {
+            cancelFlag.withLock { $0 = true }
         }
     }
 

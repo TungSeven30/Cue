@@ -4,8 +4,6 @@ import Foundation
 /// manual jobs go on top, watch-folder ingests at the bottom, and a drag
 /// rewrites only the moved job (spec §1.1).
 enum QueueOrdering {
-    static let minimumGap = 1e-9
-
     static func indexForManualAdd(existing: [Double]) -> Double {
         (existing.min() ?? 0) - 1
     }
@@ -24,9 +22,16 @@ enum QueueOrdering {
         }
     }
 
+    /// True when a midpoint insert between these neighbours would not land
+    /// strictly between them — i.e. Double precision is exhausted at this
+    /// magnitude (or the gap is zero) and the whole list needs re-indexing.
+    /// Deliberately magnitude-independent: orderIndex defaults are timestamp
+    /// -sized (~1.7e9), where an absolute epsilon smaller than one ULP could
+    /// never fire before a duplicate already existed.
     static func needsRenormalization(before: Double?, after: Double?) -> Bool {
         guard let before, let after else { return false }
-        return abs(after - before) < minimumGap
+        let mid = (before + after) / 2
+        return !(before < mid && mid < after)
     }
 
     static func renormalized(count: Int) -> [Double] {

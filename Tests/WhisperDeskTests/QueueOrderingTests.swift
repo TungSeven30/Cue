@@ -23,9 +23,16 @@ struct QueueOrderingTests {
         #expect(QueueOrdering.destinationIndex(before: nil, after: nil) == 0)
     }
 
-    @Test func renormalizationTriggersOnTinyGap() {
-        #expect(QueueOrdering.needsRenormalization(before: 1, after: 1 + 1e-10))
+    @Test func renormalizationTriggersWhenMidpointCannotFit() {
+        // Zero gap: a duplicate already exists.
+        #expect(QueueOrdering.needsRenormalization(before: 1, after: 1))
+        // One-ULP gap at timestamp magnitude (the real-world orderIndex
+        // scale): no midpoint can land strictly between.
+        let timestampScale = -1_700_000_000.0
+        #expect(QueueOrdering.needsRenormalization(before: timestampScale, after: timestampScale.nextUp))
+        // Healthy gaps never trigger, at any magnitude.
         #expect(!QueueOrdering.needsRenormalization(before: 1, after: 2))
+        #expect(!QueueOrdering.needsRenormalization(before: timestampScale, after: timestampScale + 1))
         #expect(!QueueOrdering.needsRenormalization(before: nil, after: 2))
     }
 

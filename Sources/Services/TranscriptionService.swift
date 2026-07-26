@@ -23,7 +23,7 @@ struct TranscriptionService {
     @MainActor
     func transcribe(
         videoURL: URL,
-        settings: AppSettingsStore,
+        settings: JobSettingsSnapshot,
         progress: @escaping @MainActor (JobProgress) -> Void
     ) async throws -> TranscriptionResult {
         let snapshot = TranscriptionSettingsSnapshot(

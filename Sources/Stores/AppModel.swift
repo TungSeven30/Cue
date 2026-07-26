@@ -424,7 +424,7 @@ final class AppModel: ObservableObject {
         activeJobID = jobID
         activeTask = Task {
             do {
-                let result = try await transcriptionService.transcribe(videoURL: videoURL, settings: settings) { [weak self] progress in
+                let result = try await transcriptionService.transcribe(videoURL: videoURL, settings: JobSettingsSnapshot(settings: settings)) { [weak self] progress in
                     self?.updateProgress(progress, for: jobID)
                 }
                 let willTranslate = settings.autoTranslateAfterTranscription && !settings.currentTranslationAPIKey.isEmpty
@@ -500,7 +500,8 @@ final class AppModel: ObservableObject {
                 let result = try await translationService.translate(
                     segments: segments,
                     sourceLanguage: settings.sourceLanguage,
-                    settings: settings,
+                    settings: JobSettingsSnapshot(settings: settings),
+                    credentials: makeTranslationCredentials(),
                     existingTranslations: existingTranslations
                 ) { [weak self] progress in
                     self?.updateProgress(progress, for: jobID)
@@ -866,7 +867,8 @@ final class AppModel: ObservableObject {
                 let summary = try await translationService.summarize(
                     segments: segments,
                     language: language,
-                    settings: settings
+                    settings: JobSettingsSnapshot(settings: settings),
+                    credentials: makeTranslationCredentials()
                 )
                 updateJob(id) { job in
                     job.summary = summary
@@ -903,7 +905,8 @@ final class AppModel: ObservableObject {
             let summary = try await translationService.summarize(
                 segments: segments,
                 language: language,
-                settings: settings
+                settings: JobSettingsSnapshot(settings: settings),
+                credentials: makeTranslationCredentials()
             )
             appendLog("Generated intro summary: \(summary)", to: id)
             return summary
@@ -911,6 +914,17 @@ final class AppModel: ObservableObject {
             appendLog("Intro summary failed (job still completed): \(error.localizedDescription)", to: id)
             return nil
         }
+    }
+
+    /// Secrets + prompt for the current translation model. Built fresh per
+    /// run; never stored on the job.
+    private func makeTranslationCredentials() -> TranslationCredentials {
+        let provider = settings.currentTranslationProvider
+        return TranslationCredentials(
+            apiKey: settings.translationAPIKey(for: provider),
+            prompt: settings.translationPrompt,
+            provider: provider
+        )
     }
 
     private func markCanceled(_ id: UUID) {

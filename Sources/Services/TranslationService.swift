@@ -65,19 +65,28 @@ private struct TranslationChunkResult {
     let segments: [TranslatedSegment]
 }
 
+/// Secrets and prompt for a translation run, passed separately from the
+/// persisted JobSettingsSnapshot so keys never reach a job file on disk.
+struct TranslationCredentials {
+    let apiKey: String
+    let prompt: String
+    let provider: TranslationProvider
+}
+
 struct TranslationService {
     @MainActor
     func translate(
         segments: [TranscriptionSegment],
         sourceLanguage: String,
-        settings: AppSettingsStore,
+        settings: JobSettingsSnapshot,
+        credentials: TranslationCredentials,
         existingTranslations: [TranscriptionSegment],
         progress: @escaping @MainActor (JobProgress) -> Void,
         onPartial: @escaping @MainActor ([TranscriptionSegment]) -> Void
     ) async throws -> [TranscriptionSegment] {
         let model = settings.openAIModel
-        let provider = TranslationProvider.infer(from: model)
-        let apiKey = settings.translationAPIKey(for: provider)
+        let provider = credentials.provider
+        let apiKey = credentials.apiKey
         let chunkSize = settings.translationChunkMode.chunkSize
         let parallelism = max(1, min(4, settings.translationParallelism))
         let translationSourceLanguage = Self.translationSourceLanguage(
@@ -85,9 +94,9 @@ struct TranslationService {
             transcriptionSetting: sourceLanguage
         )
         let targetLanguage = settings.translationTargetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prompt = settings.translationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let prompt = credentials.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? AppSettingsStore.defaultTranslationPrompt
-            : settings.translationPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            : credentials.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !apiKey.isEmpty else {
             throw TranslationServiceError.missingAPIKey(provider.label)
@@ -326,11 +335,12 @@ struct TranslationService {
     func summarize(
         segments: [TranscriptionSegment],
         language: String,
-        settings: AppSettingsStore
+        settings: JobSettingsSnapshot,
+        credentials: TranslationCredentials
     ) async throws -> String {
         let model = settings.openAIModel
-        let provider = TranslationProvider.infer(from: model)
-        let apiKey = settings.translationAPIKey(for: provider)
+        let provider = credentials.provider
+        let apiKey = credentials.apiKey
         guard !apiKey.isEmpty else {
             throw TranslationServiceError.missingAPIKey(provider.label)
         }

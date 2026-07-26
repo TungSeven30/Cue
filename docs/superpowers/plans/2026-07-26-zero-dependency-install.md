@@ -522,6 +522,7 @@ Steps: failing test → implement → full suite → manual end-to-end with the 
 - Modify: `script/build_and_run.sh` — nothing expected; confirm `--release` DMG size (whisper.cpp adds ~10–20 MB with Metal shaders) and that notarization passes with the C++ code (hardened runtime: no JIT entitlements needed).
 - Regression checklist (manual, on the release build):
   - [ ] Fresh-user simulation: `defaults delete com.local.WhisperDesk` equivalent (new macOS user account), no ffmpeg/Python on PATH → drop a clip → transcription completes with model download progress.
+  - [ ] Pristine-Mac check (from Task 10 review): on a Mac with no Command Line Tools, the diagnostics python3 probe invokes the `/usr/bin/python3` shim, which may pop Apple's "install developer tools?" dialog at first launch — verify on a clean VM/account; if it fires, gate the Python probes behind a dialog-free `xcode-select -p` check.
   - [ ] Existing MLX user: settings preserved, Python path still works.
   - [ ] Cancel mid-native-transcription stops within ~2 s.
   - [ ] Translated job → export SRT with intro summary → cue timings sane.

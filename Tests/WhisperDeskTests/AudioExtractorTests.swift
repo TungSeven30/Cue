@@ -52,7 +52,10 @@ struct AudioExtractorTests {
         }
     }
 
-    @Test func leavesNoFileBehindWhenExtractionFails() async throws {
+    /// The mid-stream cleanup path shares the same catch-and-remove wrapper and is
+    /// verified by inspection — AVFoundation offers no cheap deterministic mid-decode
+    /// failure fixture.
+    @Test func leavesNoFileBehindWhenSourceIsUnreadable() async throws {
         let source = FileManager.default.temporaryDirectory
             .appendingPathComponent("empty-\(UUID().uuidString).txt")
         try Data("not audio".utf8).write(to: source)

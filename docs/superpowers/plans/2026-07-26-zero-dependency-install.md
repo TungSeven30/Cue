@@ -308,7 +308,7 @@ enum AudioCache {
 }
 ```
 
-The `prune` body must be written out fully in implementation (list files, sum sizes, delete oldest-first skipping `keeping`); test drives correctness.
+The `prune` body must be written out fully in implementation (list files, sum sizes, delete oldest-first skipping `keeping`); test drives correctness. `prune` must also sweep stale `*.partial-*` files (left behind by a hard kill or power loss during extraction), not just `*.wav`.
 
 ⚠️ **mtime fidelity check:** Python uses `st_mtime_ns` (integer nanoseconds); `Date` round-trips through Double and can drift a few hundred ns, producing a *different* digest than Python for the same file. During implementation, verify with one real file that Swift and Python produce the same key (`python3 -c` one-liner vs a debug print). If they differ, read `st_mtimespec` via `stat()` directly instead of Foundation. Cache sharing is the whole point of this task — do not skip the check.
 

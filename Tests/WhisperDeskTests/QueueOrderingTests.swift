@@ -3,11 +3,6 @@ import Testing
 @testable import WhisperDesk
 
 struct QueueOrderingTests {
-    @Test func manualAddGoesOnTop() {
-        #expect(QueueOrdering.indexForManualAdd(existing: [0, 1, 2]) == -1)
-        #expect(QueueOrdering.indexForManualAdd(existing: []) == -1)
-    }
-
     @Test func batchAddKeepsBatchOrderAboveExisting() {
         // First URL gets the smallest index (topmost in ascending order).
         #expect(QueueOrdering.indicesForBatchAdd(count: 3, existing: [0, 1, 2]) == [-3, -2, -1])

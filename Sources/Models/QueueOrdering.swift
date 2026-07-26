@@ -4,10 +4,6 @@ import Foundation
 /// manual jobs go on top, watch-folder ingests at the bottom, and a drag
 /// rewrites only the moved job (spec §1.1).
 enum QueueOrdering {
-    static func indexForManualAdd(existing: [Double]) -> Double {
-        (existing.min() ?? 0) - 1
-    }
-
     /// Indices for a batch of manual adds: the whole batch lands above every
     /// existing job, and the batch keeps its own order (first item topmost).
     static func indicesForBatchAdd(count: Int, existing: [Double]) -> [Double] {

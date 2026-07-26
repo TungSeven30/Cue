@@ -34,6 +34,33 @@ Everything runs locally except translation and summaries, which call the API pro
 - Built-in diagnostics verify ffmpeg, Python, and the whisper backends, with a guided first-run setup sheet that includes copyable install commands
 - API keys are stored in the macOS Keychain, never in files or exports
 
+## How long does a 30-minute clip take?
+
+The two phases have completely different bottlenecks:
+
+- **Transcription** runs on your Mac's GPU — it scales with the chip. The table below is for the default **Balanced** preset with `whisper-large-v3-turbo` on MLX.
+- **Translation** is network-bound (cloud LLM APIs), so it takes about the same time on every Mac: typically **2–6 minutes** for a dialogue-heavy 30-minute clip with the default chunking and 2 parallel workers, varying with segment count and provider speed rather than hardware. The optional intro summary adds ~10 seconds.
+
+| Machine | Transcribe 30 min (Balanced preset) |
+|---|---|
+| Mac Studio M3 Ultra (any RAM, incl. 512 GB) | ~1 min |
+| MacBook Pro M4 Max | ~1–2 min |
+| MacBook Pro M3 Max | ~2 min |
+| MacBook Pro M4 Pro / M2 Max | ~2–3 min |
+| MacBook Pro M3 Pro | ~3 min |
+| MacBook Pro M2 Pro | ~3–4 min |
+| MacBook Pro M4 / MacBook Air M4 | ~3–5 min |
+| MacBook Air M3 | ~4–6 min |
+| MacBook Air M2 | ~5–8 min |
+
+Notes on reading the table:
+
+- These are ballparks derived from published MLX Whisper benchmarks (e.g. ~55× real-time on an M4 Max with greedy decoding), discounted for the app's beam search and audio preprocessing. Run one of your own clips for real numbers.
+- **RAM doesn't matter here** — `large-v3-turbo` needs ~1.5 GB; a 512 GB Mac Studio wins on GPU cores and memory bandwidth, not memory size. Any listed machine has plenty of RAM for transcription.
+- Fanless MacBook Airs throttle on long runs — the top of each Air range reflects that.
+- **Maximum Accuracy** and **Noisy Audio** presets are roughly 2× the listed times (wider beam search); the **Qwen3-ASR** backend is roughly 2–3× (larger model, better accuracy).
+- First run adds one-time costs: model download (~1.5 GB) and ffmpeg audio extraction (~30–60 s, cached for re-runs).
+
 ## Installing (for users)
 
 Grab `WhisperDesk.dmg` (notarized, from a release or shared directly), drag the app to Applications, and launch it. On first run the app checks for its command-line dependencies and walks you through installing anything missing. The short version:

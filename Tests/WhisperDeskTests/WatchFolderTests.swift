@@ -94,3 +94,60 @@ struct WatchFolderScanEngineTests {
         #expect(WatchFolderScanEngine.fingerprint(for: file) == "/w/movie.mp4|7|99.0")
     }
 }
+
+@MainActor
+struct WatchFolderLedgerTests {
+    private func makeBase() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("whisperdesk-ledger-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    @Test func recordsAndPersists() throws {
+        let base = try makeBase()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let ledger = WatchFolderLedger(baseURL: base)
+        ledger.record("/w/a.mp4|1|2.0", outcome: .success)
+        ledger.record("/w/b.mp4|3|4.0", outcome: .failure)
+        #expect(ledger.contains("/w/a.mp4|1|2.0"))
+
+        let reloaded = WatchFolderLedger(baseURL: base)
+        #expect(reloaded.contains("/w/a.mp4|1|2.0"))
+        #expect(reloaded.contains("/w/b.mp4|3|4.0"))
+    }
+
+    @Test func changedFingerprintIsNotContained() throws {
+        let base = try makeBase()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let ledger = WatchFolderLedger(baseURL: base)
+        ledger.record("/w/a.mp4|1|2.0", outcome: .success)
+        // Same path, new size/mtime: a re-encoded file legitimately re-runs.
+        #expect(!ledger.contains("/w/a.mp4|99|2.0"))
+    }
+
+    @Test func pruneDropsEntriesForMissingFiles() throws {
+        let base = try makeBase()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let ledger = WatchFolderLedger(baseURL: base)
+        ledger.record("/w/gone.mp4|1|2.0", outcome: .success)
+        ledger.record("/w/kept.mp4|1|2.0", outcome: .success)
+        ledger.prune(fileExists: { $0 == "/w/kept.mp4" })
+        #expect(!ledger.contains("/w/gone.mp4|1|2.0"))
+        #expect(ledger.contains("/w/kept.mp4|1|2.0"))
+    }
+
+    @Test func pathExtractionSurvivesPipesInNames() {
+        #expect(WatchFolderLedger.path(fromFingerprint: "/w/we|ird.mp4|1|2.0") == "/w/we|ird.mp4")
+    }
+
+    @Test func clearEmptiesEverything() throws {
+        let base = try makeBase()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let ledger = WatchFolderLedger(baseURL: base)
+        ledger.record("/w/a.mp4|1|2.0", outcome: .success)
+        ledger.clear()
+        #expect(!ledger.contains("/w/a.mp4|1|2.0"))
+        #expect(!WatchFolderLedger(baseURL: base).contains("/w/a.mp4|1|2.0"))
+    }
+}

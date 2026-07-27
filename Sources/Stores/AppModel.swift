@@ -966,7 +966,7 @@ final class AppModel: ObservableObject {
                 // or translation — restore the completed status, log loudly.
                 updateJob(jobID) { job in
                     job.status = restoredStatus
-                    job.progress = JobProgress(stage: .complete, detail: "Burn-in failed: \(error.localizedDescription)", fraction: nil)
+                    job.progress = JobProgress(stage: .failed, detail: "Burn-in failed: \(error.localizedDescription)", fraction: nil)
                     job.log += "Burn-in failed: \(error.localizedDescription)\n"
                 }
                 presentExportError("Burn-in failed: \(error.localizedDescription)")

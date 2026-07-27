@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 struct TranscriptionResult {
     let backend: String
@@ -20,16 +21,37 @@ enum TranscriptionServiceError: LocalizedError {
 }
 
 struct TranscriptionService {
+    /// Decides which engine runs a job. `.auto` resolves to the built-in
+    /// whisper.cpp engine (always available); explicitly chosen backends run
+    /// as stored. A legacy `.auto` setting can be paired with a non-GGML
+    /// model, which the native engine cannot load, so the run substitutes
+    /// the built-in default model. A stored GGML model is kept as-is; the
+    /// store's normalization makes an `.auto` + GGML pairing unreachable
+    /// today, but it is handled here anyway so this function does not
+    /// depend on that invariant (hand-edited plists exist). Resolution is
+    /// per-dispatch and never rewrites the user's stored settings.
+    static func resolveDispatch(
+        backend: WhisperBackend,
+        model: String
+    ) -> (backend: WhisperBackend, model: String) {
+        guard backend == .auto else {
+            return (backend, model)
+        }
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (.native, trimmed.hasPrefix("ggml-") ? trimmed : ModelDownloader.defaultModel)
+    }
+
     @MainActor
     func transcribe(
         videoURL: URL,
         settings: JobSettingsSnapshot,
         progress: @escaping @MainActor (JobProgress) -> Void
     ) async throws -> TranscriptionResult {
+        let resolved = Self.resolveDispatch(backend: settings.whisperBackend, model: settings.whisperModel)
         let snapshot = TranscriptionSettingsSnapshot(
             sourceLanguage: settings.sourceLanguage,
-            whisperModel: settings.whisperModel,
-            whisperBackendRawValue: settings.whisperBackend.rawValue,
+            whisperModel: resolved.model,
+            whisperBackendRawValue: resolved.backend.rawValue,
             preprocessAudio: settings.preprocessAudio,
             vadFilter: settings.vadFilter,
             removeEmptySegments: settings.removeEmptySegments,
@@ -43,7 +65,50 @@ struct TranscriptionService {
             noSpeechThreshold: settings.noSpeechThreshold
         )
 
+        if resolved.backend == .native {
+            return try await transcribeNatively(videoURL: videoURL, snapshot: snapshot, progress: progress)
+        }
+
         let scriptURL = try BackendScriptWriter.ensureScript()
+
+        // Extract audio natively (AVFoundation) so the helper skips its ffmpeg
+        // step. "Clean audio" preprocessing is ffmpeg-only, so when it is on
+        // and ffmpeg exists the helper keeps running its own filter chain.
+        let wantsPreprocess = snapshot.preprocessAudio && ProcessEnvironment.hasFFmpeg
+        let cachedWav = try AudioCache.cachedAudioURL(for: videoURL, preprocess: wantsPreprocess)
+        var audioArgument: [String] = []
+        let cachedWavSize = (try? FileManager.default.attributesOfItem(atPath: cachedWav.path)[.size] as? UInt64) ?? 0
+        if cachedWavSize > 0 {
+            // Safe: extraction is atomic (temp file + move), so existence == validity;
+            // the size > 0 check mirrors the Python helper's cache-hit rule, since
+            // the cache is shared with entries it writes.
+            audioArgument = ["--audio-wav", cachedWav.path]
+        } else if !wantsPreprocess {
+            progress(JobProgress(stage: .extractingAudio, detail: "Extracting audio.", fraction: 0.08))
+            do {
+                try await AudioExtractor.extract(from: videoURL, to: cachedWav)
+                AudioCache.prune(directory: AudioCache.directory, keeping: cachedWav)
+                audioArgument = ["--audio-wav", cachedWav.path]
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Exotic container AVFoundation can't read: fall back to the
+                // Python/ffmpeg path by passing nothing. Never worse than today.
+                let fallback = ProcessEnvironment.hasFFmpeg
+                    ? "falling back to ffmpeg."
+                    : "this file may need ffmpeg installed."
+                progress(JobProgress(
+                    stage: .extractingAudio,
+                    detail: "Native extraction failed (\(error.localizedDescription)); \(fallback)",
+                    fraction: 0.08
+                ))
+            }
+        }
+        // wantsPreprocess && no cache → pass nothing; the Python helper runs
+        // its ffmpeg filter chain exactly as today.
+        // Freezes the value so the @Sendable closure below captures a `let`.
+        let finalAudioArguments = audioArgument
+
         let processBox = ProcessBox()
 
         return try await withTaskCancellationHandler {
@@ -73,7 +138,7 @@ struct TranscriptionService {
                 "\(snapshot.temperature)",
                 "--no-speech-threshold",
                 "\(snapshot.noSpeechThreshold)",
-            ]
+            ] + finalAudioArguments
             processBox.process = process
 
             let stdout = PipeCollector()
@@ -135,6 +200,98 @@ struct TranscriptionService {
             return TranscriptionResult(backend: payload.backend, segments: cleanedSegments)
         } onCancel: {
             processBox.terminate()
+        }
+    }
+
+    /// Fully in-process path for the built-in whisper.cpp backend: native
+    /// audio extraction → model download (short-circuits when installed) →
+    /// WhisperCppEngine → the same TranscriptionPostProcessor cleanup the
+    /// Python backends get. "Clean audio" preprocessing is ffmpeg-only by
+    /// design, so this path always uses plain extraction under the
+    /// preprocess=false cache key regardless of the toggle.
+    @MainActor
+    private func transcribeNatively(
+        videoURL: URL,
+        snapshot: TranscriptionSettingsSnapshot,
+        progress: @escaping @MainActor (JobProgress) -> Void
+    ) async throws -> TranscriptionResult {
+        let cachedWav = try AudioCache.cachedAudioURL(for: videoURL, preprocess: false)
+        let cachedWavSize = (try? FileManager.default.attributesOfItem(atPath: cachedWav.path)[.size] as? UInt64) ?? 0
+        if cachedWavSize > 0 {
+            progress(JobProgress(stage: .extractingAudio, detail: "Using cached extracted audio.", fraction: 0.12))
+        } else {
+            progress(JobProgress(stage: .extractingAudio, detail: "Extracting audio.", fraction: 0.08))
+            // The extractor throttles to 5% steps; mapped into the same
+            // 0.08–0.12 band the Python helper uses for extraction.
+            try await AudioExtractor.extract(from: videoURL, to: cachedWav) { fraction in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        progress(JobProgress(
+                            stage: .extractingAudio,
+                            detail: "Extracting audio.",
+                            fraction: 0.08 + fraction * 0.04
+                        ))
+                    }
+                }
+            }
+            AudioCache.prune(directory: AudioCache.directory, keeping: cachedWav)
+        }
+
+        // whisper_full's abort callback fires on whisper's worker threads,
+        // which have no current Task; cancellation travels through this
+        // thread-independent flag instead of Task.isCancelled.
+        let cancelFlag = OSAllocatedUnfairLock(initialState: false)
+        return try await withTaskCancellationHandler {
+            let modelURL = try await ModelDownloader().ensureInstalled(model: snapshot.whisperModel) { update in
+                // ensureInstalled reports on a background queue; hop to the
+                // main actor in emission order before touching UI state. Its
+                // raw 0–1 download fraction is remapped into the 0.12–0.18
+                // band (the Python path pins loadingModel at 0.18) so the
+                // bar does not hit 100% mid-download; the detail text keeps
+                // the downloader's "(N%)" wording.
+                let remapped = JobProgress(
+                    stage: update.stage,
+                    detail: update.detail,
+                    fraction: update.fraction.map { 0.12 + $0 * 0.06 }
+                )
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        progress(remapped)
+                    }
+                }
+            }
+            try Task.checkCancellation()
+            progress(JobProgress(stage: .transcribing, detail: "Transcribing with the built-in engine.", fraction: 0.2))
+            let result = try await WhisperCppEngine().transcribe(
+                wavURL: cachedWav,
+                modelURL: modelURL,
+                language: snapshot.sourceLanguage,
+                beamSize: snapshot.beamSize,
+                noSpeechThreshold: snapshot.noSpeechThreshold,
+                onProgress: { fraction in
+                    // Inference 0→1 mapped into the 0.2–0.92 transcribing
+                    // band, matching the Python helpers' fraction range.
+                    let clamped = max(0, min(1, fraction))
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            progress(JobProgress(
+                                stage: .transcribing,
+                                detail: "Transcribing with the built-in engine.",
+                                fraction: 0.2 + clamped * 0.72
+                            ))
+                        }
+                    }
+                },
+                isCancelled: { cancelFlag.withLock { $0 } }
+            )
+            // A cancel landing after whisper_full's last abort poll would
+            // otherwise report success; re-check like the Python path does
+            // after its subprocess exits.
+            try Task.checkCancellation()
+            let cleanedSegments = TranscriptionPostProcessor.clean(result.segments, settings: snapshot)
+            return TranscriptionResult(backend: WhisperBackend.native.rawValue, segments: cleanedSegments)
+        } onCancel: {
+            cancelFlag.withLock { $0 = true }
         }
     }
 

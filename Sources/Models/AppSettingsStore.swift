@@ -5,6 +5,7 @@ enum WhisperBackend: String, CaseIterable, Identifiable, Codable, Hashable {
     case mlxWhisper = "mlx-whisper"
     case fasterWhisper = "faster-whisper"
     case qwen3ASR = "qwen3-asr"
+    case native = "whisper-cpp"
 
     var id: String { rawValue }
 
@@ -18,11 +19,16 @@ enum WhisperBackend: String, CaseIterable, Identifiable, Codable, Hashable {
             return "Faster Whisper"
         case .qwen3ASR:
             return "Qwen3 ASR"
+        case .native:
+            return "Built-in (whisper.cpp)"
         }
     }
 }
 
 enum TranscriptionPreset: String, CaseIterable, Identifiable, Codable, Hashable {
+    // Declaration order drives allCases and therefore picker order; raw
+    // values (the persisted case names) are unaffected by ordering.
+    case builtIn
     case bestAccuracy
     case fastAppleSilicon
     case mostCompatible
@@ -34,6 +40,7 @@ enum TranscriptionPreset: String, CaseIterable, Identifiable, Codable, Hashable 
 
     var label: String {
         switch self {
+        case .builtIn: return "Built-in (no setup)"
         case .bestAccuracy: return "Best Accuracy (Qwen3)"
         case .fastAppleSilicon: return "Fast Apple Silicon"
         case .mostCompatible: return "Most Compatible"
@@ -45,6 +52,7 @@ enum TranscriptionPreset: String, CaseIterable, Identifiable, Codable, Hashable 
 
     var backend: WhisperBackend? {
         switch self {
+        case .builtIn: return .native
         case .bestAccuracy: return .qwen3ASR
         case .fastAppleSilicon, .higherAccuracy: return .mlxWhisper
         case .mostCompatible, .draft: return .fasterWhisper
@@ -54,6 +62,7 @@ enum TranscriptionPreset: String, CaseIterable, Identifiable, Codable, Hashable 
 
     var model: String? {
         switch self {
+        case .builtIn: return ModelDownloader.defaultModel
         case .bestAccuracy: return AppSettingsStore.qwen3DefaultModel
         case .fastAppleSilicon: return "mlx-community/whisper-large-v3-turbo"
         case .mostCompatible: return "large-v3-turbo"
@@ -207,6 +216,22 @@ enum AppSettingPresets {
                 SettingsPreset(label: "Qwen3 ASR 1.7B (best)", value: AppSettingsStore.qwen3DefaultModel),
                 SettingsPreset(label: "Qwen3 ASR 0.6B (fast)", value: "Qwen/Qwen3-ASR-0.6B")
             ]
+        case .native:
+            return ModelDownloader.models.map { model in
+                SettingsPreset(label: nativeModelLabel(for: model), value: model)
+            }
+        }
+    }
+
+    private static func nativeModelLabel(for model: String) -> String {
+        switch model {
+        case "ggml-large-v3-turbo-q5_0.bin": return "Large v3 Turbo (quantized, recommended)"
+        case "ggml-large-v3-turbo.bin": return "Large v3 Turbo"
+        case "ggml-medium.bin": return "Medium"
+        case "ggml-small.bin": return "Small"
+        case "ggml-base.bin": return "Base"
+        case "ggml-tiny.bin": return "Tiny"
+        default: return model
         }
     }
 
@@ -263,7 +288,8 @@ enum AppSettingPresets {
         SettingsPreset(label: "Claude Haiku 4.5", value: "claude-haiku-4-5"),
         SettingsPreset(label: "Gemini 3.1 Pro", value: "gemini-3.1-pro-preview"),
         SettingsPreset(label: "Gemini 3.6 Flash", value: "gemini-3.6-flash"),
-        SettingsPreset(label: "Gemini 3.5 Flash-Lite", value: "gemini-3.5-flash-lite")
+        SettingsPreset(label: "Gemini 3.5 Flash-Lite", value: "gemini-3.5-flash-lite"),
+        SettingsPreset(label: "Local server (LM Studio / Ollama)", value: "local/")
     ]
 }
 
@@ -299,6 +325,8 @@ final class AppSettingsStore: ObservableObject {
     @Published var openAIAPIKey: String { didSet { save() } }
     @Published var anthropicAPIKey: String { didSet { save() } }
     @Published var googleAPIKey: String { didSet { save() } }
+    /// Base URL of the OpenAI-compatible server used by `local/` models.
+    @Published var localTranslationEndpoint: String { didSet { save() } }
     @Published var translationSourceLanguage: String { didSet { save() } }
     @Published var translationTargetLanguage: String { didSet { save() } }
     @Published var translationPrompt: String { didSet { save() } }
@@ -379,21 +407,39 @@ final class AppSettingsStore: ObservableObject {
     nonisolated static let mlxTurboModel = "mlx-community/whisper-large-v3-turbo"
     nonisolated static let fasterTurboModel = "large-v3-turbo"
     nonisolated static let qwen3DefaultModel = "Qwen/Qwen3-ASR-1.7B"
+    /// LM Studio's default server address.
+    nonisolated static let defaultLocalTranslationEndpoint = "http://localhost:1234/v1"
     static let defaultTranslationPrompt = """
     You are a professional subtitle translator. Translate faithfully and naturally for the target audience.
     Preserve meaning, tone, names, numbers, and cultural context. Keep each subtitle concise, readable, and aligned to the original timing.
     Do not add explanations, notes, censorship, markdown, or extra segments.
     """
 
-    init() {
-        let defaults = UserDefaults.standard
+    init(
+        defaults: UserDefaults = .standard,
+        readSecret: @escaping (String) -> String? = { KeychainStore.read(account: $0) },
+        writeSecret: @escaping (String, String) -> Void = { KeychainStore.write($0, account: $1) }
+    ) {
         self.defaults = defaults
-        transcriptionPreset = TranscriptionPreset(rawValue: defaults.string(forKey: "transcriptionPreset") ?? "") ?? .fastAppleSilicon
+        self.readSecret = readSecret
+        self.writeSecret = writeSecret
+        // save() always writes the whisperBackend key, so its absence means a
+        // fresh install: default to the zero-setup built-in engine. Any stored
+        // value — including legacy "auto" or an unknown string — takes the
+        // existing decode path so nothing changes for current users.
+        if defaults.string(forKey: "whisperBackend") == nil {
+            transcriptionPreset = .builtIn
+            whisperModel = ModelDownloader.defaultModel
+            whisperBackend = .native
+        } else {
+            transcriptionPreset = TranscriptionPreset(rawValue: defaults.string(forKey: "transcriptionPreset") ?? "") ?? .fastAppleSilicon
+            whisperModel = defaults.string(forKey: "whisperModel") ?? Self.mlxTurboModel
+            whisperBackend = WhisperBackend(rawValue: defaults.string(forKey: "whisperBackend") ?? "auto") ?? .auto
+        }
         transcriptionQualityPreset = TranscriptionQualityPreset(rawValue: defaults.string(forKey: "transcriptionQualityPreset") ?? "") ?? .balanced
         sourceLanguage = defaults.string(forKey: "sourceLanguage") ?? "auto"
-        whisperModel = defaults.string(forKey: "whisperModel") ?? Self.mlxTurboModel
-        whisperBackend = WhisperBackend(rawValue: defaults.string(forKey: "whisperBackend") ?? "auto") ?? .auto
         openAIModel = defaults.string(forKey: "openAIModel") ?? "gpt-5.5"
+        localTranslationEndpoint = defaults.string(forKey: "localTranslationEndpoint") ?? Self.defaultLocalTranslationEndpoint
         translationSourceLanguage = defaults.string(forKey: "translationSourceLanguage") ?? "auto"
         translationTargetLanguage = defaults.string(forKey: "translationTargetLanguage") ?? "English"
         translationPrompt = defaults.string(forKey: "translationPrompt") ?? Self.defaultTranslationPrompt
@@ -428,11 +474,11 @@ final class AppSettingsStore: ObservableObject {
         // The API keys live in the Keychain. Migrate any legacy plaintext key
         // that earlier builds stored in UserDefaults, then scrub it.
         let resolvedOpenAIKey: String
-        if let stored = KeychainStore.read(account: Self.apiKeyAccount) {
+        if let stored = readSecret(Self.apiKeyAccount) {
             resolvedOpenAIKey = stored
         } else if let legacy = defaults.string(forKey: "openAIAPIKey"), !legacy.isEmpty {
             resolvedOpenAIKey = legacy
-            KeychainStore.write(legacy, account: Self.apiKeyAccount)
+            writeSecret(legacy, Self.apiKeyAccount)
             defaults.removeObject(forKey: "openAIAPIKey")
         } else {
             resolvedOpenAIKey = ""
@@ -441,10 +487,10 @@ final class AppSettingsStore: ObservableObject {
         openAIAPIKey = resolvedOpenAIKey
         persistedAPIKey = resolvedOpenAIKey
 
-        let resolvedAnthropicKey = KeychainStore.read(account: Self.anthropicKeyAccount) ?? ""
+        let resolvedAnthropicKey = readSecret(Self.anthropicKeyAccount) ?? ""
         anthropicAPIKey = resolvedAnthropicKey
         persistedAnthropicKey = resolvedAnthropicKey
-        let resolvedGoogleKey = KeychainStore.read(account: Self.googleKeyAccount) ?? ""
+        let resolvedGoogleKey = readSecret(Self.googleKeyAccount) ?? ""
         googleAPIKey = resolvedGoogleKey
         persistedGoogleKey = resolvedGoogleKey
 
@@ -452,6 +498,8 @@ final class AppSettingsStore: ObservableObject {
         save()
     }
 
+    private let readSecret: (String) -> String?
+    private let writeSecret: (String, String) -> Void
     private var isApplyingPreset = false
     private var isApplyingQualityPreset = false
     private var persistedAPIKey = ""
@@ -466,11 +514,26 @@ final class AppSettingsStore: ObservableObject {
         translationAPIKey(for: currentTranslationProvider)
     }
 
+    /// Whether the selected translation model can actually run: cloud
+    /// providers need their API key, the local provider needs a server URL
+    /// (and never a key). UI gates and auto-translate checks read this
+    /// instead of testing `currentTranslationAPIKey` directly.
+    var isTranslationReady: Bool {
+        switch currentTranslationProvider {
+        case .local:
+            return !localTranslationEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .openai, .anthropic, .google:
+            return !currentTranslationAPIKey.isEmpty
+        }
+    }
+
     func translationAPIKey(for provider: TranslationProvider) -> String {
         switch provider {
         case .openai: return openAIAPIKey
         case .anthropic: return anthropicAPIKey
         case .google: return googleAPIKey
+        // Local servers need no API key.
+        case .local: return ""
         }
     }
 
@@ -481,6 +544,7 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(whisperModel, forKey: "whisperModel")
         defaults.set(whisperBackend.rawValue, forKey: "whisperBackend")
         defaults.set(openAIModel, forKey: "openAIModel")
+        defaults.set(localTranslationEndpoint, forKey: "localTranslationEndpoint")
         defaults.set(translationSourceLanguage, forKey: "translationSourceLanguage")
         defaults.set(translationTargetLanguage, forKey: "translationTargetLanguage")
         defaults.set(translationPrompt, forKey: "translationPrompt")
@@ -512,15 +576,15 @@ final class AppSettingsStore: ObservableObject {
         // when a key itself changed so typing elsewhere (e.g. the prompt
         // editor) does not trigger a Keychain write per keystroke.
         if openAIAPIKey != persistedAPIKey {
-            KeychainStore.write(openAIAPIKey, account: Self.apiKeyAccount)
+            writeSecret(openAIAPIKey, Self.apiKeyAccount)
             persistedAPIKey = openAIAPIKey
         }
         if anthropicAPIKey != persistedAnthropicKey {
-            KeychainStore.write(anthropicAPIKey, account: Self.anthropicKeyAccount)
+            writeSecret(anthropicAPIKey, Self.anthropicKeyAccount)
             persistedAnthropicKey = anthropicAPIKey
         }
         if googleAPIKey != persistedGoogleKey {
-            KeychainStore.write(googleAPIKey, account: Self.googleKeyAccount)
+            writeSecret(googleAPIKey, Self.googleKeyAccount)
             persistedGoogleKey = googleAPIKey
         }
     }
@@ -533,7 +597,7 @@ final class AppSettingsStore: ObservableObject {
         let model = whisperModel.trimmingCharacters(in: .whitespacesAndNewlines)
         switch whisperBackend {
         case .fasterWhisper:
-            return model.hasPrefix("mlx-community/") || model.hasPrefix("Qwen/")
+            return model.hasPrefix("mlx-community/") || model.hasPrefix("Qwen/") || model.hasPrefix("ggml-")
                 ? "Faster Whisper needs a Faster Whisper model such as \(Self.fasterTurboModel)."
                 : nil
         case .mlxWhisper:
@@ -544,6 +608,10 @@ final class AppSettingsStore: ObservableObject {
             return model.hasPrefix("Qwen/Qwen3-ASR")
                 ? nil
                 : "Qwen3 ASR needs a Qwen3 model such as \(Self.qwen3DefaultModel)."
+        case .native:
+            return model.hasPrefix("ggml-")
+                ? nil
+                : "The built-in engine needs a GGML model such as \(ModelDownloader.defaultModel)."
         case .auto:
             return nil
         }
@@ -593,16 +661,20 @@ final class AppSettingsStore: ObservableObject {
 
         switch whisperBackend {
         case .auto, .mlxWhisper:
-            if force || trimmedModel.isEmpty || trimmedModel == Self.fasterTurboModel || trimmedModel.hasPrefix("Qwen/") {
+            if force || trimmedModel.isEmpty || trimmedModel == Self.fasterTurboModel || trimmedModel.hasPrefix("Qwen/") || trimmedModel.hasPrefix("ggml-") {
                 whisperModel = Self.mlxTurboModel
             }
         case .fasterWhisper:
-            if force || trimmedModel.isEmpty || trimmedModel.hasPrefix("mlx-community/whisper-") || trimmedModel.hasPrefix("Qwen/") {
+            if force || trimmedModel.isEmpty || trimmedModel.hasPrefix("mlx-community/whisper-") || trimmedModel.hasPrefix("Qwen/") || trimmedModel.hasPrefix("ggml-") {
                 whisperModel = Self.fasterTurboModel
             }
         case .qwen3ASR:
             if force || !trimmedModel.hasPrefix("Qwen/Qwen3-ASR") {
                 whisperModel = Self.qwen3DefaultModel
+            }
+        case .native:
+            if force || !trimmedModel.hasPrefix("ggml-") {
+                whisperModel = ModelDownloader.defaultModel
             }
         }
     }

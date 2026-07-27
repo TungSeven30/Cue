@@ -126,4 +126,128 @@ struct TranslationServiceParsingTests {
             return
         }
     }
+
+    // The local/ prefix (with the slash) selects the local provider,
+    // case-insensitively; a bare "local/" is valid because LM Studio ignores
+    // the model field when a single model is loaded.
+    @Test func inferSelectsLocalProviderForLocalPrefix() {
+        #expect(TranslationProvider.infer(from: "local/qwen3.6-35b") == .local)
+        #expect(TranslationProvider.infer(from: "LOCAL/x") == .local)
+        #expect(TranslationProvider.infer(from: "local/") == .local)
+        #expect(TranslationProvider.infer(from: "localmodel") == .openai)
+    }
+
+    @Test func localEnvelopeExtractsMessageContent() throws {
+        let json = """
+        {
+          "choices": [
+            {"index": 0, "message": {"role": "assistant", "content": "{\\"segments\\":[]}"}, "finish_reason": "stop"}
+          ]
+        }
+        """
+        let text = try TranslationService.extractOutputText(provider: .local, data: Data(json.utf8))
+        #expect(text == "{\"segments\":[]}")
+    }
+
+    @Test func localLengthFinishReasonThrowsResponseTooLarge() {
+        let json = """
+        {"choices": [{"message": {"role": "assistant", "content": "{\\"segments\\":["}, "finish_reason": "length"}]}
+        """
+        do {
+            _ = try TranslationService.extractOutputText(provider: .local, data: Data(json.utf8))
+            Issue.record("Expected responseTooLarge to be thrown")
+        } catch TranslationServiceError.responseTooLarge {
+        } catch {
+            Issue.record("Expected responseTooLarge, got \(error)")
+        }
+    }
+
+    @Test func localEmptyChoicesThrowsInvalidResponse() {
+        let json = """
+        {"choices": []}
+        """
+        do {
+            _ = try TranslationService.extractOutputText(provider: .local, data: Data(json.utf8))
+            Issue.record("Expected invalidResponse to be thrown")
+        } catch TranslationServiceError.invalidResponse {
+        } catch {
+            Issue.record("Expected invalidResponse, got \(error)")
+        }
+    }
+
+    // The local/ prefix is routing-only: the wire model is the remainder, and
+    // the endpoint join must tolerate a trailing slash on the stored base URL.
+    @Test func localRequestStripsPrefixAndJoinsEndpoint() throws {
+        let request = try TranslationService.makeRequest(
+            provider: .local,
+            model: "local/qwen3.6-35b",
+            apiKey: "",
+            systemPrompt: "system",
+            userText: "user",
+            localEndpoint: "http://localhost:1234/v1"
+        )
+        #expect(request.url?.absoluteString == "http://localhost:1234/v1/chat/completions")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+        #expect(request.timeoutInterval == 600)
+
+        let body = try #require(request.httpBody)
+        let decoded = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(decoded["model"] as? String == "qwen3.6-35b")
+
+        let trailingSlash = try TranslationService.makeRequest(
+            provider: .local,
+            model: "local/",
+            apiKey: "",
+            systemPrompt: "system",
+            userText: "user",
+            localEndpoint: "http://192.168.1.10:1234/v1/"
+        )
+        #expect(trailingSlash.url?.absoluteString == "http://192.168.1.10:1234/v1/chat/completions")
+        // Bare "local/" sends an empty wire model — LM Studio serves whatever
+        // model is loaded, so this must not be rejected client-side.
+        let slashBody = try #require(trailingSlash.httpBody)
+        let slashDecoded = try #require(try JSONSerialization.jsonObject(with: slashBody) as? [String: Any])
+        #expect(slashDecoded["model"] as? String == "")
+    }
+
+    // LM Studio's UI displays "Reachable at: http://host:1234" without the /v1
+    // the API lives under; a pasted path-less base must get /v1 appended, while
+    // an explicit path — /v1 or otherwise — is respected verbatim.
+    @Test func localEndpointWithoutPathGainsV1() throws {
+        let bare = try TranslationService.makeRequest(
+            provider: .local,
+            model: "local/x",
+            apiKey: "",
+            systemPrompt: "s",
+            userText: "u",
+            localEndpoint: "http://127.0.0.1:1234"
+        )
+        #expect(bare.url?.absoluteString == "http://127.0.0.1:1234/v1/chat/completions")
+
+        let customPath = try TranslationService.makeRequest(
+            provider: .local,
+            model: "local/x",
+            apiKey: "",
+            systemPrompt: "s",
+            userText: "u",
+            localEndpoint: "http://127.0.0.1:8080/api/v1"
+        )
+        #expect(customPath.url?.absoluteString == "http://127.0.0.1:8080/api/v1/chat/completions")
+    }
+
+    // A 200 response carrying {"error": ...} (LM Studio's unexpected-endpoint
+    // shape) must surface the server's message, not a generic parse failure.
+    @Test func localErrorBodySurfacesServerMessage() {
+        let json = """
+        {"error": "Unexpected endpoint or method. (POST /chat/completions)"}
+        """
+        do {
+            _ = try TranslationService.extractOutputText(provider: .local, data: Data(json.utf8))
+            Issue.record("Expected apiError to be thrown")
+        } catch TranslationServiceError.apiError(let message) {
+            #expect(message.contains("Unexpected endpoint"))
+        } catch {
+            Issue.record("Expected apiError, got \(error)")
+        }
+    }
 }

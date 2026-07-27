@@ -80,6 +80,33 @@ final class AppModel: ObservableObject {
         NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
             .sink { [weak self] _ in self?.flushPendingWork() }
             .store(in: &cancellables)
+        // Diagnostics classify probes as required/optional based on the
+        // selected backend, so a backend switch must re-run them or the
+        // pill keeps a stale verdict. dropFirst skips the value replayed
+        // on subscription (the runDiagnostics() below covers launch); the
+        // sink fires during willSet, but runDiagnostics reads the setting
+        // inside a Task, which runs after the assignment lands.
+        settings.$whisperBackend
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] _ in self?.runDiagnostics() }
+            .store(in: &cancellables)
+        // The translation-key row depends on the selected model (provider),
+        // the local server URL, and the API keys, so edits to any of them
+        // must also re-run diagnostics. Unlike the backend picker, these
+        // fields change on every keystroke and runDiagnostics shells out to
+        // probe processes, so the debounce is load-bearing: it collapses a
+        // typing burst into one re-run after the user pauses.
+        Publishers.MergeMany(
+            settings.$openAIModel.dropFirst().removeDuplicates().map { _ in () },
+            settings.$localTranslationEndpoint.dropFirst().removeDuplicates().map { _ in () },
+            settings.$openAIAPIKey.dropFirst().removeDuplicates().map { _ in () },
+            settings.$anthropicAPIKey.dropFirst().removeDuplicates().map { _ in () },
+            settings.$googleAPIKey.dropFirst().removeDuplicates().map { _ in () }
+        )
+        .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
+        .sink { [weak self] _ in self?.runDiagnostics() }
+        .store(in: &cancellables)
         runDiagnostics()
         configureWatchFolder()
         if settings.watchFolderEnabled && !settings.watchFolderPath.isEmpty {
@@ -155,7 +182,7 @@ final class AppModel: ObservableObject {
 
     var canTranslate: Bool {
         !transcriptSegments.isEmpty && !isSelectedJobRunning && currentJob?.status != .queued
-            && !settings.currentTranslationAPIKey.isEmpty
+            && settings.isTranslationReady
     }
 
     var canCancel: Bool {
@@ -169,7 +196,7 @@ final class AppModel: ObservableObject {
         return !job.transcriptSegments.isEmpty
             && !job.status.isRunning
             && !isGeneratingSummary
-            && !settings.currentTranslationAPIKey.isEmpty
+            && settings.isTranslationReady
     }
 
     func checkBurnInAvailability() {
@@ -234,13 +261,11 @@ final class AppModel: ObservableObject {
         guard !diagnostics.isEmpty else {
             return "Not checked"
         }
+        // Only hard failures count against the summary: missing optional
+        // tools are warnings in the popover list, not toolbar alarms.
         let failures = diagnostics.filter { $0.state == .failed }.count
-        let warnings = diagnostics.filter { $0.state == .warning }.count
         if failures > 0 {
             return "\(failures) missing"
-        }
-        if warnings > 0 {
-            return "\(warnings) warning"
         }
         return "Ready"
     }
@@ -339,11 +364,15 @@ final class AppModel: ObservableObject {
         Task {
             diagnostics = await diagnosticsService.run(
                 translationAPIKey: settings.currentTranslationAPIKey,
-                providerLabel: settings.currentTranslationProvider.label
+                translationProvider: settings.currentTranslationProvider,
+                selectedBackend: settings.whisperBackend
             )
             isRunningDiagnostics = false
             if !didOfferSetupGuide {
                 didOfferSetupGuide = true
+                // Only a required diagnostic reports .failed (the selected
+                // Python backend's missing module); missing optional tools
+                // are warnings, so a fresh install never auto-opens this.
                 if diagnostics.contains(where: { $0.state == .failed }) {
                     isShowingSetupGuide = true
                 }
@@ -380,7 +409,7 @@ final class AppModel: ObservableObject {
         if job.status.isRunning { return false }
         if job.status == .queued { return true }
         if job.transcriptSegments.isEmpty { return true }
-        return job.translatedSegments.isEmpty && !settings.currentTranslationAPIKey.isEmpty
+        return job.translatedSegments.isEmpty && settings.isTranslationReady
     }
 
     /// Runs the next queued job. Serial on purpose: one model on the GPU at
@@ -574,8 +603,8 @@ final class AppModel: ObservableObject {
             appendLog("Skipped transcription because this file and transcription settings already have a transcript.", to: jobID)
             recordWatchOutcome(for: jobID, success: true)
             // Same guard as the real completion path: auto-translating with
-            // no API key would immediately mark this finished job as Failed.
-            if autoTranslate && !hasTranslation && !settings.currentTranslationAPIKey.isEmpty {
+            // no usable provider would immediately mark this job as Failed.
+            if autoTranslate && !hasTranslation && settings.isTranslationReady {
                 startTranslation(jobID: jobID)
             } else {
                 processQueue()
@@ -601,7 +630,7 @@ final class AppModel: ObservableObject {
                 let result = try await transcriptionService.transcribe(videoURL: videoURL, settings: resolved) { [weak self] progress in
                     self?.updateProgress(progress, for: jobID)
                 }
-                let willTranslate = autoTranslate && !settings.currentTranslationAPIKey.isEmpty
+                let willTranslate = autoTranslate && settings.isTranslationReady
                 // When a translation follows, the summary is generated from
                 // the translated text instead, at the end of that step.
                 var summary: String?
@@ -1176,8 +1205,11 @@ final class AppModel: ObservableObject {
         for id: UUID
     ) async -> String? {
         guard settings.generateSummary, !segments.isEmpty else { return nil }
-        guard !settings.currentTranslationAPIKey.isEmpty else {
-            appendLog("Skipped the intro summary because no \(settings.currentTranslationProvider.label) API key is configured.", to: id)
+        guard settings.isTranslationReady else {
+            let reason = settings.currentTranslationProvider == .local
+                ? "no local server URL is configured"
+                : "no \(settings.currentTranslationProvider.label) API key is configured"
+            appendLog("Skipped the intro summary because \(reason).", to: id)
             return nil
         }
         updateJob(id, debouncePersist: true) { job in
@@ -1206,7 +1238,8 @@ final class AppModel: ObservableObject {
         return TranslationCredentials(
             apiKey: settings.translationAPIKey(for: provider),
             prompt: settings.translationPrompt,
-            provider: provider
+            provider: provider,
+            localEndpoint: settings.localTranslationEndpoint
         )
     }
 

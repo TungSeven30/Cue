@@ -38,6 +38,7 @@ struct SettingsView: View {
                     )
                     TextField("Custom Whisper model", text: $settings.whisperModel)
                     Toggle("Clean audio before transcription", isOn: $settings.preprocessAudio)
+                        .help("Cleans audio with an ffmpeg filter before transcription; skipped when ffmpeg is not installed")
                     Toggle("Voice activity detection", isOn: $settings.vadFilter)
                     Toggle("Remove empty segments", isOn: $settings.removeEmptySegments)
                     Toggle("Remove repeated text", isOn: $settings.removeRepeatedText)
@@ -119,10 +120,11 @@ struct SettingsView: View {
                 SecureField("OpenAI API key", text: $settings.openAIAPIKey)
                 SecureField("Anthropic API key", text: $settings.anthropicAPIKey)
                 SecureField("Google API key", text: $settings.googleAPIKey)
+                TextField("Local server URL", text: $settings.localTranslationEndpoint)
             } header: {
                 Label("Translation", systemImage: "character.bubble")
             } footer: {
-                Text("Use any OpenAI (gpt-…), Anthropic (claude-…), or Google (gemini-…) model — the provider and API key are chosen from the model name. Keys are stored in the Keychain.")
+                Text("Use any OpenAI (gpt-…), Anthropic (claude-…), or Google (gemini-…) model — the provider and API key are chosen from the model name. Keys are stored in the Keychain. A local/… model needs no key — it talks to the OpenAI-compatible server at the Local server URL (LM Studio, Ollama).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -164,7 +166,7 @@ struct SettingsView: View {
 
                     if watchFolderNeedsAPIKeyWarning {
                         Label(
-                            "Files will be transcribed but not translated until a translation API key is added.",
+                            "Files will be transcribed but not translated until a translation API key or local server is configured.",
                             systemImage: "exclamationmark.triangle"
                         )
                         .font(.caption)
@@ -198,7 +200,7 @@ struct SettingsView: View {
         // missing key before bedtime, not at breakfast.
         let autoTranslate = settings.watchFolderProfile.autoTranslate
             ?? settings.autoTranslateAfterTranscription
-        return autoTranslate && settings.currentTranslationAPIKey.isEmpty
+        return autoTranslate && !settings.isTranslationReady
     }
 
     private func chooseWatchFolder() {

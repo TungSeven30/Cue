@@ -23,11 +23,22 @@ Everything runs locally except translation and summaries, which call the API pro
 - Prepended as the first cue of SRT/VTT exports, shown from 0s until the first dialogue (3s minimum, 10s cap)
 - Generated in the translation's target language, or the film's own language for untranslated jobs
 
+**Watch folder**
+- Settings > Watch Folder: turn it on, choose a folder, and set that folder's own language/preset/translation profile once — every video dropped in afterward is queued, transcribed, and translated automatically, with SRT sidecars saved next to each file
+- The app holds a sleep assertion while jobs are running, so an idle Mac won't nap mid-batch — but a closed lid still puts it to sleep, so leave the lid open or connect a display for overnight runs
+- "Clear Watch History" forgets which files were already processed, so everything currently in the folder is picked up again
+
+**Queue control**
+- Drag jobs in the sidebar to reorder them, or use the context menu's Move to Top / Move to Bottom
+- Each job's context menu has "Job Settings…" for per-job overrides — source language, preset, translation target, auto-translate — that inherit from your Settings defaults until you change them; a small slider badge marks jobs with overrides
+- Remove a job from the queue (without deleting it) if you change your mind before it runs
+
 **Review & export**
 - Three-pane UI: job queue sidebar, editable transcript/translation tabs, resizable video preview with the active subtitle highlighted and overlaid on the picture
 - Search, warning-filter (empty text, bad timing, overlong cues), and bulk find-and-replace
 - Export SRT, WebVTT, plain text, Markdown, and JSON — original, translated, and bilingual documents, plus run logs
 - Auto-sidecar export drops language-coded `.srt` files next to the source video so media players pick them up automatically
+- Burn in subtitles as permanent video text: from the export sheet or a job's context menu ("Burn In Video…"), pick a text size and it renders `<name>.burned.mp4` next to the source video. This is what your ffmpeg install (also used for audio extraction) needs libass for — the standard Homebrew bottle usually includes it, but the app preflights the check and tells you if your build lacks the subtitles filter. Output is always 8-bit SDR H.264 — HDR sources come out tone-shifted, so re-encode from an SDR source if that matters to you
 
 **Reliability**
 - Serial job queue for batch processing (one model on the GPU at a time) with per-job persistence — a crash or force-quit never loses finished work, and interrupted jobs resume

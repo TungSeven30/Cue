@@ -119,6 +119,62 @@ enum TranscriptionQualityPreset: String, CaseIterable, Identifiable, Codable, Ha
     }
 }
 
+/// The decoding/cleanup parameter set a quality preset stands for, as a pure
+/// value so job-settings resolution can use it without mutating the store.
+struct TranscriptionQualityParameters: Hashable {
+    var preprocessAudio: Bool
+    var vadFilter: Bool
+    var removeEmptySegments: Bool
+    var removeRepeatedText: Bool
+    var mergeShortSegments: Bool
+    var minSegmentDuration: Double
+    var maxMergeGap: Double
+    var beamSize: Int
+    var bestOf: Int
+    var temperature: Double
+    var noSpeechThreshold: Double
+}
+
+extension TranscriptionQualityPreset {
+    /// `nil` for `.custom`, which means "whatever the individual fields say".
+    var parameters: TranscriptionQualityParameters? {
+        switch self {
+        case .fast:
+            return TranscriptionQualityParameters(
+                preprocessAudio: false, vadFilter: true, removeEmptySegments: true,
+                removeRepeatedText: true, mergeShortSegments: false,
+                minSegmentDuration: 0.45, maxMergeGap: 0.25,
+                beamSize: 3, bestOf: 3, temperature: 0, noSpeechThreshold: 0.6)
+        case .balanced:
+            return TranscriptionQualityParameters(
+                preprocessAudio: true, vadFilter: true, removeEmptySegments: true,
+                removeRepeatedText: true, mergeShortSegments: true,
+                minSegmentDuration: 0.7, maxMergeGap: 0.45,
+                beamSize: 5, bestOf: 5, temperature: 0, noSpeechThreshold: 0.6)
+        case .movieDialogue:
+            return TranscriptionQualityParameters(
+                preprocessAudio: true, vadFilter: true, removeEmptySegments: true,
+                removeRepeatedText: true, mergeShortSegments: true,
+                minSegmentDuration: 0.9, maxMergeGap: 0.65,
+                beamSize: 6, bestOf: 6, temperature: 0, noSpeechThreshold: 0.5)
+        case .noisyAudio:
+            return TranscriptionQualityParameters(
+                preprocessAudio: true, vadFilter: true, removeEmptySegments: true,
+                removeRepeatedText: true, mergeShortSegments: true,
+                minSegmentDuration: 1.0, maxMergeGap: 0.8,
+                beamSize: 7, bestOf: 7, temperature: 0, noSpeechThreshold: 0.45)
+        case .maximumAccuracy:
+            return TranscriptionQualityParameters(
+                preprocessAudio: true, vadFilter: true, removeEmptySegments: true,
+                removeRepeatedText: true, mergeShortSegments: true,
+                minSegmentDuration: 0.8, maxMergeGap: 0.5,
+                beamSize: 8, bestOf: 8, temperature: 0, noSpeechThreshold: 0.5)
+        case .custom:
+            return nil
+        }
+    }
+}
+
 struct SettingsPreset: Identifiable, Hashable {
     let label: String
     let value: String
@@ -280,6 +336,9 @@ final class AppSettingsStore: ObservableObject {
     @Published var generateSummary: Bool { didSet { save() } }
     @Published var autoStartAddedJobs: Bool { didSet { save() } }
     @Published var autoExportSidecar: Bool { didSet { save() } }
+    @Published var watchFolderEnabled: Bool { didSet { save() } }
+    @Published var watchFolderPath: String { didSet { save() } }
+    @Published var watchFolderProfile: JobSettingsOverrides { didSet { save() } }
     @Published var showAdvancedControls: Bool { didSet { save() } }
     @Published var translationChunkMode: TranslationChunkMode { didSet { save() } }
     @Published var translationParallelism: Int {
@@ -388,6 +447,14 @@ final class AppSettingsStore: ObservableObject {
         generateSummary = defaults.bool(forKey: "generateIntroSummary")
         autoStartAddedJobs = defaults.object(forKey: "autoStartAddedJobs") as? Bool ?? true
         autoExportSidecar = defaults.bool(forKey: "autoExportSidecar")
+        watchFolderEnabled = defaults.bool(forKey: "watchFolderEnabled")
+        watchFolderPath = defaults.string(forKey: "watchFolderPath") ?? ""
+        if let data = defaults.data(forKey: "watchFolderProfile"),
+           let profile = try? JSONDecoder().decode(JobSettingsOverrides.self, from: data) {
+            watchFolderProfile = profile
+        } else {
+            watchFolderProfile = JobSettingsOverrides()
+        }
         showAdvancedControls = defaults.bool(forKey: "showAdvancedControls")
         translationChunkMode = TranslationChunkMode(rawValue: defaults.string(forKey: "translationChunkMode") ?? "") ?? .balanced
         translationParallelism = max(1, min(4, defaults.object(forKey: "translationParallelism") as? Int ?? 2))
@@ -485,6 +552,11 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(generateSummary, forKey: "generateIntroSummary")
         defaults.set(autoStartAddedJobs, forKey: "autoStartAddedJobs")
         defaults.set(autoExportSidecar, forKey: "autoExportSidecar")
+        defaults.set(watchFolderEnabled, forKey: "watchFolderEnabled")
+        defaults.set(watchFolderPath, forKey: "watchFolderPath")
+        if let data = try? JSONEncoder().encode(watchFolderProfile) {
+            defaults.set(data, forKey: "watchFolderProfile")
+        }
         defaults.set(showAdvancedControls, forKey: "showAdvancedControls")
         defaults.set(translationChunkMode.rawValue, forKey: "translationChunkMode")
         defaults.set(translationParallelism, forKey: "translationParallelism")
@@ -561,71 +633,19 @@ final class AppSettingsStore: ObservableObject {
 
     private func applyQualityPreset() {
         guard !isApplyingQualityPreset else { return }
+        guard let params = transcriptionQualityPreset.parameters else { return }
         isApplyingQualityPreset = true
-        switch transcriptionQualityPreset {
-        case .fast:
-            preprocessAudio = false
-            vadFilter = true
-            removeEmptySegments = true
-            removeRepeatedText = true
-            mergeShortSegments = false
-            minSegmentDuration = 0.45
-            maxMergeGap = 0.25
-            beamSize = 3
-            bestOf = 3
-            temperature = 0
-            noSpeechThreshold = 0.6
-        case .balanced:
-            preprocessAudio = true
-            vadFilter = true
-            removeEmptySegments = true
-            removeRepeatedText = true
-            mergeShortSegments = true
-            minSegmentDuration = 0.7
-            maxMergeGap = 0.45
-            beamSize = 5
-            bestOf = 5
-            temperature = 0
-            noSpeechThreshold = 0.6
-        case .movieDialogue:
-            preprocessAudio = true
-            vadFilter = true
-            removeEmptySegments = true
-            removeRepeatedText = true
-            mergeShortSegments = true
-            minSegmentDuration = 0.9
-            maxMergeGap = 0.65
-            beamSize = 6
-            bestOf = 6
-            temperature = 0
-            noSpeechThreshold = 0.5
-        case .noisyAudio:
-            preprocessAudio = true
-            vadFilter = true
-            removeEmptySegments = true
-            removeRepeatedText = true
-            mergeShortSegments = true
-            minSegmentDuration = 1.0
-            maxMergeGap = 0.8
-            beamSize = 7
-            bestOf = 7
-            temperature = 0
-            noSpeechThreshold = 0.45
-        case .maximumAccuracy:
-            preprocessAudio = true
-            vadFilter = true
-            removeEmptySegments = true
-            removeRepeatedText = true
-            mergeShortSegments = true
-            minSegmentDuration = 0.8
-            maxMergeGap = 0.5
-            beamSize = 8
-            bestOf = 8
-            temperature = 0
-            noSpeechThreshold = 0.5
-        case .custom:
-            break
-        }
+        preprocessAudio = params.preprocessAudio
+        vadFilter = params.vadFilter
+        removeEmptySegments = params.removeEmptySegments
+        removeRepeatedText = params.removeRepeatedText
+        mergeShortSegments = params.mergeShortSegments
+        minSegmentDuration = params.minSegmentDuration
+        maxMergeGap = params.maxMergeGap
+        beamSize = params.beamSize
+        bestOf = params.bestOf
+        temperature = params.temperature
+        noSpeechThreshold = params.noSpeechThreshold
         isApplyingQualityPreset = false
     }
 

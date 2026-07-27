@@ -16,6 +16,12 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
     /// Spoiler-free intro generated from the subtitles; prepended as the
     /// first cue of SRT/VTT exports when present.
     var summary: String?
+    /// Per-job settings overrides; nil fields inherit globals at run time.
+    var overrides: JobSettingsOverrides
+    /// How this job entered the app (manual add vs. watch-folder ingest).
+    var origin: JobOrigin
+    /// Queue/list position; lower runs and displays first.
+    var orderIndex: Double
 
     var sourceURL: URL {
         URL(fileURLWithPath: sourcePath)
@@ -41,6 +47,9 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         self.sourceFingerprint = Self.fingerprint(for: sourceURL)
         self.log = "Choose a video to begin.\n"
         self.summary = nil
+        self.overrides = JobSettingsOverrides()
+        self.origin = .manual
+        self.orderIndex = -now.timeIntervalSince1970
     }
 
     init(from decoder: Decoder) throws {
@@ -58,6 +67,9 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         sourceFingerprint = try container.decodeIfPresent(String.self, forKey: .sourceFingerprint) ?? Self.fingerprint(for: URL(fileURLWithPath: sourcePath))
         log = try container.decode(String.self, forKey: .log)
         summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        overrides = try container.decodeIfPresent(JobSettingsOverrides.self, forKey: .overrides) ?? JobSettingsOverrides()
+        origin = try container.decodeIfPresent(JobOrigin.self, forKey: .origin) ?? .manual
+        orderIndex = try container.decodeIfPresent(Double.self, forKey: .orderIndex) ?? -createdAt.timeIntervalSince1970
     }
 
     static func fingerprint(for url: URL) -> String {
@@ -68,6 +80,11 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
     }
 }
 
+/// NOTE: any new field that changes the *transcript* (not translation or
+/// summary) must also be added to TranscriptionIdentity below, or the
+/// skip-if-unchanged check will miss it. New translation-facing fields must
+/// instead be added to updatingTranslationFields(from:), or translation runs
+/// will stamp stale values for them.
 struct JobSettingsSnapshot: Codable, Hashable {
     static let currentTranscriptionProcessingVersion = 4
 
@@ -144,5 +161,99 @@ struct JobSettingsSnapshot: Codable, Hashable {
         bestOf = try container.decodeIfPresent(Int.self, forKey: .bestOf) ?? 5
         temperature = try container.decodeIfPresent(Double.self, forKey: .temperature) ?? 0
         noSpeechThreshold = try container.decodeIfPresent(Double.self, forKey: .noSpeechThreshold) ?? 0.6
+    }
+}
+
+extension JobSettingsSnapshot {
+    /// Layers per-job overrides over this (global-derived) snapshot.
+    /// Spec §0.3: presets expand to their constituent fields so services
+    /// never need to interpret presets themselves.
+    func applying(_ overrides: JobSettingsOverrides) -> JobSettingsSnapshot {
+        var resolved = self
+        if let language = overrides.sourceLanguage {
+            resolved.sourceLanguage = language
+        }
+        if let target = overrides.translationTargetLanguage {
+            resolved.translationTargetLanguage = target
+        }
+        if let preset = overrides.transcriptionPreset,
+           let backend = preset.backend, let model = preset.model {
+            resolved.transcriptionPreset = preset
+            resolved.whisperBackend = backend
+            resolved.whisperModel = model
+        }
+        if let quality = overrides.transcriptionQualityPreset,
+           let params = quality.parameters {
+            resolved.transcriptionQualityPreset = quality
+            resolved.preprocessAudio = params.preprocessAudio
+            resolved.vadFilter = params.vadFilter
+            resolved.removeEmptySegments = params.removeEmptySegments
+            resolved.removeRepeatedText = params.removeRepeatedText
+            resolved.mergeShortSegments = params.mergeShortSegments
+            resolved.minSegmentDuration = params.minSegmentDuration
+            resolved.maxMergeGap = params.maxMergeGap
+            resolved.beamSize = params.beamSize
+            resolved.bestOf = params.bestOf
+            resolved.temperature = params.temperature
+            resolved.noSpeechThreshold = params.noSpeechThreshold
+        }
+        return resolved
+    }
+
+    /// A copy of `self` that adopts only the translation-facing fields from
+    /// `other`. Used when stamping a translation run so the record of what
+    /// produced the *transcript* (the transcriptionIdentity fields) is
+    /// preserved — otherwise a later skip-if-unchanged check would compare
+    /// against settings the transcript was never made with.
+    func updatingTranslationFields(from other: JobSettingsSnapshot) -> JobSettingsSnapshot {
+        var updated = self
+        updated.openAIModel = other.openAIModel
+        updated.translationSourceLanguage = other.translationSourceLanguage
+        updated.translationTargetLanguage = other.translationTargetLanguage
+        updated.translationChunkMode = other.translationChunkMode
+        updated.translationParallelism = other.translationParallelism
+        return updated
+    }
+
+    /// The fields that determine what transcript a run produces. Two
+    /// snapshots with equal identity yield the same transcript, so re-running
+    /// can be skipped (spec §0.6). Translation and summary settings are
+    /// deliberately excluded.
+    struct TranscriptionIdentity: Hashable {
+        let processingVersion: Int
+        let sourceLanguage: String
+        let whisperModel: String
+        let whisperBackend: WhisperBackend
+        let preprocessAudio: Bool
+        let vadFilter: Bool
+        let removeEmptySegments: Bool
+        let removeRepeatedText: Bool
+        let mergeShortSegments: Bool
+        let minSegmentDuration: Double
+        let maxMergeGap: Double
+        let beamSize: Int
+        let bestOf: Int
+        let temperature: Double
+        let noSpeechThreshold: Double
+    }
+
+    var transcriptionIdentity: TranscriptionIdentity {
+        TranscriptionIdentity(
+            processingVersion: transcriptionProcessingVersion,
+            sourceLanguage: sourceLanguage,
+            whisperModel: whisperModel,
+            whisperBackend: whisperBackend,
+            preprocessAudio: preprocessAudio,
+            vadFilter: vadFilter,
+            removeEmptySegments: removeEmptySegments,
+            removeRepeatedText: removeRepeatedText,
+            mergeShortSegments: mergeShortSegments,
+            minSegmentDuration: minSegmentDuration,
+            maxMergeGap: maxMergeGap,
+            beamSize: beamSize,
+            bestOf: bestOf,
+            temperature: temperature,
+            noSpeechThreshold: noSpeechThreshold
+        )
     }
 }

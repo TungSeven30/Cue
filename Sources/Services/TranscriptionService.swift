@@ -44,7 +44,7 @@ struct TranscriptionService {
     @MainActor
     func transcribe(
         videoURL: URL,
-        settings: AppSettingsStore,
+        settings: JobSettingsSnapshot,
         progress: @escaping @MainActor (JobProgress) -> Void
     ) async throws -> TranscriptionResult {
         let resolved = Self.resolveDispatch(backend: settings.whisperBackend, model: settings.whisperModel)
@@ -736,37 +736,5 @@ private final class PipeCollector: @unchecked Sendable {
     }
 }
 
-private extension Process {
-    func waitForTermination() async -> Int32 {
-        await withCheckedContinuation { continuation in
-            let resumer = ProcessTerminationResumer(continuation: continuation)
-            terminationHandler = { process in
-                resumer.resume(process.terminationStatus)
-            }
-            if !isRunning {
-                resumer.resume(terminationStatus)
-            }
-        }
-    }
-}
-
-private final class ProcessTerminationResumer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var didResume = false
-    private let continuation: CheckedContinuation<Int32, Never>
-
-    init(continuation: CheckedContinuation<Int32, Never>) {
-        self.continuation = continuation
-    }
-
-    func resume(_ status: Int32) {
-        lock.lock()
-        guard !didResume else {
-            lock.unlock()
-            return
-        }
-        didResume = true
-        lock.unlock()
-        continuation.resume(returning: status)
-    }
-}
+// waitForTermination() moved to Sources/Support/ProcessTermination.swift so
+// BurnInService can share it.

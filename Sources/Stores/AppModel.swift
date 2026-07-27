@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Combine
 import Foundation
 import UniformTypeIdentifiers
@@ -13,7 +14,11 @@ final class AppModel: ObservableObject {
     @Published var isRunningDiagnostics = false
     @Published var isShowingExportSheet = false
     @Published var isShowingSetupGuide = false
+    @Published var overridesEditorJobID: UUID?
     @Published var isGeneratingSummary = false
+    @Published var isShowingBurnInSheet = false
+    /// nil = not yet checked; cached until Recheck (spec §3.1).
+    @Published var burnInPreflight: BurnInService.PreflightResult?
     /// The setup guide auto-opens once per launch (when something required is
     /// missing); after that it is only reachable from the diagnostics popover.
     private var didOfferSetupGuide = false
@@ -37,14 +42,33 @@ final class AppModel: ObservableObject {
     private let translationService = TranslationService()
     private let diagnosticsService = EnvironmentDiagnosticsService()
     private let jobStore = JobStore()
+    private let burnInService = BurnInService()
+    let watchFolderService = WatchFolderService()
+    private let watchLedger = WatchFolderLedger()
     private var activeTask: Task<Void, Never>?
     private(set) var activeJobID: UUID?
     private var cancellables = Set<AnyCancellable>()
     private var persistTask: Task<Void, Never>?
+    /// Held while any job is running so overnight batches survive idle sleep
+    /// and App Nap (spec §2.7). Display sleep stays allowed.
+    private var processingActivity: NSObjectProtocol?
+
+    private func updateProcessingActivity() {
+        if activeJobID != nil {
+            guard processingActivity == nil else { return }
+            processingActivity = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .idleSystemSleepDisabled],
+                reason: "Processing transcription queue"
+            )
+        } else if let activity = processingActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            processingActivity = nil
+        }
+    }
 
     init() {
         isPlayerVisible = UserDefaults.standard.object(forKey: "isPlayerVisible") as? Bool ?? true
-        jobs = jobStore.loadJobs().sorted { $0.updatedAt > $1.updatedAt }
+        jobs = jobStore.loadJobs().sorted { $0.orderIndex < $1.orderIndex }
         selectedJobID = jobs.first?.id
         // `settings` is a nested ObservableObject; changes to its fields do not
         // fire AppModel's objectWillChange on their own, so forward them.
@@ -84,6 +108,10 @@ final class AppModel: ObservableObject {
         .sink { [weak self] _ in self?.runDiagnostics() }
         .store(in: &cancellables)
         runDiagnostics()
+        configureWatchFolder()
+        if settings.watchFolderEnabled && !settings.watchFolderPath.isEmpty {
+            watchFolderService.start(path: settings.watchFolderPath)
+        }
     }
 
     /// Writes every pending job mutation to disk synchronously. Called on
@@ -171,6 +199,17 @@ final class AppModel: ObservableObject {
             && settings.isTranslationReady
     }
 
+    func checkBurnInAvailability() {
+        Task {
+            burnInPreflight = await BurnInService.preflight()
+        }
+    }
+
+    var canBurnIn: Bool {
+        guard let job = currentJob else { return false }
+        return !job.transcriptSegments.isEmpty && !isProcessing && !job.status.isRunning
+    }
+
     var hasPendingWork: Bool {
         jobs.contains { jobNeedsWork($0) }
     }
@@ -180,8 +219,10 @@ final class AppModel: ObservableObject {
     }
 
     var translationTargetLabel: String {
+        // For a not-yet-translated job, honor its override so the action
+        // button names the language the run will actually produce.
         let target = translatedSegments.isEmpty
-            ? settings.translationTargetLanguage
+            ? (currentJob?.overrides.translationTargetLanguage ?? settings.translationTargetLanguage)
             : currentJob?.settings.translationTargetLanguage ?? settings.translationTargetLanguage
         let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Translation" : trimmed
@@ -277,9 +318,11 @@ final class AppModel: ObservableObject {
 
     /// Adds videos as separate jobs. Used by the file picker and drag-and-drop.
     func addVideos(urls: [URL]) {
-        let newJobs = urls.map { url in
+        let batchIndices = QueueOrdering.indicesForBatchAdd(count: urls.count, existing: jobs.map(\.orderIndex))
+        let newJobs = zip(urls, batchIndices).map { url, orderIndex in
             var job = TranscriptionJob(sourceURL: url, settings: settings)
             job.log = "Selected \(url.path(percentEncoded: false)).\n"
+            job.orderIndex = orderIndex
             return job
         }
         guard !newJobs.isEmpty else { return }
@@ -292,6 +335,16 @@ final class AppModel: ObservableObject {
             for job in newJobs {
                 enqueueJob(job.id)
             }
+        }
+    }
+
+    func setOverrides(_ overrides: JobSettingsOverrides, for id: UUID) {
+        guard let job = jobs.first(where: { $0.id == id }), !job.status.isRunning else { return }
+        updateJob(id) { job in
+            job.overrides = overrides
+            job.log += overrides.isEmpty
+                ? "Cleared job-specific settings.\n"
+                : "Set job-specific settings.\n"
         }
     }
 
@@ -362,8 +415,9 @@ final class AppModel: ObservableObject {
     /// Runs the next queued job. Serial on purpose: one model on the GPU at
     /// a time.
     private func processQueue() {
+        defer { updateProcessingActivity() }
         guard activeJobID == nil, !queuePaused else { return }
-        guard let next = jobs.first(where: { $0.status == .queued }) else {
+        guard let next = jobs.filter({ $0.status == .queued }).min(by: { $0.orderIndex < $1.orderIndex }) else {
             if didProcessQueuedJob {
                 didProcessQueuedJob = false
                 notify(title: "WhisperDesk", body: "All queued jobs finished.")
@@ -381,6 +435,134 @@ final class AppModel: ObservableObject {
         if activeJobID == nil, let job = jobs.first(where: { $0.id == next.id }), job.status == .queued {
             markFailed(next.id, message: "Could not start this job. Check the file and settings.")
             processQueue()
+        }
+    }
+
+    // MARK: - Watch folder
+
+    private func configureWatchFolder() {
+        watchFolderService.blockedFingerprints = { [weak self] in
+            guard let self else { return [] }
+            // Ledger entries plus every job's fingerprint, any status
+            // (spec §2.3 rule 4): canceled or manual jobs block too.
+            return self.watchLedger.fingerprints.union(self.jobs.map(\.sourceFingerprint))
+        }
+        watchFolderService.onScanCompleted = { [weak self] folderPath, existingPaths in
+            // Prune only entries under the folder that was actually scanned:
+            // switching watch folders must not wipe the other folder's
+            // history, or its completed files would re-ingest on switch-back.
+            let prefix = folderPath.hasSuffix("/") ? folderPath : folderPath + "/"
+            self?.watchLedger.prune(fileExists: { path in
+                !path.hasPrefix(prefix) || existingPaths.contains(path)
+            })
+        }
+        watchFolderService.onFilesReady = { [weak self] urls in
+            self?.ingestWatchFolderFiles(urls)
+        }
+    }
+
+    /// Called from Settings when the toggle or path changes.
+    func restartWatchFolder() {
+        watchFolderService.stop()
+        if settings.watchFolderEnabled && !settings.watchFolderPath.isEmpty {
+            watchFolderService.start(path: settings.watchFolderPath)
+        }
+    }
+
+    func clearWatchHistory() {
+        watchLedger.clear()
+    }
+
+    /// Ingest deliberately does NOT go through enqueueJob: that clears
+    /// queuePaused (spec §2.3/2.6 — arriving files must not override an
+    /// explicit stop), and ignores autoStartAddedJobs, which governs
+    /// interactive adds only.
+    private func ingestWatchFolderFiles(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        for url in urls {
+            var job = TranscriptionJob(sourceURL: url, settings: settings)
+            job.origin = .watchFolder
+            job.overrides = settings.watchFolderProfile
+            job.orderIndex = QueueOrdering.indexForWatchAdd(existing: jobs.map(\.orderIndex))
+            job.status = .queued
+            job.progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
+            job.log = "Picked up from the watch folder: \(url.path(percentEncoded: false)).\n"
+            jobs.append(job)
+            persistJob(job.id)
+        }
+        processQueue()
+    }
+
+    /// Terminal-state bookkeeping for watch jobs (spec §2.4): success and
+    /// failure are recorded; cancel is not — the canceled job itself blocks
+    /// re-ingest while it exists, and deleting it means "do it over".
+    private func recordWatchOutcome(for id: UUID, success: Bool) {
+        guard let job = jobs.first(where: { $0.id == id }), job.origin == .watchFolder else { return }
+        watchLedger.record(job.sourceFingerprint, outcome: success ? .success : .failure)
+    }
+
+    // MARK: - Ordering
+
+    /// Moves jobs for SwiftUI's onMove. Only the moved block is re-persisted,
+    /// unless index precision is exhausted, which forces a full pass.
+    func moveJobs(from source: IndexSet, to destination: Int) {
+        guard !source.isEmpty else { return }
+        jobs.move(fromOffsets: source, toOffset: destination)
+        let start = QueueOrdering.movedBlockStart(source: source, destination: destination)
+        reindex(block: start..<(start + source.count))
+    }
+
+    func moveJobToTop(_ id: UUID) {
+        guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
+        moveJobs(from: IndexSet(integer: index), to: 0)
+    }
+
+    func moveJobToBottom(_ id: UUID) {
+        guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
+        moveJobs(from: IndexSet(integer: index), to: jobs.count)
+    }
+
+    func removeFromQueue(_ id: UUID) {
+        guard let job = jobs.first(where: { $0.id == id }), job.status == .queued else { return }
+        updateJob(id) { job in
+            job.status = .idle
+            job.progress = .idle
+        }
+    }
+
+    /// Restamps exactly the moved block. Its outside neighbours kept their
+    /// relative order, so their indices are trustworthy brackets; stale
+    /// indices inside the block are overwritten without ever being read.
+    private func reindex(block: Range<Int>) {
+        guard !block.isEmpty, block.upperBound <= jobs.count else { return }
+        let before = block.lowerBound > 0 ? jobs[block.lowerBound - 1].orderIndex : nil
+        let after = block.upperBound < jobs.count ? jobs[block.upperBound].orderIndex : nil
+        if QueueOrdering.needsRenormalization(before: before, after: after) {
+            renormalizeAllIndices()
+            return
+        }
+        var previous = before
+        for i in block {
+            let stamped = QueueOrdering.destinationIndex(before: previous, after: after)
+            // Multi-item blocks halve the gap per item; bail to a full pass
+            // the moment a midpoint stops landing strictly inside.
+            let fitsBefore = previous.map { $0 < stamped } ?? true
+            let fitsAfter = after.map { stamped < $0 } ?? true
+            if !fitsBefore || !fitsAfter {
+                renormalizeAllIndices()
+                return
+            }
+            jobs[i].orderIndex = stamped
+            persistJob(jobs[i].id)
+            previous = stamped
+        }
+    }
+
+    private func renormalizeAllIndices() {
+        let indices = QueueOrdering.renormalized(count: jobs.count)
+        for i in jobs.indices {
+            jobs[i].orderIndex = indices[i]
+            persistJob(jobs[i].id)
         }
     }
 
@@ -407,31 +589,22 @@ final class AppModel: ObservableObject {
         }
 
         let currentFingerprint = TranscriptionJob.fingerprint(for: videoURL)
+        let resolved = JobSettingsSnapshot(settings: settings).applying(jobs[index].overrides)
+        // Per-job autoTranslate wins over the global toggle (spec §0.3).
+        let autoTranslate = jobs[index].overrides.autoTranslate ?? settings.autoTranslateAfterTranscription
+
         if !force,
            !jobs[index].transcriptSegments.isEmpty,
            jobs[index].sourceFingerprint == currentFingerprint,
-           jobs[index].settings.transcriptionProcessingVersion == JobSettingsSnapshot.currentTranscriptionProcessingVersion,
-           jobs[index].settings.sourceLanguage == settings.sourceLanguage,
-           jobs[index].settings.whisperModel == settings.whisperModel,
-           jobs[index].settings.whisperBackend == settings.whisperBackend,
-           jobs[index].settings.preprocessAudio == settings.preprocessAudio,
-           jobs[index].settings.vadFilter == settings.vadFilter,
-           jobs[index].settings.removeEmptySegments == settings.removeEmptySegments,
-           jobs[index].settings.removeRepeatedText == settings.removeRepeatedText,
-           jobs[index].settings.mergeShortSegments == settings.mergeShortSegments,
-           jobs[index].settings.minSegmentDuration == settings.minSegmentDuration,
-           jobs[index].settings.maxMergeGap == settings.maxMergeGap,
-           jobs[index].settings.beamSize == settings.beamSize,
-           jobs[index].settings.bestOf == settings.bestOf,
-           jobs[index].settings.temperature == settings.temperature,
-           jobs[index].settings.noSpeechThreshold == settings.noSpeechThreshold {
+           jobs[index].settings.transcriptionIdentity == resolved.transcriptionIdentity {
             let hasTranslation = !jobs[index].translatedSegments.isEmpty
             jobs[index].status = hasTranslation ? .translationComplete : .transcriptionComplete
             jobs[index].progress = JobProgress(stage: .complete, detail: "Using existing transcript for unchanged file and settings.", fraction: 1)
             appendLog("Skipped transcription because this file and transcription settings already have a transcript.", to: jobID)
+            recordWatchOutcome(for: jobID, success: true)
             // Same guard as the real completion path: auto-translating with
-            // no API key would immediately mark this finished job as Failed.
-            if settings.autoTranslateAfterTranscription && !hasTranslation && settings.isTranslationReady {
+            // no usable provider would immediately mark this job as Failed.
+            if autoTranslate && !hasTranslation && settings.isTranslationReady {
                 startTranslation(jobID: jobID)
             } else {
                 processQueue()
@@ -444,19 +617,20 @@ final class AppModel: ObservableObject {
         jobs[index].translatedSegments = []
         jobs[index].partialTranslatedSegments = []
         jobs[index].sourceFingerprint = currentFingerprint
-        jobs[index].settings = JobSettingsSnapshot(settings: settings)
+        jobs[index].settings = resolved
         if let validationMessage {
             jobs[index].log += "Adjusted transcription settings: \(validationMessage)\n"
         }
-        appendLog("Starting transcription with \(settings.whisperBackend.label) and model \(settings.whisperModel).", to: jobID)
+        appendLog("Starting transcription with \(resolved.whisperBackend.label) and model \(resolved.whisperModel).", to: jobID)
 
         activeJobID = jobID
+        updateProcessingActivity()
         activeTask = Task {
             do {
-                let result = try await transcriptionService.transcribe(videoURL: videoURL, settings: settings) { [weak self] progress in
+                let result = try await transcriptionService.transcribe(videoURL: videoURL, settings: resolved) { [weak self] progress in
                     self?.updateProgress(progress, for: jobID)
                 }
-                let willTranslate = settings.autoTranslateAfterTranscription && settings.isTranslationReady
+                let willTranslate = autoTranslate && settings.isTranslationReady
                 // When a translation follows, the summary is generated from
                 // the translated text instead, at the end of that step.
                 var summary: String?
@@ -476,6 +650,7 @@ final class AppModel: ObservableObject {
                 }
                 // The job ends here (no translation step follows).
                 autoExportSidecars(for: jobID)
+                recordWatchOutcome(for: jobID, success: true)
                 notifyJobFinished(jobID)
             } catch is CancellationError {
                 markCanceled(jobID)
@@ -515,29 +690,31 @@ final class AppModel: ObservableObject {
         let existingTranslations = jobs[index].partialTranslatedSegments.isEmpty
             ? jobs[index].translatedSegments
             : jobs[index].partialTranslatedSegments
+        let resolved = JobSettingsSnapshot(settings: settings).applying(jobs[index].overrides)
         jobs[index].status = .translating
         jobs[index].progress = JobProgress(stage: .translating, detail: "Starting translation.", fraction: 0)
-        jobs[index].settings = JobSettingsSnapshot(settings: settings)
+        jobs[index].settings = jobs[index].settings.updatingTranslationFields(from: resolved)
         appendLog(
-            "Starting translation from \(settings.translationSourceLanguage) to \(settings.translationTargetLanguage) with \(settings.openAIModel) using \(settings.translationChunkMode.label.lowercased()) chunks and \(settings.translationParallelism) worker(s).",
+            "Starting translation from \(resolved.translationSourceLanguage) to \(resolved.translationTargetLanguage) with \(resolved.openAIModel) using \(resolved.translationChunkMode.label.lowercased()) chunks and \(resolved.translationParallelism) worker(s).",
             to: jobID
         )
 
         activeJobID = jobID
+        updateProcessingActivity()
         activeTask = Task {
             do {
                 let result = try await translationService.translate(
                     segments: segments,
-                    sourceLanguage: settings.sourceLanguage,
-                    settings: settings,
-                    localEndpoint: settings.localTranslationEndpoint,
+                    sourceLanguage: resolved.sourceLanguage,
+                    settings: resolved,
+                    credentials: makeTranslationCredentials(),
                     existingTranslations: existingTranslations
                 ) { [weak self] progress in
                     self?.updateProgress(progress, for: jobID)
                 } onPartial: { [weak self] partial in
                     self?.updatePartialTranslation(partial, for: jobID)
                 }
-                let target = settings.translationTargetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+                let target = resolved.translationTargetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
                 let summary = await makeIntroSummary(
                     from: result,
                     language: target.isEmpty ? "English" : target,
@@ -734,13 +911,116 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: - Burn-in
+
+    enum BurnInDocument: String, CaseIterable, Identifiable {
+        case original
+        case translation
+        case bilingual
+
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .original: return "Original transcript"
+            case .translation: return "Translation"
+            case .bilingual: return "Bilingual captions"
+            }
+        }
+    }
+
+    struct BurnInRequest {
+        let document: BurnInDocument
+        let textSize: BurnInService.TextSize
+        let output: URL
+    }
+
+    func startBurnIn(_ request: BurnInRequest) {
+        guard let job = currentJob, canBurnIn else { return }
+        let jobID = job.id
+
+        let segments: [TranscriptionSegment]
+        switch request.document {
+        case .original:
+            segments = applyingIntro(job.transcriptSegments, format: .srt, job: job)
+        case .translation:
+            segments = applyingIntro(job.translatedSegments, format: .srt, job: job)
+        case .bilingual:
+            segments = applyingIntro(
+                bilingualSegments(transcript: job.transcriptSegments, translated: job.translatedSegments),
+                format: .srt,
+                job: job
+            )
+        }
+        guard !segments.isEmpty else { return }
+
+        // Restore whichever completed state the job had before burn-in.
+        let restoredStatus: JobStatus = job.translatedSegments.isEmpty
+            ? .transcriptionComplete
+            : .translationComplete
+
+        updateJob(jobID) { job in
+            job.status = .burningIn
+            job.progress = JobProgress(stage: .burningIn, detail: "Starting ffmpeg.", fraction: 0)
+            job.log += "Burning \(request.document.label.lowercased()) into \(request.output.lastPathComponent).\n"
+        }
+
+        activeJobID = jobID
+        updateProcessingActivity()
+        activeTask = Task {
+            do {
+                let duration = await Self.assetDurationSeconds(for: job.sourceURL)
+                try await burnInService.burnIn(
+                    source: job.sourceURL,
+                    segments: segments,
+                    textSize: request.textSize,
+                    output: request.output,
+                    durationSeconds: duration
+                ) { [weak self] fraction, detail in
+                    self?.updateJob(jobID, debouncePersist: true) { job in
+                        job.progress = JobProgress(stage: .burningIn, detail: detail, fraction: fraction)
+                    }
+                }
+                updateJob(jobID) { job in
+                    job.status = restoredStatus
+                    job.progress = JobProgress(stage: .complete, detail: "Burned-in video saved.", fraction: 1)
+                    job.log += "Saved burned-in video to \(request.output.path(percentEncoded: false)).\n"
+                }
+                notifyJobFinished(jobID)
+            } catch is CancellationError {
+                updateJob(jobID) { job in
+                    job.status = restoredStatus
+                    job.progress = JobProgress(stage: .canceled, detail: "Burn-in canceled.", fraction: nil)
+                    job.log += "Burn-in canceled; partial output deleted.\n"
+                }
+            } catch {
+                // Burn-in failure does not invalidate the finished transcript
+                // or translation — restore the completed status, log loudly.
+                updateJob(jobID) { job in
+                    job.status = restoredStatus
+                    job.progress = JobProgress(stage: .failed, detail: "Burn-in failed: \(error.localizedDescription)", fraction: nil)
+                    job.log += "Burn-in failed: \(error.localizedDescription)\n"
+                }
+                presentExportError("Burn-in failed: \(error.localizedDescription)")
+            }
+            activeTask = nil
+            activeJobID = nil
+            processQueue()
+        }
+    }
+
+    private nonisolated static func assetDurationSeconds(for url: URL) async -> Double {
+        let asset = AVURLAsset(url: url)
+        let duration = (try? await asset.load(.duration)) ?? .zero
+        return duration.seconds.isFinite ? duration.seconds : 0
+    }
+
     // MARK: - Sidecar auto-export
 
     /// Writes SRT files next to the source video when a job finishes, named
     /// with language codes (video.vi.srt) so media players auto-load them.
     private func autoExportSidecars(for id: UUID) {
-        guard settings.autoExportSidecar,
-              let job = jobs.first(where: { $0.id == id })
+        guard let job = jobs.first(where: { $0.id == id }),
+              settings.autoExportSidecar || job.origin == .watchFolder
         else { return }
 
         // Follow the document choices remembered by the export sheet.
@@ -873,6 +1153,7 @@ final class AppModel: ObservableObject {
             job.log += "Translation finished. Produced \(segments.count) translated segments.\n"
         }
         autoExportSidecars(for: id)
+        recordWatchOutcome(for: id, success: true)
     }
 
     /// Generates (or regenerates) the intro summary for the selected job on
@@ -889,6 +1170,7 @@ final class AppModel: ObservableObject {
             ? (target.isEmpty ? "English" : target)
             : "the same language as the subtitles"
         let id = job.id
+        let resolvedSettings = JobSettingsSnapshot(settings: settings).applying(job.overrides)
 
         isGeneratingSummary = true
         Task {
@@ -896,8 +1178,8 @@ final class AppModel: ObservableObject {
                 let summary = try await translationService.summarize(
                     segments: segments,
                     language: language,
-                    settings: settings,
-                    localEndpoint: settings.localTranslationEndpoint
+                    settings: resolvedSettings,
+                    credentials: makeTranslationCredentials()
                 )
                 updateJob(id) { job in
                     job.summary = summary
@@ -933,12 +1215,13 @@ final class AppModel: ObservableObject {
         updateJob(id, debouncePersist: true) { job in
             job.progress = JobProgress(stage: job.progress.stage, detail: "Writing intro summary.", fraction: job.progress.fraction)
         }
+        let overrides = jobs.first(where: { $0.id == id })?.overrides ?? JobSettingsOverrides()
         do {
             let summary = try await translationService.summarize(
                 segments: segments,
                 language: language,
-                settings: settings,
-                localEndpoint: settings.localTranslationEndpoint
+                settings: JobSettingsSnapshot(settings: settings).applying(overrides),
+                credentials: makeTranslationCredentials()
             )
             appendLog("Generated intro summary: \(summary)", to: id)
             return summary
@@ -946,6 +1229,18 @@ final class AppModel: ObservableObject {
             appendLog("Intro summary failed (job still completed): \(error.localizedDescription)", to: id)
             return nil
         }
+    }
+
+    /// Secrets + prompt for the current translation model. Built fresh per
+    /// run; never stored on the job.
+    private func makeTranslationCredentials() -> TranslationCredentials {
+        let provider = settings.currentTranslationProvider
+        return TranslationCredentials(
+            apiKey: settings.translationAPIKey(for: provider),
+            prompt: settings.translationPrompt,
+            provider: provider,
+            localEndpoint: settings.localTranslationEndpoint
+        )
     }
 
     private func markCanceled(_ id: UUID) {
@@ -962,6 +1257,7 @@ final class AppModel: ObservableObject {
             job.progress = JobProgress(stage: .failed, detail: message, fraction: nil)
             job.log += "\(message)\n"
         }
+        recordWatchOutcome(for: id, success: false)
     }
 
     private func updateProgress(_ progress: JobProgress, for id: UUID) {

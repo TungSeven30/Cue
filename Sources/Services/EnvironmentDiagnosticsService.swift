@@ -34,7 +34,7 @@ struct EnvironmentDiagnosticsService {
             id: "ffmpeg",
             title: "ffmpeg",
             command: ["/usr/bin/env", "ffmpeg", "-version"],
-            recovery: "Only needed for the Clean audio option and rare containers AVFoundation can't read.",
+            recovery: "Only needed for burn-in export, the Clean audio option, and rare containers AVFoundation can't read.",
             repairCommand: "brew install ffmpeg",
             optional: optional("ffmpeg")
         )

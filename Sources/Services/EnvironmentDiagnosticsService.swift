@@ -23,7 +23,7 @@ struct EnvironmentDiagnosticsService {
 
     func run(
         translationAPIKey: String,
-        providerLabel: String,
+        translationProvider: TranslationProvider,
         selectedBackend: WhisperBackend
     ) async -> [EnvironmentDiagnostic] {
         func optional(_ id: String) -> Bool {
@@ -89,17 +89,32 @@ struct EnvironmentDiagnosticsService {
             )
         ]
         results.append(contentsOf: await [ffmpeg, python, mlx, faster, qwen3])
-        results.append(
-            EnvironmentDiagnostic(
-                id: "translation-key",
-                title: "Translation API Key (\(providerLabel))",
-                detail: translationAPIKey.isEmpty
-                    ? "No \(providerLabel) API key configured for the selected translation model."
-                    : "\(providerLabel) API key is configured.",
-                recovery: "Add a \(providerLabel) API key in Settings before translating.",
-                state: translationAPIKey.isEmpty ? .warning : .passed
+        let providerLabel = translationProvider.label
+        if translationProvider == .local {
+            // Local servers authenticate nothing; the row exists so the
+            // list still answers "is translation configured?" at a glance.
+            results.append(
+                EnvironmentDiagnostic(
+                    id: "translation-key",
+                    title: "Translation API Key (\(providerLabel))",
+                    detail: "Local server — no API key needed.",
+                    recovery: "Local servers such as LM Studio and Ollama need no API key.",
+                    state: .passed
+                )
             )
-        )
+        } else {
+            results.append(
+                EnvironmentDiagnostic(
+                    id: "translation-key",
+                    title: "Translation API Key (\(providerLabel))",
+                    detail: translationAPIKey.isEmpty
+                        ? "No \(providerLabel) API key configured for the selected translation model."
+                        : "\(providerLabel) API key is configured.",
+                    recovery: "Add a \(providerLabel) API key in Settings before translating.",
+                    state: translationAPIKey.isEmpty ? .warning : .passed
+                )
+            )
+        }
         return results
     }
 

@@ -551,8 +551,16 @@ struct TranslationService {
             )
         case .local:
             // The stored base URL may or may not end with a slash.
-            let base = localEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-            let joined = base.hasSuffix("/") ? base + "chat/completions" : base + "/chat/completions"
+            var base = localEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+            if base.hasSuffix("/") { base = String(base.dropLast()) }
+            // LM Studio's UI shows "Reachable at: http://host:1234" without the
+            // /v1 the API actually lives under, so users paste exactly that.
+            // A bare scheme://host[:port] gets /v1 appended; any explicit path
+            // is respected as-is.
+            if let parsed = URL(string: base), parsed.path.isEmpty {
+                base += "/v1"
+            }
+            let joined = base + "/chat/completions"
             guard !base.isEmpty, let url = URL(string: joined), url.scheme != nil, url.host != nil else {
                 throw TranslationServiceError.fatalAPIError("The local server URL \"\(localEndpoint)\" is not a valid URL. Set it in Settings (e.g. http://localhost:1234/v1).")
             }
@@ -614,6 +622,14 @@ struct TranslationService {
         case .local:
             let decoded = try JSONDecoder().decode(ChatCompletionsEnvelope.self, from: data)
             guard let choice = decoded.choices?.first else {
+                // Some local servers (LM Studio among them) report errors as a
+                // 200 with an "error" body — surface their message instead of
+                // a generic parse failure.
+                let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                if let message = body?["error"] as? String
+                    ?? (body?["error"] as? [String: Any])?["message"] as? String {
+                    throw TranslationServiceError.apiError("Local server error: \(message)")
+                }
                 throw TranslationServiceError.invalidResponse
             }
             if choice.finish_reason == "length" {

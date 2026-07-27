@@ -38,6 +38,8 @@ final class AppModel: ObservableObject {
     private let translationService = TranslationService()
     private let diagnosticsService = EnvironmentDiagnosticsService()
     private let jobStore = JobStore()
+    let watchFolderService = WatchFolderService()
+    private let watchLedger = WatchFolderLedger()
     private var activeTask: Task<Void, Never>?
     private(set) var activeJobID: UUID?
     private var cancellables = Set<AnyCancellable>()
@@ -58,6 +60,10 @@ final class AppModel: ObservableObject {
             .sink { [weak self] _ in self?.flushPendingWork() }
             .store(in: &cancellables)
         runDiagnostics()
+        configureWatchFolder()
+        if settings.watchFolderEnabled && !settings.watchFolderPath.isEmpty {
+            watchFolderService.start(path: settings.watchFolderPath)
+        }
     }
 
     /// Writes every pending job mutation to disk synchronously. Called on
@@ -368,6 +374,63 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: - Watch folder
+
+    private func configureWatchFolder() {
+        watchFolderService.blockedFingerprints = { [weak self] in
+            guard let self else { return [] }
+            // Ledger entries plus every job's fingerprint, any status
+            // (spec §2.3 rule 4): canceled or manual jobs block too.
+            return self.watchLedger.fingerprints.union(self.jobs.map(\.sourceFingerprint))
+        }
+        watchFolderService.onScanCompleted = { [weak self] existingPaths in
+            self?.watchLedger.prune(fileExists: { existingPaths.contains($0) })
+        }
+        watchFolderService.onFilesReady = { [weak self] urls in
+            self?.ingestWatchFolderFiles(urls)
+        }
+    }
+
+    /// Called from Settings when the toggle or path changes.
+    func restartWatchFolder() {
+        watchFolderService.stop()
+        if settings.watchFolderEnabled && !settings.watchFolderPath.isEmpty {
+            watchFolderService.start(path: settings.watchFolderPath)
+        }
+    }
+
+    func clearWatchHistory() {
+        watchLedger.clear()
+    }
+
+    /// Ingest deliberately does NOT go through enqueueJob: that clears
+    /// queuePaused (spec §2.3/2.6 — arriving files must not override an
+    /// explicit stop), and ignores autoStartAddedJobs, which governs
+    /// interactive adds only.
+    private func ingestWatchFolderFiles(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        for url in urls {
+            var job = TranscriptionJob(sourceURL: url, settings: settings)
+            job.origin = .watchFolder
+            job.overrides = settings.watchFolderProfile
+            job.orderIndex = QueueOrdering.indexForWatchAdd(existing: jobs.map(\.orderIndex))
+            job.status = .queued
+            job.progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
+            job.log = "Picked up from the watch folder: \(url.path(percentEncoded: false)).\n"
+            jobs.append(job)
+            persistJob(job.id)
+        }
+        processQueue()
+    }
+
+    /// Terminal-state bookkeeping for watch jobs (spec §2.4): success and
+    /// failure are recorded; cancel is not — the canceled job itself blocks
+    /// re-ingest while it exists, and deleting it means "do it over".
+    private func recordWatchOutcome(for id: UUID, success: Bool) {
+        guard let job = jobs.first(where: { $0.id == id }), job.origin == .watchFolder else { return }
+        watchLedger.record(job.sourceFingerprint, outcome: success ? .success : .failure)
+    }
+
     // MARK: - Ordering
 
     /// Moves jobs for SwiftUI's onMove. Only the moved block is re-persisted,
@@ -468,6 +531,7 @@ final class AppModel: ObservableObject {
             jobs[index].status = hasTranslation ? .translationComplete : .transcriptionComplete
             jobs[index].progress = JobProgress(stage: .complete, detail: "Using existing transcript for unchanged file and settings.", fraction: 1)
             appendLog("Skipped transcription because this file and transcription settings already have a transcript.", to: jobID)
+            recordWatchOutcome(for: jobID, success: true)
             // Same guard as the real completion path: auto-translating with
             // no API key would immediately mark this finished job as Failed.
             if autoTranslate && !hasTranslation && !settings.currentTranslationAPIKey.isEmpty {
@@ -515,6 +579,7 @@ final class AppModel: ObservableObject {
                 }
                 // The job ends here (no translation step follows).
                 autoExportSidecars(for: jobID)
+                recordWatchOutcome(for: jobID, success: true)
                 notifyJobFinished(jobID)
             } catch is CancellationError {
                 markCanceled(jobID)
@@ -779,8 +844,8 @@ final class AppModel: ObservableObject {
     /// Writes SRT files next to the source video when a job finishes, named
     /// with language codes (video.vi.srt) so media players auto-load them.
     private func autoExportSidecars(for id: UUID) {
-        guard settings.autoExportSidecar,
-              let job = jobs.first(where: { $0.id == id })
+        guard let job = jobs.first(where: { $0.id == id }),
+              settings.autoExportSidecar || job.origin == .watchFolder
         else { return }
 
         // Follow the document choices remembered by the export sheet.
@@ -913,6 +978,7 @@ final class AppModel: ObservableObject {
             job.log += "Translation finished. Produced \(segments.count) translated segments.\n"
         }
         autoExportSidecars(for: id)
+        recordWatchOutcome(for: id, success: true)
     }
 
     /// Generates (or regenerates) the intro summary for the selected job on
@@ -1012,6 +1078,7 @@ final class AppModel: ObservableObject {
             job.progress = JobProgress(stage: .failed, detail: message, fraction: nil)
             job.log += "\(message)\n"
         }
+        recordWatchOutcome(for: id, success: false)
     }
 
     private func updateProgress(_ progress: JobProgress, for id: UUID) {

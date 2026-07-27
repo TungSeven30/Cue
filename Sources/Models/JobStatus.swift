@@ -7,6 +7,7 @@ enum JobStatus: String, Codable, CaseIterable {
     case transcriptionComplete
     case translating
     case translationComplete
+    case burningIn
     case canceled
     case failed
 
@@ -24,6 +25,8 @@ enum JobStatus: String, Codable, CaseIterable {
             return "Translating"
         case .translationComplete:
             return "Translation ready"
+        case .burningIn:
+            return "Burning In"
         case .canceled:
             return "Canceled"
         case .failed:
@@ -46,6 +49,8 @@ enum JobStatus: String, Codable, CaseIterable {
             return "character.bubble"
         case .translationComplete:
             return "checkmark.seal.fill"
+        case .burningIn:
+            return "film"
         case .canceled:
             return "stop.circle"
         case .failed:
@@ -54,7 +59,7 @@ enum JobStatus: String, Codable, CaseIterable {
     }
 
     var isRunning: Bool {
-        self == .transcribing || self == .translating
+        self == .transcribing || self == .translating || self == .burningIn
     }
 }
 
@@ -66,6 +71,7 @@ enum JobStage: String, Codable, Hashable {
     case loadingModel
     case transcribing
     case translating
+    case burningIn
     case complete
     case failed
     case canceled
@@ -86,6 +92,8 @@ enum JobStage: String, Codable, Hashable {
             return "Transcribing"
         case .translating:
             return "Translating"
+        case .burningIn:
+            return "Burning in subtitles"
         case .complete:
             return "Complete"
         case .failed:

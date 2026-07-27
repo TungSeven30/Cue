@@ -51,13 +51,14 @@ struct JobStoreTests {
         let store = JobStore(baseURL: baseURL)
         store.saveJob(try makeJob(status: .transcribing))
         store.saveJob(try makeJob(status: .translating))
+        store.saveJob(try makeJob(status: .burningIn))
         store.saveJob(try makeJob(status: .transcriptionComplete))
         store.flush()
 
         let reloaded = JobStore(baseURL: baseURL).loadJobs()
-        #expect(reloaded.count == 3)
+        #expect(reloaded.count == 4)
         #expect(!reloaded.contains { $0.status.isRunning }, "Running statuses must be sanitized on load")
-        #expect(reloaded.filter { $0.status == .canceled }.count == 2)
+        #expect(reloaded.filter { $0.status == .canceled }.count == 3)
         #expect(reloaded.filter { $0.status == .transcriptionComplete }.count == 1)
     }
 

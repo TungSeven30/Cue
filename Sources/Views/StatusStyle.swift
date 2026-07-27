@@ -8,7 +8,7 @@ extension JobStatus {
             return .secondary
         case .queued:
             return .indigo
-        case .transcribing, .translating:
+        case .transcribing, .translating, .burningIn:
             return .blue
         case .transcriptionComplete:
             return .teal

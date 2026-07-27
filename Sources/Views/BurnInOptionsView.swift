@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Burn-in options (spec §3.4 entry point): pick the document, text size,
 /// and destination, then hand off to AppModel.startBurnIn.
@@ -77,6 +78,7 @@ struct BurnInOptionsView: View {
     private func chooseDestinationAndStart() {
         guard let source = model.selectedVideoURL else { return }
         let panel = NSSavePanel()
+        panel.allowedContentTypes = [.mpeg4Movie]
         panel.nameFieldStringValue = source.deletingPathExtension().lastPathComponent + ".burned.mp4"
         panel.directoryURL = source.deletingLastPathComponent()
         let size = BurnInService.TextSize(rawValue: textSizeRaw) ?? .medium

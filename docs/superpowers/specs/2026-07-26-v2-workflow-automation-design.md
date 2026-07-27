@@ -255,10 +255,14 @@ but the shortfall is visible before bedtime, not discovered at breakfast.
 
 ### 2.2 Detection
 
-`WatchFolderService` uses FSEvents as a hint and a directory scan as the source
-of truth. `scan()` is triggered by:
+`WatchFolderService` uses a filesystem-change hint and a directory scan as the
+source of truth. As built, the hint is a kqueue `DispatchSource` on the folder
+(equivalent to FSEvents for this purpose, with no C plumbing). Note a directory
+kqueue does not fire while an existing file merely grows, so a large copy-in is
+picked up by the timer — worst-case ingest latency is ~2 minutes, fine for the
+overnight use case. `scan()` is triggered by:
 
-- an `FSEventStream` on the folder (latency 1.0s, `.fileEvents`),
+- the kqueue source on the folder (write/rename/delete),
 - a 60-second repeating timer,
 - app launch and folder enablement,
 - `NSWorkspace.didWakeNotification`.
@@ -436,11 +440,11 @@ That is a one-line follow-up at merge time, not a blocker.
 
 | Failure | Behaviour |
 | --- | --- |
-| Watch folder deleted or unreadable | Log once, disable the stream, surface a warning in Settings; do not spin. |
+| Watch folder deleted or unreadable | Surface a warning in Settings and keep retrying on the 60s timer (a briefly unmounted volume must recover on its own); do not spin. |
 | File disappears between scan and start | Job fails with a clear message; ledger records the failure. |
 | Watch-folder job fails | Ledger records the failure so it is not retried every scan; the log explains why. |
 | ffmpeg missing or lacking libass | Burn-in disabled with an install hint and a Recheck button. |
-| ffmpeg exits non-zero | Partial output deleted, stderr tail written to the job log, status `.failed`. |
+| ffmpeg exits non-zero | Partial output deleted, stderr tail written to the job log; the job's *status* restores to its completed state (the transcript is still valid) while `progress.stage` becomes `.failed` and an alert shows the error. |
 | Burn-in output equals the source path | Refused before launching ffmpeg. |
 | Override references a removed preset | Decoding falls back to `nil`, i.e. inherit. |
 | orderIndex collision after manual edits | Renormalization pass restores strict ordering. |

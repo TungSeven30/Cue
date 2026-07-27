@@ -192,8 +192,10 @@ final class AppModel: ObservableObject {
     }
 
     var translationTargetLabel: String {
+        // For a not-yet-translated job, honor its override so the action
+        // button names the language the run will actually produce.
         let target = translatedSegments.isEmpty
-            ? settings.translationTargetLanguage
+            ? (currentJob?.overrides.translationTargetLanguage ?? settings.translationTargetLanguage)
             : currentJob?.settings.translationTargetLanguage ?? settings.translationTargetLanguage
         let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Translation" : trimmed

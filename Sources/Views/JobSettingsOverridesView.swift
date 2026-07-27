@@ -36,7 +36,7 @@ struct JobSettingsOverridesView: View {
                     }
                 }
                 Picker("Translate to", selection: $overrides.translationTargetLanguage) {
-                    Text("Inherit (\(settings.translationTargetLanguage))").tag(String?.none)
+                    Text("Inherit (\(globalTargetLabel))").tag(String?.none)
                     ForEach(AppSettingPresets.translationTargetLanguages) { preset in
                         Text(preset.label).tag(String?.some(preset.value))
                     }
@@ -71,5 +71,10 @@ struct JobSettingsOverridesView: View {
     private var globalLanguageLabel: String {
         AppSettingPresets.transcriptionLanguages.first { $0.value == settings.sourceLanguage }?.label
             ?? settings.sourceLanguage
+    }
+
+    private var globalTargetLabel: String {
+        AppSettingPresets.translationTargetLanguages.first { $0.value == settings.translationTargetLanguage }?.label
+            ?? settings.translationTargetLanguage
     }
 }

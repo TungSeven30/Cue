@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Combine
 import Foundation
 import UniformTypeIdentifiers
@@ -15,6 +16,9 @@ final class AppModel: ObservableObject {
     @Published var isShowingSetupGuide = false
     @Published var overridesEditorJobID: UUID?
     @Published var isGeneratingSummary = false
+    @Published var isShowingBurnInSheet = false
+    /// nil = not yet checked; cached until Recheck (spec §3.1).
+    @Published var burnInPreflight: BurnInService.PreflightResult?
     /// The setup guide auto-opens once per launch (when something required is
     /// missing); after that it is only reachable from the diagnostics popover.
     private var didOfferSetupGuide = false
@@ -38,6 +42,7 @@ final class AppModel: ObservableObject {
     private let translationService = TranslationService()
     private let diagnosticsService = EnvironmentDiagnosticsService()
     private let jobStore = JobStore()
+    private let burnInService = BurnInService()
     let watchFolderService = WatchFolderService()
     private let watchLedger = WatchFolderLedger()
     private var activeTask: Task<Void, Never>?
@@ -165,6 +170,17 @@ final class AppModel: ObservableObject {
             && !job.status.isRunning
             && !isGeneratingSummary
             && !settings.currentTranslationAPIKey.isEmpty
+    }
+
+    func checkBurnInAvailability() {
+        Task {
+            burnInPreflight = await BurnInService.preflight()
+        }
+    }
+
+    var canBurnIn: Bool {
+        guard let job = currentJob else { return false }
+        return !job.transcriptSegments.isEmpty && !isProcessing && !job.status.isRunning
     }
 
     var hasPendingWork: Bool {
@@ -862,6 +878,109 @@ final class AppModel: ObservableObject {
                 text: "\(source.text)\n\(translatedByID[source.id] ?? "")"
             )
         }
+    }
+
+    // MARK: - Burn-in
+
+    enum BurnInDocument: String, CaseIterable, Identifiable {
+        case original
+        case translation
+        case bilingual
+
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .original: return "Original transcript"
+            case .translation: return "Translation"
+            case .bilingual: return "Bilingual captions"
+            }
+        }
+    }
+
+    struct BurnInRequest {
+        let document: BurnInDocument
+        let textSize: BurnInService.TextSize
+        let output: URL
+    }
+
+    func startBurnIn(_ request: BurnInRequest) {
+        guard let job = currentJob, canBurnIn else { return }
+        let jobID = job.id
+
+        let segments: [TranscriptionSegment]
+        switch request.document {
+        case .original:
+            segments = applyingIntro(job.transcriptSegments, format: .srt, job: job)
+        case .translation:
+            segments = applyingIntro(job.translatedSegments, format: .srt, job: job)
+        case .bilingual:
+            segments = applyingIntro(
+                bilingualSegments(transcript: job.transcriptSegments, translated: job.translatedSegments),
+                format: .srt,
+                job: job
+            )
+        }
+        guard !segments.isEmpty else { return }
+
+        // Restore whichever completed state the job had before burn-in.
+        let restoredStatus: JobStatus = job.translatedSegments.isEmpty
+            ? .transcriptionComplete
+            : .translationComplete
+
+        updateJob(jobID) { job in
+            job.status = .burningIn
+            job.progress = JobProgress(stage: .burningIn, detail: "Starting ffmpeg.", fraction: 0)
+            job.log += "Burning \(request.document.label.lowercased()) into \(request.output.lastPathComponent).\n"
+        }
+
+        activeJobID = jobID
+        updateProcessingActivity()
+        activeTask = Task {
+            do {
+                let duration = await Self.assetDurationSeconds(for: job.sourceURL)
+                try await burnInService.burnIn(
+                    source: job.sourceURL,
+                    segments: segments,
+                    textSize: request.textSize,
+                    output: request.output,
+                    durationSeconds: duration
+                ) { [weak self] fraction, detail in
+                    self?.updateJob(jobID, debouncePersist: true) { job in
+                        job.progress = JobProgress(stage: .burningIn, detail: detail, fraction: fraction)
+                    }
+                }
+                updateJob(jobID) { job in
+                    job.status = restoredStatus
+                    job.progress = JobProgress(stage: .complete, detail: "Burned-in video saved.", fraction: 1)
+                    job.log += "Saved burned-in video to \(request.output.path(percentEncoded: false)).\n"
+                }
+                notifyJobFinished(jobID)
+            } catch is CancellationError {
+                updateJob(jobID) { job in
+                    job.status = restoredStatus
+                    job.progress = JobProgress(stage: .canceled, detail: "Burn-in canceled.", fraction: nil)
+                    job.log += "Burn-in canceled; partial output deleted.\n"
+                }
+            } catch {
+                // Burn-in failure does not invalidate the finished transcript
+                // or translation — restore the completed status, log loudly.
+                updateJob(jobID) { job in
+                    job.status = restoredStatus
+                    job.progress = JobProgress(stage: .complete, detail: "Burn-in failed: \(error.localizedDescription)", fraction: nil)
+                    job.log += "Burn-in failed: \(error.localizedDescription)\n"
+                }
+                presentExportError("Burn-in failed: \(error.localizedDescription)")
+            }
+            activeTask = nil
+            activeJobID = nil
+            processQueue()
+        }
+    }
+
+    private nonisolated static func assetDurationSeconds(for url: URL) async -> Double {
+        let asset = AVURLAsset(url: url)
+        let duration = (try? await asset.load(.duration)) ?? .zero
+        return duration.seconds.isFinite ? duration.seconds : 0
     }
 
     // MARK: - Sidecar auto-export

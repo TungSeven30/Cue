@@ -51,6 +51,9 @@ struct SidebarView: View {
                 .buttonStyle(.borderedProminent)
             }
             .padding(12)
+            // Rows scroll beneath the inset; without a backing material the
+            // list text bleeds through the buttons.
+            .background(.ultraThinMaterial)
         }
     }
 

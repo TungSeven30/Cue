@@ -243,6 +243,15 @@ final class AppModel: ObservableObject {
         return "Export…"
     }
 
+    /// Tooltip for the primary action: explains what pressing it does,
+    /// since the title alone ("Export…") doesn't say what gets exported.
+    var primaryActionHelp: String {
+        if currentJob == nil { return "Choose video or audio files to add as jobs" }
+        if transcriptSegments.isEmpty { return "Transcribe the selected video's audio into subtitles" }
+        if translatedSegments.isEmpty { return "Translate the transcript to \(translationTargetLabel)" }
+        return "Export subtitles, captions, or a burned-in video for this job"
+    }
+
     var primaryActionSystemImage: String {
         if currentJob == nil { return "folder" }
         if transcriptSegments.isEmpty { return "waveform" }

@@ -42,32 +42,34 @@ struct ContentView: View {
             } label: {
                 Label(model.primaryActionTitle, systemImage: model.primaryActionSystemImage)
                     .labelStyle(.titleAndIcon)
+                    // .help on the Label, not the Button: tooltips on
+                    // toolbar Buttons are unreliable on macOS.
+                    .help(model.primaryActionHelp)
             }
             .disabled(!model.canPerformPrimaryAction)
-            .help(model.primaryActionTitle)
 
             Button {
                 model.selectVideo()
             } label: {
                 Label("Add Files", systemImage: "folder.badge.plus")
+                    .help("Add one or more video or audio files as jobs")
             }
-            .help("Add one or more video or audio files")
 
             Button {
                 model.startTranscription(force: true)
             } label: {
                 Label("Retry Transcribe", systemImage: "arrow.clockwise")
+                    .help("Transcribe this video again from scratch")
             }
             .disabled(!model.canTranscribe)
-            .help("Run transcription again")
 
             Button {
                 model.isPlayerVisible.toggle()
             } label: {
                 Label("Video Preview", systemImage: model.isPlayerVisible ? "play.rectangle.fill" : "play.rectangle")
+                    .help(model.isPlayerVisible ? "Hide the video preview" : "Show the video preview")
             }
             .disabled(model.currentJob == nil)
-            .help(model.isPlayerVisible ? "Hide the video preview" : "Show the video preview")
 
             if model.canCancel {
                 Button(role: .destructive) {

@@ -53,7 +53,7 @@ struct EnvironmentDiagnosticsService {
             recovery: optional("mlx-whisper")
                 ? "Optional engine: pip install mlx-whisper for fast Apple Silicon transcription."
                 : "Required by your selected engine: pip install mlx-whisper.",
-            repairCommand: "python3 -m pip install mlx-whisper",
+            repairCommand: "python3 -m pip install --user --break-system-packages mlx-whisper",
             optional: optional("mlx-whisper")
         )
         async let faster = pythonImportDiagnostic(
@@ -63,7 +63,7 @@ struct EnvironmentDiagnosticsService {
             recovery: optional("faster-whisper")
                 ? "Optional fallback: pip install faster-whisper."
                 : "Required by your selected engine: pip install faster-whisper.",
-            repairCommand: "python3 -m pip install faster-whisper",
+            repairCommand: "python3 -m pip install --user --break-system-packages faster-whisper",
             optional: optional("faster-whisper")
         )
         async let qwen3 = pythonImportDiagnostic(
@@ -73,7 +73,7 @@ struct EnvironmentDiagnosticsService {
             recovery: optional("qwen3-asr")
                 ? "Optional: best transcription accuracy. pip install 'mlx-qwen3-asr[aligner]'."
                 : "Required by your selected engine: pip install 'mlx-qwen3-asr[aligner]'.",
-            repairCommand: "python3 -m pip install 'mlx-qwen3-asr[aligner]'",
+            repairCommand: "python3 -m pip install --user --break-system-packages 'mlx-qwen3-asr[aligner]'",
             optional: optional("qwen3-asr")
         )
 

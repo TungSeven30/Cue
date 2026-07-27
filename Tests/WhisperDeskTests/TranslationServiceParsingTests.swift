@@ -235,6 +235,24 @@ struct TranslationServiceParsingTests {
         #expect(customPath.url?.absoluteString == "http://127.0.0.1:8080/api/v1/chat/completions")
     }
 
+    // Captured live from LM Studio serving Qwen3.6: the schema-constrained
+    // answer landed entirely in reasoning_content with content empty. The
+    // fallback must recover it; downstream validation guards against actual
+    // chain-of-thought text slipping through.
+    @Test func localReasoningContentRecoveredWhenContentEmpty() throws {
+        let json = """
+        {"id": "chatcmpl-1", "object": "chat.completion", "model": "qwen/qwen3.6-27b",
+         "choices": [{"index": 0,
+                      "message": {"role": "assistant", "content": "",
+                                  "reasoning_content": "{\\"segments\\": [{\\"id\\": 1, \\"text\\": \\"Xin ch\\u00e0o\\"}]}",
+                                  "tool_calls": []},
+                      "logprobs": null, "finish_reason": "stop"}]}
+        """
+        let text = try TranslationService.extractOutputText(provider: .local, data: Data(json.utf8))
+        #expect(text.contains("Xin chào"))
+        #expect(text.contains("\"segments\""))
+    }
+
     // A 200 response carrying {"error": ...} (LM Studio's unexpected-endpoint
     // shape) must surface the server's message, not a generic parse failure.
     @Test func localErrorBodySurfacesServerMessage() {

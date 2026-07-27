@@ -60,6 +60,35 @@ struct WatchFolderScanEngineTests {
         #expect(ready.isEmpty)
     }
 
+    // A file that vanishes mid-wait and is later re-copied at the same
+    // path/size must restart the stability clock, or a scan could catch the
+    // new copy passing through the old byte count and ingest a partial file.
+    @Test func vanishedCandidateRestartsTheClock() {
+        var engine = WatchFolderScanEngine()
+        _ = engine.filesReadyToIngest(observations: [observation("/w/movie.mkv", size: 1000)], now: base, blockedFingerprints: [])
+        // File disappears from the folder entirely.
+        _ = engine.filesReadyToIngest(observations: [], now: base.addingTimeInterval(1), blockedFingerprints: [])
+        // Re-copied at the same size: first sighting again, never ingested.
+        let tooSoon = engine.filesReadyToIngest(observations: [observation("/w/movie.mkv", size: 1000)], now: base.addingTimeInterval(3), blockedFingerprints: [])
+        #expect(tooSoon.isEmpty)
+        let ready = engine.filesReadyToIngest(observations: [observation("/w/movie.mkv", size: 1000)], now: base.addingTimeInterval(6), blockedFingerprints: [])
+        #expect(ready.map(\.path) == ["/w/movie.mkv"])
+    }
+
+    // Unblocking (e.g. deleting a canceled job) must not inherit a stale
+    // stability clock from scans made while the file was blocked.
+    @Test func unblockedFileNeedsTwoFreshSightings() {
+        var engine = WatchFolderScanEngine()
+        let file = observation("/w/movie.mp4", size: 7, mtime: 99)
+        let fingerprint = WatchFolderScanEngine.fingerprint(for: file)
+        _ = engine.filesReadyToIngest(observations: [file], now: base, blockedFingerprints: [fingerprint])
+        // Unblocked now, but the first blocked pass must not count as a sighting.
+        let first = engine.filesReadyToIngest(observations: [file], now: base.addingTimeInterval(3), blockedFingerprints: [])
+        #expect(first.isEmpty)
+        let ready = engine.filesReadyToIngest(observations: [file], now: base.addingTimeInterval(6), blockedFingerprints: [])
+        #expect(ready.map(\.path) == ["/w/movie.mp4"])
+    }
+
     @Test func fingerprintMatchesTranscriptionJobFormat() {
         let file = observation("/w/movie.mp4", size: 7, mtime: 99)
         #expect(WatchFolderScanEngine.fingerprint(for: file) == "/w/movie.mp4|7|99.0")

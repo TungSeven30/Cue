@@ -17,6 +17,16 @@ struct ContentView: View {
         .sheet(isPresented: $model.isShowingSetupGuide) {
             SetupGuideView(model: model)
         }
+        .sheet(item: Binding(
+            get: { model.overridesEditorJobID.flatMap { id in model.jobs.first { $0.id == id } } },
+            set: { model.overridesEditorJobID = $0?.id }
+        )) { job in
+            JobSettingsOverridesView(
+                title: "Job Settings — \(job.title)",
+                settings: model.settings,
+                overrides: job.overrides
+            ) { model.setOverrides($0, for: job.id) }
+        }
     }
 
     @ToolbarContentBuilder

@@ -80,6 +80,12 @@ struct SidebarView: View {
         } label: {
             Label("Move to Bottom", systemImage: "arrow.down.to.line")
         }
+        Button {
+            model.overridesEditorJobID = job.id
+        } label: {
+            Label("Job Settings…", systemImage: "slider.horizontal.3")
+        }
+        .disabled(job.status.isRunning)
         Divider()
         Button(role: .destructive) {
             model.deleteJob(job.id)

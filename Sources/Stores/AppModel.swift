@@ -13,6 +13,7 @@ final class AppModel: ObservableObject {
     @Published var isRunningDiagnostics = false
     @Published var isShowingExportSheet = false
     @Published var isShowingSetupGuide = false
+    @Published var overridesEditorJobID: UUID?
     @Published var isGeneratingSummary = false
     /// The setup guide auto-opens once per launch (when something required is
     /// missing); after that it is only reachable from the diagnostics popover.
@@ -269,6 +270,16 @@ final class AppModel: ObservableObject {
             for job in newJobs {
                 enqueueJob(job.id)
             }
+        }
+    }
+
+    func setOverrides(_ overrides: JobSettingsOverrides, for id: UUID) {
+        guard let job = jobs.first(where: { $0.id == id }), !job.status.isRunning else { return }
+        updateJob(id) { job in
+            job.overrides = overrides
+            job.log += overrides.isEmpty
+                ? "Cleared job-specific settings.\n"
+                : "Set job-specific settings.\n"
         }
     }
 

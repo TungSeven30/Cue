@@ -635,7 +635,14 @@ struct TranslationService {
             if choice.finish_reason == "length" {
                 throw TranslationServiceError.responseTooLarge("The model's reply was cut off at its output-token limit.")
             }
-            guard let content = choice.message?.content else {
+            // Reasoning models (e.g. Qwen3.6 in LM Studio) can land the whole
+            // constrained answer in reasoning_content with content empty; the
+            // strict downstream validation rejects anything that isn't the
+            // requested subtitle JSON, so falling back is safe.
+            let candidates = [choice.message?.content, choice.message?.reasoning_content]
+            guard let content = candidates
+                .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
+                .first(where: { !$0.isEmpty }) else {
                 throw TranslationServiceError.invalidResponse
             }
             return content
@@ -930,6 +937,9 @@ private struct ChatCompletionsEnvelope: Decodable {
     }
     struct ChoiceMessage: Decodable {
         let content: String?
+        // Reasoning models served by LM Studio can emit the entire
+        // schema-constrained answer into this channel, leaving content empty.
+        let reasoning_content: String?
     }
 
     let choices: [Choice]?

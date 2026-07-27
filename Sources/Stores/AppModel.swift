@@ -514,6 +514,7 @@ final class AppModel: ObservableObject {
                     segments: segments,
                     sourceLanguage: settings.sourceLanguage,
                     settings: settings,
+                    localEndpoint: "http://localhost:1234/v1", // Task 2 threads this from settings
                     existingTranslations: existingTranslations
                 ) { [weak self] progress in
                     self?.updateProgress(progress, for: jobID)
@@ -879,7 +880,8 @@ final class AppModel: ObservableObject {
                 let summary = try await translationService.summarize(
                     segments: segments,
                     language: language,
-                    settings: settings
+                    settings: settings,
+                    localEndpoint: "http://localhost:1234/v1" // Task 2 threads this from settings
                 )
                 updateJob(id) { job in
                     job.summary = summary
@@ -916,7 +918,8 @@ final class AppModel: ObservableObject {
             let summary = try await translationService.summarize(
                 segments: segments,
                 language: language,
-                settings: settings
+                settings: settings,
+                localEndpoint: "http://localhost:1234/v1" // Task 2 threads this from settings
             )
             appendLog("Generated intro summary: \(summary)", to: id)
             return summary

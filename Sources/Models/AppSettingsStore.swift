@@ -446,6 +446,8 @@ final class AppSettingsStore: ObservableObject {
         case .openai: return openAIAPIKey
         case .anthropic: return anthropicAPIKey
         case .google: return googleAPIKey
+        // Local servers need no API key.
+        case .local: return ""
         }
     }
 

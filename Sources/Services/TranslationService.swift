@@ -6,6 +6,10 @@ enum TranslationProvider {
     case openai
     case anthropic
     case google
+    /// An OpenAI-compatible server on localhost or the LAN (LM Studio,
+    /// Ollama, mlx-lm). Selected by the "local/" model-name prefix; needs
+    /// no API key.
+    case local
 
     static func infer(from model: String) -> TranslationProvider {
         let normalized = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -15,6 +19,9 @@ enum TranslationProvider {
         if normalized.hasPrefix("gemini") || normalized.hasPrefix("models/gemini") {
             return .google
         }
+        if normalized.hasPrefix("local/") {
+            return .local
+        }
         return .openai
     }
 
@@ -23,6 +30,7 @@ enum TranslationProvider {
         case .openai: return "OpenAI"
         case .anthropic: return "Anthropic"
         case .google: return "Google"
+        case .local: return "Local server"
         }
     }
 }
@@ -71,6 +79,7 @@ struct TranslationService {
         segments: [TranscriptionSegment],
         sourceLanguage: String,
         settings: AppSettingsStore,
+        localEndpoint: String,
         existingTranslations: [TranscriptionSegment],
         progress: @escaping @MainActor (JobProgress) -> Void,
         onPartial: @escaping @MainActor ([TranscriptionSegment]) -> Void
@@ -89,7 +98,8 @@ struct TranslationService {
             ? AppSettingsStore.defaultTranslationPrompt
             : settings.translationPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        guard !apiKey.isEmpty else {
+        // Local servers need no API key; an empty key is normal for them.
+        guard provider == .local || !apiKey.isEmpty else {
             throw TranslationServiceError.missingAPIKey(provider.label)
         }
 
@@ -149,6 +159,7 @@ struct TranslationService {
                                 prompt: prompt,
                                 apiKey: apiKey,
                                 model: model,
+                                localEndpoint: localEndpoint,
                                 context: context
                             )
                             return .success(TranslationChunkResult(chunkNumber: chunkNumber, segments: translatedChunk))
@@ -232,6 +243,7 @@ struct TranslationService {
         prompt: String,
         apiKey: String,
         model: String,
+        localEndpoint: String,
         context: [TranslationContextPair]
     ) async throws -> [TranslatedSegment] {
         var lastError: Error?
@@ -246,6 +258,7 @@ struct TranslationService {
                     prompt: prompt,
                     apiKey: apiKey,
                     model: model,
+                    localEndpoint: localEndpoint,
                     context: context
                 )
             } catch {
@@ -284,6 +297,7 @@ struct TranslationService {
                 prompt: prompt,
                 apiKey: apiKey,
                 model: model,
+                localEndpoint: localEndpoint,
                 context: context
             )
             let secondHalf = try await translateChunkWithRetry(
@@ -295,6 +309,7 @@ struct TranslationService {
                 prompt: prompt,
                 apiKey: apiKey,
                 model: model,
+                localEndpoint: localEndpoint,
                 context: context
             )
             return firstHalf + secondHalf
@@ -326,12 +341,14 @@ struct TranslationService {
     func summarize(
         segments: [TranscriptionSegment],
         language: String,
-        settings: AppSettingsStore
+        settings: AppSettingsStore,
+        localEndpoint: String
     ) async throws -> String {
         let model = settings.openAIModel
         let provider = TranslationProvider.infer(from: model)
         let apiKey = settings.translationAPIKey(for: provider)
-        guard !apiKey.isEmpty else {
+        // Local servers need no API key; an empty key is normal for them.
+        guard provider == .local || !apiKey.isEmpty else {
             throw TranslationServiceError.missingAPIKey(provider.label)
         }
 
@@ -354,7 +371,8 @@ struct TranslationService {
             systemPrompt: systemPrompt,
             userText: "Subtitles:\n\(subtitleText)",
             schemaName: "movie_intro_summary",
-            schema: Self.summarySchema
+            schema: Self.summarySchema,
+            localEndpoint: localEndpoint
         )
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -399,6 +417,7 @@ struct TranslationService {
         prompt: String,
         apiKey: String,
         model: String,
+        localEndpoint: String,
         context: [TranslationContextPair]
     ) async throws -> [TranslatedSegment] {
         let systemPrompt = """
@@ -436,7 +455,8 @@ struct TranslationService {
             model: model,
             apiKey: apiKey,
             systemPrompt: systemPrompt,
-            userText: userText
+            userText: userText,
+            localEndpoint: localEndpoint
         )
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -463,16 +483,18 @@ struct TranslationService {
         }
     }
 
-    /// Builds the provider-specific HTTP request. All three providers receive
+    /// Builds the provider-specific HTTP request. All providers receive
     /// the same system prompt, user text, and JSON schema for the reply.
-    private static func makeRequest(
+    /// Internal (not private) so the request building can be unit-tested.
+    static func makeRequest(
         provider: TranslationProvider,
         model: String,
         apiKey: String,
         systemPrompt: String,
         userText: String,
         schemaName: String = "subtitle_translation",
-        schema: JSONValue = TranslationSchema.segments
+        schema: JSONValue = TranslationSchema.segments,
+        localEndpoint: String
     ) throws -> URLRequest {
         var request: URLRequest
         switch provider {
@@ -527,11 +549,39 @@ struct TranslationService {
                     )
                 )
             )
+        case .local:
+            // The stored base URL may or may not end with a slash.
+            let base = localEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+            let joined = base.hasSuffix("/") ? base + "chat/completions" : base + "/chat/completions"
+            guard !base.isEmpty, let url = URL(string: joined), url.scheme != nil, url.host != nil else {
+                throw TranslationServiceError.fatalAPIError("The local server URL \"\(localEndpoint)\" is not a valid URL. Set it in Settings (e.g. http://localhost:1234/v1).")
+            }
+            request = URLRequest(url: url)
+            // No Authorization header: local servers need no API key. The
+            // "local/" prefix is routing-only — strip it for the wire model
+            // (an empty remainder is fine; LM Studio ignores the model field
+            // when a single model is loaded).
+            let wireModel = String(model.trimmingCharacters(in: .whitespacesAndNewlines).dropFirst("local/".count))
+            request.httpBody = try JSONEncoder().encode(
+                ChatCompletionsRequest(
+                    model: wireModel,
+                    messages: [
+                        .init(role: "system", content: systemPrompt),
+                        .init(role: "user", content: userText)
+                    ],
+                    response_format: .init(
+                        type: "json_schema",
+                        json_schema: .init(name: schemaName, strict: true, schema: schema)
+                    ),
+                    stream: false
+                )
+            )
         }
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Large chunks on slower models can exceed URLSession's default 60s.
-        request.timeoutInterval = 300
+        // Large chunks on slower models can exceed URLSession's default 60s;
+        // big local models on big chunks can exceed even the cloud 300s.
+        request.timeoutInterval = provider == .local ? 600 : 300
         return request
     }
 
@@ -561,6 +611,18 @@ struct TranslationService {
                 throw TranslationServiceError.responseTooLarge("The model's reply was cut off at its output-token limit.")
             }
             return decoded.outputText
+        case .local:
+            let decoded = try JSONDecoder().decode(ChatCompletionsEnvelope.self, from: data)
+            guard let choice = decoded.choices?.first else {
+                throw TranslationServiceError.invalidResponse
+            }
+            if choice.finish_reason == "length" {
+                throw TranslationServiceError.responseTooLarge("The model's reply was cut off at its output-token limit.")
+            }
+            guard let content = choice.message?.content else {
+                throw TranslationServiceError.invalidResponse
+            }
+            return content
         }
     }
 
@@ -715,7 +777,9 @@ private struct TranslationTextFormat: Encodable {
 
 /// Minimal JSON tree that can be encoded with JSONEncoder, used to embed the
 /// structured-output schema in the request body.
-private enum JSONValue: Encodable {
+/// Internal (not private) because it appears in makeRequest's signature,
+/// which is internal for tests.
+enum JSONValue: Encodable {
     case string(String)
     case bool(Bool)
     case object([String: JSONValue])
@@ -734,7 +798,9 @@ private enum JSONValue: Encodable {
 
 /// Structured-output schema so the Responses API is guaranteed to return
 /// exactly {"segments":[{"id":Int,"text":String}]} — no code fences, no prose.
-private enum TranslationSchema {
+/// Internal (not private) because it is a default argument of makeRequest,
+/// which is internal for tests.
+enum TranslationSchema {
     static let segments: JSONValue = .object([
         "type": .string("object"),
         "properties": .object([
@@ -816,6 +882,41 @@ private struct AnthropicResponseEnvelope: Decodable {
     var outputText: String {
         content.compactMap { $0.type == "text" ? $0.text : nil }.joined()
     }
+}
+
+// MARK: - Local OpenAI-compatible chat-completions types
+
+private struct ChatCompletionsRequest: Encodable {
+    struct Message: Encodable {
+        let role: String
+        let content: String
+    }
+    struct ResponseFormat: Encodable {
+        let type: String
+        let json_schema: JSONSchemaFormat
+    }
+    struct JSONSchemaFormat: Encodable {
+        let name: String
+        let strict: Bool
+        let schema: JSONValue
+    }
+
+    let model: String
+    let messages: [Message]
+    let response_format: ResponseFormat
+    let stream: Bool
+}
+
+private struct ChatCompletionsEnvelope: Decodable {
+    struct Choice: Decodable {
+        let message: ChoiceMessage?
+        let finish_reason: String?
+    }
+    struct ChoiceMessage: Decodable {
+        let content: String?
+    }
+
+    let choices: [Choice]?
 }
 
 // MARK: - Google Gemini API types

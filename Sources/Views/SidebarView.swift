@@ -1,31 +1,114 @@
 import SwiftUI
 
+/// Status buckets for the optional grouped sidebar view, in display order.
+private enum JobGroup: String, CaseIterable, Identifiable {
+    case running
+    case queued
+    case notStarted
+    case done
+    case canceled
+    case failed
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .running: return "Running"
+        case .queued: return "Queued"
+        case .notStarted: return "Not Started"
+        case .done: return "Done"
+        case .canceled: return "Canceled"
+        case .failed: return "Failed"
+        }
+    }
+
+    init(status: JobStatus) {
+        switch status {
+        case .transcribing, .translating, .burningIn:
+            self = .running
+        case .queued:
+            self = .queued
+        case .idle:
+            self = .notStarted
+        case .transcriptionComplete, .translationComplete:
+            self = .done
+        case .canceled:
+            self = .canceled
+        case .failed:
+            self = .failed
+        }
+    }
+}
+
+/// Status filter for the sidebar; coarser than JobGroup on purpose — it
+/// answers "what am I looking for", not "what exact state is this in".
+private enum JobStatusFilter: String, CaseIterable, Identifiable {
+    case all
+    case inProgress
+    case done
+    case stopped
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all: return "All"
+        case .inProgress: return "In Progress"
+        case .done: return "Done"
+        case .stopped: return "Canceled & Failed"
+        }
+    }
+
+    func includes(_ status: JobStatus) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .inProgress:
+            return status.isRunning || status == .queued || status == .idle
+        case .done:
+            return status == .transcriptionComplete || status == .translationComplete
+        case .stopped:
+            return status == .canceled || status == .failed
+        }
+    }
+}
+
 struct SidebarView: View {
     @ObservedObject var model: AppModel
+    @State private var searchText = ""
+    @AppStorage("sidebarGroupByStatus") private var groupByStatus = false
+    @AppStorage("sidebarStatusFilter") private var statusFilterRaw = JobStatusFilter.all.rawValue
 
     var body: some View {
         List(selection: Binding(
             get: { model.selectedJobID },
             set: { model.selectJob($0) }
         )) {
-            Section("Jobs") {
-                if model.jobs.isEmpty {
-                    Text("No jobs yet")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(model.jobs) { job in
-                        JobRow(job: job, hasOverrides: !job.overrides.isEmpty)
-                            .tag(job.id)
-                            .contextMenu { contextMenu(for: job) }
-                    }
-                    .onMove { source, destination in
-                        model.moveJobs(from: source, to: destination)
-                    }
-                }
+            if groupByStatus {
+                groupedSections
+            } else {
+                flatSection
             }
         }
         .listStyle(.sidebar)
+        .searchable(text: $searchText, placement: .sidebar, prompt: "Search jobs")
+        .toolbar {
+            ToolbarItem {
+                Menu {
+                    Toggle(isOn: $groupByStatus) {
+                        Label("Group by Status", systemImage: "rectangle.3.group")
+                    }
+                    Picker("Show", selection: $statusFilterRaw) {
+                        ForEach(JobStatusFilter.allCases) { filter in
+                            Text(filter.label).tag(filter.rawValue)
+                        }
+                    }
+                } label: {
+                    Label("Organize", systemImage: organizeMenuIcon)
+                        .help("Filter the job list or group it by status")
+                }
+            }
+        }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 8) {
                 if model.hasPendingWork || model.queuePaused {
@@ -55,6 +138,89 @@ struct SidebarView: View {
             // list text bleeds through the buttons.
             .background(.ultraThinMaterial)
         }
+    }
+
+    // MARK: - List content
+
+    private var statusFilter: JobStatusFilter {
+        JobStatusFilter(rawValue: statusFilterRaw) ?? .all
+    }
+
+    /// A filled funnel marks an active filter, so a shortened list is never
+    /// mistaken for missing jobs.
+    private var organizeMenuIcon: String {
+        statusFilter == .all
+            ? "line.3.horizontal.decrease.circle"
+            : "line.3.horizontal.decrease.circle.fill"
+    }
+
+    private var visibleJobs: [TranscriptionJob] {
+        let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return model.jobs.filter { job in
+            guard statusFilter.includes(job.status) else { return false }
+            guard !trimmedSearch.isEmpty else { return true }
+            return job.title.localizedCaseInsensitiveContains(trimmedSearch)
+        }
+    }
+
+    /// Drag-reorder only works on the full flat list: reordering a filtered
+    /// subset would move jobs relative to neighbours the user cannot see.
+    private var isReorderable: Bool {
+        !groupByStatus && statusFilter == .all
+            && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    @ViewBuilder
+    private var flatSection: some View {
+        Section("Jobs") {
+            if visibleJobs.isEmpty {
+                emptyPlaceholder
+            } else if isReorderable {
+                ForEach(visibleJobs) { job in
+                    row(for: job)
+                }
+                .onMove { source, destination in
+                    model.moveJobs(from: source, to: destination)
+                }
+            } else {
+                ForEach(visibleJobs) { job in
+                    row(for: job)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var groupedSections: some View {
+        if visibleJobs.isEmpty {
+            Section("Jobs") {
+                emptyPlaceholder
+            }
+        } else {
+            ForEach(JobGroup.allCases) { group in
+                let jobs = visibleJobs.filter { JobGroup(status: $0.status) == group }
+                if !jobs.isEmpty {
+                    Section("\(group.label) (\(jobs.count))") {
+                        ForEach(jobs) { job in
+                            row(for: job)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func row(for job: TranscriptionJob) -> some View {
+        JobRow(job: job, hasOverrides: !job.overrides.isEmpty)
+            .tag(job.id)
+            .contextMenu { contextMenu(for: job) }
+    }
+
+    @ViewBuilder
+    private var emptyPlaceholder: some View {
+        Text(model.jobs.isEmpty ? "No jobs yet" : "No jobs match")
+            .font(.callout)
+            .foregroundStyle(.secondary)
     }
 
     @ViewBuilder

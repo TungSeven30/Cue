@@ -90,31 +90,34 @@ struct EnvironmentDiagnosticsService {
         ]
         results.append(contentsOf: await [ffmpeg, python, mlx, faster, qwen3])
         let providerLabel = translationProvider.label
+        let title: String
+        let detail: String
+        let recovery: String
+        let state: DiagnosticState
         if translationProvider == .local {
             // Local servers authenticate nothing; the row exists so the
             // list still answers "is translation configured?" at a glance.
-            results.append(
-                EnvironmentDiagnostic(
-                    id: "translation-key",
-                    title: "Translation API Key (\(providerLabel))",
-                    detail: "Local server — no API key needed.",
-                    recovery: "Local servers such as LM Studio and Ollama need no API key.",
-                    state: .passed
-                )
-            )
+            title = "Translation (\(providerLabel))"
+            detail = "Local server — no API key needed."
+            recovery = "Local servers such as LM Studio and Ollama need no API key."
+            state = .passed
         } else {
-            results.append(
-                EnvironmentDiagnostic(
-                    id: "translation-key",
-                    title: "Translation API Key (\(providerLabel))",
-                    detail: translationAPIKey.isEmpty
-                        ? "No \(providerLabel) API key configured for the selected translation model."
-                        : "\(providerLabel) API key is configured.",
-                    recovery: "Add a \(providerLabel) API key in Settings before translating.",
-                    state: translationAPIKey.isEmpty ? .warning : .passed
-                )
-            )
+            title = "Translation API Key (\(providerLabel))"
+            detail = translationAPIKey.isEmpty
+                ? "No \(providerLabel) API key configured for the selected translation model."
+                : "\(providerLabel) API key is configured."
+            recovery = "Add a \(providerLabel) API key in Settings before translating."
+            state = translationAPIKey.isEmpty ? .warning : .passed
         }
+        results.append(
+            EnvironmentDiagnostic(
+                id: "translation-key",
+                title: title,
+                detail: detail,
+                recovery: recovery,
+                state: state
+            )
+        )
         return results
     }
 

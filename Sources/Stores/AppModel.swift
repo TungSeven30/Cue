@@ -67,6 +67,22 @@ final class AppModel: ObservableObject {
             .removeDuplicates()
             .sink { [weak self] _ in self?.runDiagnostics() }
             .store(in: &cancellables)
+        // The translation-key row depends on the selected model (provider),
+        // the local server URL, and the API keys, so edits to any of them
+        // must also re-run diagnostics. Unlike the backend picker, these
+        // fields change on every keystroke and runDiagnostics shells out to
+        // probe processes, so the debounce is load-bearing: it collapses a
+        // typing burst into one re-run after the user pauses.
+        Publishers.MergeMany(
+            settings.$openAIModel.dropFirst().removeDuplicates().map { _ in () },
+            settings.$localTranslationEndpoint.dropFirst().removeDuplicates().map { _ in () },
+            settings.$openAIAPIKey.dropFirst().removeDuplicates().map { _ in () },
+            settings.$anthropicAPIKey.dropFirst().removeDuplicates().map { _ in () },
+            settings.$googleAPIKey.dropFirst().removeDuplicates().map { _ in () }
+        )
+        .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
+        .sink { [weak self] _ in self?.runDiagnostics() }
+        .store(in: &cancellables)
         runDiagnostics()
     }
 

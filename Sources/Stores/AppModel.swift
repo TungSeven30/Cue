@@ -44,6 +44,22 @@ final class AppModel: ObservableObject {
     private(set) var activeJobID: UUID?
     private var cancellables = Set<AnyCancellable>()
     private var persistTask: Task<Void, Never>?
+    /// Held while any job is running so overnight batches survive idle sleep
+    /// and App Nap (spec §2.7). Display sleep stays allowed.
+    private var processingActivity: NSObjectProtocol?
+
+    private func updateProcessingActivity() {
+        if activeJobID != nil {
+            guard processingActivity == nil else { return }
+            processingActivity = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .idleSystemSleepDisabled],
+                reason: "Processing transcription queue"
+            )
+        } else if let activity = processingActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            processingActivity = nil
+        }
+    }
 
     init() {
         isPlayerVisible = UserDefaults.standard.object(forKey: "isPlayerVisible") as? Bool ?? true
@@ -352,6 +368,7 @@ final class AppModel: ObservableObject {
     /// Runs the next queued job. Serial on purpose: one model on the GPU at
     /// a time.
     private func processQueue() {
+        defer { updateProcessingActivity() }
         guard activeJobID == nil, !queuePaused else { return }
         guard let next = jobs.filter({ $0.status == .queued }).min(by: { $0.orderIndex < $1.orderIndex }) else {
             if didProcessQueuedJob {
@@ -560,6 +577,7 @@ final class AppModel: ObservableObject {
         appendLog("Starting transcription with \(resolved.whisperBackend.label) and model \(resolved.whisperModel).", to: jobID)
 
         activeJobID = jobID
+        updateProcessingActivity()
         activeTask = Task {
             do {
                 let result = try await transcriptionService.transcribe(videoURL: videoURL, settings: resolved) { [weak self] progress in
@@ -635,6 +653,7 @@ final class AppModel: ObservableObject {
         )
 
         activeJobID = jobID
+        updateProcessingActivity()
         activeTask = Task {
             do {
                 let result = try await translationService.translate(

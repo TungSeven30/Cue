@@ -86,6 +86,15 @@ struct SidebarView: View {
             Label("Job Settings…", systemImage: "slider.horizontal.3")
         }
         .disabled(job.status.isRunning)
+        if !job.transcriptSegments.isEmpty {
+            Button {
+                model.selectJob(job.id)
+                model.isShowingBurnInSheet = true
+            } label: {
+                Label("Burn In Video…", systemImage: "film")
+            }
+            .disabled(model.isProcessing || job.status.isRunning)
+        }
         Divider()
         Button(role: .destructive) {
             model.deleteJob(job.id)

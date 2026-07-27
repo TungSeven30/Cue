@@ -59,6 +59,12 @@ struct ExportOptionsView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 Spacer()
+                Button("Burn In Video…") {
+                    dismiss()
+                    DispatchQueue.main.async {
+                        model.isShowingBurnInSheet = true
+                    }
+                }
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Export…") {

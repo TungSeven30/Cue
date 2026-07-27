@@ -186,7 +186,11 @@ struct BurnInService {
             // for progress stamps.
             stderrPipe.fileHandleForReading.readabilityHandler = { handle in
                 let data = handle.availableData
-                guard !data.isEmpty else { return }
+                guard !data.isEmpty else {
+                    handle.readabilityHandler = nil
+                    collector.markEOF()
+                    return
+                }
                 let text = String(decoding: data, as: UTF8.self)
                 collector.append(text)
                 if durationSeconds > 0, let seconds = Self.parseProgressSeconds(fromStderrLine: text) {
@@ -208,7 +212,10 @@ struct BurnInService {
                 processBox.terminate()
             }
             let terminationStatus = await process.waitForTermination()
-            stderrPipe.fileHandleForReading.readabilityHandler = nil
+            // The process exiting does not guarantee the readability handler
+            // (on a background queue) has delivered the last stderr chunk —
+            // and that chunk is usually ffmpeg's actual fatal error line.
+            await collector.waitForEOF()
 
             if Task.isCancelled {
                 try? FileManager.default.removeItem(at: output)
@@ -265,6 +272,8 @@ private final class BurnInProcessBox: @unchecked Sendable {
 private final class StderrCollector: @unchecked Sendable {
     private let lock = NSLock()
     private var text = ""
+    private var eofReached = false
+    private var eofWaiter: CheckedContinuation<Void, Never>?
 
     func append(_ chunk: String) {
         lock.lock()
@@ -273,6 +282,31 @@ private final class StderrCollector: @unchecked Sendable {
             text = String(text.suffix(4000))
         }
         lock.unlock()
+    }
+
+    /// Called when the pipe reads empty data (EOF). Resumes any waiter.
+    func markEOF() {
+        lock.lock()
+        eofReached = true
+        let waiter = eofWaiter
+        eofWaiter = nil
+        lock.unlock()
+        waiter?.resume()
+    }
+
+    /// Blocks (async) until the pipe has drained; the process exiting does
+    /// not guarantee the last stderr chunk has been delivered yet.
+    func waitForEOF() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if eofReached {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                eofWaiter = continuation
+                lock.unlock()
+            }
+        }
     }
 
     func tail() -> String {

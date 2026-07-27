@@ -72,13 +72,15 @@ Requires macOS 14+ and Apple Silicon (the DMG is arm64-only). On Intel Macs, bui
 
 ### Optional engines
 
-The Python backends are alternatives to the built-in engine — each is a pip module on Python 3:
+The Python backends are alternatives to the built-in engine — each is a pip module on Python 3 (`brew install python` if you don't have it):
 
 ```sh
-python3 -m pip install mlx-whisper                # MLX Whisper (fast on Apple Silicon)
-python3 -m pip install faster-whisper             # faster-whisper (most compatible)
-python3 -m pip install 'mlx-qwen3-asr[aligner]'   # Qwen3-ASR (best accuracy, the pick for CJK content)
+python3 -m pip install --user --break-system-packages mlx-whisper                # MLX Whisper (fast on Apple Silicon)
+python3 -m pip install --user --break-system-packages faster-whisper             # faster-whisper (most compatible)
+python3 -m pip install --user --break-system-packages 'mlx-qwen3-asr[aligner]'   # Qwen3-ASR (best accuracy, the pick for CJK content)
 ```
+
+The flags matter on Homebrew's Python 3.12+, which rejects a plain `pip install` (PEP 668): `--user` keeps the packages in your home folder instead of Homebrew's, and `--break-system-packages` acknowledges the guard. On an older Python that doesn't recognize the flags, drop them.
 
 ffmpeg (`brew install ffmpeg`) is only needed for the **Clean audio** preprocessing option and for rare containers the system decoders can't read.
 

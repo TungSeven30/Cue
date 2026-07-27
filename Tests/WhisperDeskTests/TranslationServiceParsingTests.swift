@@ -203,5 +203,10 @@ struct TranslationServiceParsingTests {
             localEndpoint: "http://192.168.1.10:1234/v1/"
         )
         #expect(trailingSlash.url?.absoluteString == "http://192.168.1.10:1234/v1/chat/completions")
+        // Bare "local/" sends an empty wire model — LM Studio serves whatever
+        // model is loaded, so this must not be rejected client-side.
+        let slashBody = try #require(trailingSlash.httpBody)
+        let slashDecoded = try #require(try JSONSerialization.jsonObject(with: slashBody) as? [String: Any])
+        #expect(slashDecoded["model"] as? String == "")
     }
 }

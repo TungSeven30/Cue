@@ -91,4 +91,194 @@ struct BurnInService {
     static func hasSubtitlesFilter(inFiltersOutput output: String) -> Bool {
         output.contains(" subtitles ")
     }
+
+    struct PreflightResult {
+        let available: Bool
+        let message: String?
+    }
+
+    /// Runs both preflight checks (spec §3.1). Not cached here — AppModel
+    /// caches the result and exposes a Recheck, because "just installed
+    /// ffmpeg" is exactly when a stale probe hurts.
+    static func preflight() async -> PreflightResult {
+        let output = await runCapturingOutput(arguments: ["ffmpeg", "-hide_banner", "-filters"])
+        guard let output else {
+            return PreflightResult(available: false, message: "ffmpeg was not found. Install it with: brew install ffmpeg")
+        }
+        guard hasSubtitlesFilter(inFiltersOutput: output) else {
+            return PreflightResult(available: false, message: "This ffmpeg build lacks the subtitles filter (libass). Reinstall with: brew install ffmpeg")
+        }
+        return PreflightResult(available: true, message: nil)
+    }
+
+    /// Runs a command via /usr/bin/env with tool paths; nil if launch fails
+    /// or it exits non-zero.
+    private static func runCapturingOutput(arguments: [String]) async -> String? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                process.environment = ProcessEnvironment.withToolPaths()
+                process.arguments = arguments
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = Pipe()
+                do {
+                    try process.run()
+                } catch {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                guard process.terminationStatus == 0 else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: String(decoding: data, as: UTF8.self))
+            }
+        }
+    }
+
+    /// Writes the SRT to a safe temp path, runs ffmpeg, reports progress from
+    /// stderr, and cleans up. On any failure or cancellation the partial
+    /// output and the temp directory are removed (spec §3.2/§3.4).
+    @MainActor
+    func burnIn(
+        source: URL,
+        segments: [TranscriptionSegment],
+        textSize: TextSize,
+        output: URL,
+        durationSeconds: Double,
+        progress: @escaping @MainActor (Double, String) -> Void
+    ) async throws {
+        try Self.validateOutput(source: source, output: output)
+
+        let subtitleURL = Self.makeWorkingSubtitleURL()
+        let workingDirectory = subtitleURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workingDirectory) }
+
+        try SubtitleWriter.writeSRT(segments: segments, to: subtitleURL)
+
+        // A process box, mirroring TranscriptionService's ProcessBox, lets
+        // the onCancel closure below terminate the process without
+        // capturing the non-Sendable Process directly.
+        let processBox = BurnInProcessBox()
+        let collector = StderrCollector()
+
+        try await withTaskCancellationHandler {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.environment = ProcessEnvironment.withToolPaths()
+            process.arguments = ["ffmpeg"] + Self.makeArguments(
+                source: source,
+                subtitleFile: subtitleURL,
+                forceStyle: Self.forceStyle(for: textSize),
+                output: output
+            )
+
+            let stderrPipe = Pipe()
+            process.standardError = stderrPipe
+            process.standardOutput = Pipe()
+
+            // Collect a stderr tail for error reporting while scanning lines
+            // for progress stamps.
+            stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                guard !data.isEmpty else { return }
+                let text = String(decoding: data, as: UTF8.self)
+                collector.append(text)
+                if durationSeconds > 0, let seconds = Self.parseProgressSeconds(fromStderrLine: text) {
+                    let fraction = min(seconds / durationSeconds, 0.999)
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated {
+                            progress(fraction, String(format: "Rendering… %.0f%%", fraction * 100))
+                        }
+                    }
+                }
+            }
+
+            processBox.process = process
+            try process.run()
+            // A cancellation that landed between storing the process and
+            // run() found isRunning == false and did nothing; catch up now
+            // so ffmpeg does not run a full encode after cancel.
+            if Task.isCancelled {
+                processBox.terminate()
+            }
+            let terminationStatus = await process.waitForTermination()
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
+
+            if Task.isCancelled {
+                try? FileManager.default.removeItem(at: output)
+                throw CancellationError()
+            }
+            guard terminationStatus == 0 else {
+                try? FileManager.default.removeItem(at: output)
+                throw BurnInError.ffmpegFailed(collector.tail())
+            }
+        } onCancel: {
+            processBox.terminate()
+        }
+    }
+}
+
+/// Mirrors TranscriptionService's ProcessBox: holds the in-flight Process so
+/// the withTaskCancellationHandler's onCancel closure (which runs
+/// concurrently and must be Sendable) can terminate it safely.
+private final class BurnInProcessBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedProcess: Process?
+
+    var process: Process? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedProcess
+        }
+        set {
+            lock.lock()
+            storedProcess = newValue
+            lock.unlock()
+        }
+    }
+
+    func terminate() {
+        lock.lock()
+        let process = storedProcess
+        lock.unlock()
+        guard let process, process.isRunning else { return }
+        process.terminate()
+        // ffmpeg may not exit promptly on SIGTERM if a native codec is mid
+        // frame; escalate to SIGKILL rather than leave the app hung waiting.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) {
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+        }
+    }
+}
+
+/// Accumulates ffmpeg stderr across the readability handler's background
+/// queue; keeps only a bounded tail for error messages.
+private final class StderrCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var text = ""
+
+    func append(_ chunk: String) {
+        lock.lock()
+        text += chunk
+        if text.count > 8000 {
+            text = String(text.suffix(4000))
+        }
+        lock.unlock()
+    }
+
+    func tail() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        let lines = text.split(separator: "\n").suffix(6)
+        return lines.isEmpty ? "ffmpeg failed with no error output." : lines.joined(separator: "\n")
+    }
 }

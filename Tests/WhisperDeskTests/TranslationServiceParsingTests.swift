@@ -209,4 +209,45 @@ struct TranslationServiceParsingTests {
         let slashDecoded = try #require(try JSONSerialization.jsonObject(with: slashBody) as? [String: Any])
         #expect(slashDecoded["model"] as? String == "")
     }
+
+    // LM Studio's UI displays "Reachable at: http://host:1234" without the /v1
+    // the API lives under; a pasted path-less base must get /v1 appended, while
+    // an explicit path — /v1 or otherwise — is respected verbatim.
+    @Test func localEndpointWithoutPathGainsV1() throws {
+        let bare = try TranslationService.makeRequest(
+            provider: .local,
+            model: "local/x",
+            apiKey: "",
+            systemPrompt: "s",
+            userText: "u",
+            localEndpoint: "http://127.0.0.1:1234"
+        )
+        #expect(bare.url?.absoluteString == "http://127.0.0.1:1234/v1/chat/completions")
+
+        let customPath = try TranslationService.makeRequest(
+            provider: .local,
+            model: "local/x",
+            apiKey: "",
+            systemPrompt: "s",
+            userText: "u",
+            localEndpoint: "http://127.0.0.1:8080/api/v1"
+        )
+        #expect(customPath.url?.absoluteString == "http://127.0.0.1:8080/api/v1/chat/completions")
+    }
+
+    // A 200 response carrying {"error": ...} (LM Studio's unexpected-endpoint
+    // shape) must surface the server's message, not a generic parse failure.
+    @Test func localErrorBodySurfacesServerMessage() {
+        let json = """
+        {"error": "Unexpected endpoint or method. (POST /chat/completions)"}
+        """
+        do {
+            _ = try TranslationService.extractOutputText(provider: .local, data: Data(json.utf8))
+            Issue.record("Expected apiError to be thrown")
+        } catch TranslationServiceError.apiError(let message) {
+            #expect(message.contains("Unexpected endpoint"))
+        } catch {
+            Issue.record("Expected apiError, got \(error)")
+        }
+    }
 }

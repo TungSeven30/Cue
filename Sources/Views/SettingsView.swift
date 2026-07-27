@@ -142,7 +142,7 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Watch Folder") {
+            Section {
                 Toggle("Watch a folder for new videos", isOn: Binding(
                     get: { settings.watchFolderEnabled },
                     set: { settings.watchFolderEnabled = $0; onWatchFolderSettingChange() }
@@ -179,6 +179,8 @@ struct SettingsView: View {
                     Button("Clear Watch History") { onClearWatchHistory() }
                         .help("Forget which files were already processed, so everything in the folder is picked up again")
                 }
+            } header: {
+                Label("Watch Folder", systemImage: "folder.badge.gearshape")
             }
         }
         .formStyle(.grouped)
@@ -205,6 +207,9 @@ struct SettingsView: View {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Watch"
+        if !settings.watchFolderPath.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: settings.watchFolderPath, isDirectory: true)
+        }
         if panel.runModal() == .OK, let url = panel.url {
             settings.watchFolderPath = url.path
             onWatchFolderSettingChange()

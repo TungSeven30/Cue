@@ -67,6 +67,7 @@ final class WatchFolderService: ObservableObject {
     }
 
     func stop() {
+        lastError = nil
         folderSource?.cancel()
         folderSource = nil
         folderDescriptor = -1

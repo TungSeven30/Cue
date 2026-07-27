@@ -7,6 +7,7 @@ struct SettingsView: View {
     let onWatchFolderSettingChange: () -> Void
     let onClearWatchHistory: () -> Void
     @State private var isEditingWatchProfile = false
+    @State private var isBrowsingOpenRouter = false
 
     var body: some View {
         Form {
@@ -110,7 +111,9 @@ struct SettingsView: View {
                     presets: AppSettingPresets.translationModels,
                     selection: $settings.openAIModel
                 )
-                TextField("Custom OpenAI model", text: $settings.openAIModel)
+                TextField("Custom model", text: $settings.openAIModel)
+                Button("Browse OpenRouter Models…") { isBrowsingOpenRouter = true }
+                    .help("Pick from OpenRouter's live catalog — hundreds of models with per-token pricing; no key needed to browse")
                 Picker("Chunk mode", selection: $settings.translationChunkMode) {
                     ForEach(TranslationChunkMode.allCases) { mode in
                         Text(mode.label).tag(mode)
@@ -120,11 +123,12 @@ struct SettingsView: View {
                 SecureField("OpenAI API key", text: $settings.openAIAPIKey)
                 SecureField("Anthropic API key", text: $settings.anthropicAPIKey)
                 SecureField("Google API key", text: $settings.googleAPIKey)
+                SecureField("OpenRouter API key", text: $settings.openRouterAPIKey)
                 TextField("Local server URL", text: $settings.localTranslationEndpoint)
             } header: {
                 Label("Translation", systemImage: "character.bubble")
             } footer: {
-                Text("Use any OpenAI (gpt-…), Anthropic (claude-…), or Google (gemini-…) model — the provider and API key are chosen from the model name. Keys are stored in the Keychain. A local/… model needs no key — it talks to the OpenAI-compatible server at the Local server URL (LM Studio, Ollama).")
+                Text("Use any OpenAI (gpt-…), Anthropic (claude-…), Google (gemini-…), or OpenRouter (openrouter/…) model — the provider and API key are chosen from the model name. Keys are stored in the Keychain. A local/… model needs no key — it talks to the OpenAI-compatible server at the Local server URL (LM Studio, Ollama).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -186,6 +190,9 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $isBrowsingOpenRouter) {
+            OpenRouterModelBrowserView(settings: settings)
+        }
         .sheet(isPresented: $isEditingWatchProfile) {
             JobSettingsOverridesView(
                 title: "Watch Folder Settings",

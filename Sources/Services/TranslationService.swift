@@ -10,6 +10,10 @@ enum TranslationProvider {
     /// Ollama, mlx-lm). Selected by the "local/" model-name prefix; needs
     /// no API key.
     case local
+    /// OpenRouter's multi-provider gateway. Selected by the "openrouter/"
+    /// model-name prefix; the rest of the name is the catalog id
+    /// (e.g. openrouter/qwen/qwen3.7-max).
+    case openRouter
 
     static func infer(from model: String) -> TranslationProvider {
         let normalized = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -22,6 +26,9 @@ enum TranslationProvider {
         if normalized.hasPrefix("local/") {
             return .local
         }
+        if normalized.hasPrefix("openrouter/") {
+            return .openRouter
+        }
         return .openai
     }
 
@@ -31,6 +38,7 @@ enum TranslationProvider {
         case .anthropic: return "Anthropic"
         case .google: return "Google"
         case .local: return "Local server"
+        case .openRouter: return "OpenRouter"
         }
     }
 }
@@ -596,6 +604,33 @@ struct TranslationService {
                     stream: false
                 )
             )
+        case .openRouter:
+            request = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/chat/completions")!)
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            // Attribution headers OpenRouter asks apps to send; optional but
+            // harmless and they identify traffic in the user's dashboard.
+            request.setValue("https://github.com/TungSeven30/WhisperDesk", forHTTPHeaderField: "HTTP-Referer")
+            request.setValue("WhisperDesk", forHTTPHeaderField: "X-Title")
+            // The "openrouter/" prefix is routing-only; the remainder is the
+            // catalog id the gateway expects on the wire.
+            let wireModel = String(model.trimmingCharacters(in: .whitespacesAndNewlines).dropFirst("openrouter/".count))
+            guard !wireModel.isEmpty else {
+                throw TranslationServiceError.fatalAPIError("Set an OpenRouter model id after the openrouter/ prefix (e.g. openrouter/qwen/qwen3.7-max), or pick one via Browse OpenRouter Models in Settings.")
+            }
+            request.httpBody = try JSONEncoder().encode(
+                ChatCompletionsRequest(
+                    model: wireModel,
+                    messages: [
+                        .init(role: "system", content: systemPrompt),
+                        .init(role: "user", content: userText)
+                    ],
+                    response_format: .init(
+                        type: "json_schema",
+                        json_schema: .init(name: schemaName, strict: true, schema: schema)
+                    ),
+                    stream: false
+                )
+            )
         }
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -631,7 +666,7 @@ struct TranslationService {
                 throw TranslationServiceError.responseTooLarge("The model's reply was cut off at its output-token limit.")
             }
             return decoded.outputText
-        case .local:
+        case .local, .openRouter:
             let decoded = try JSONDecoder().decode(ChatCompletionsEnvelope.self, from: data)
             guard let choice = decoded.choices?.first else {
                 // Some local servers (LM Studio among them) report errors as a
@@ -680,6 +715,11 @@ struct TranslationService {
 
         if statusCode == 401 || statusCode == 403 {
             return .fatalAPIError("\(name) rejected the API key (\(statusCode)). Check the key in Settings.")
+        }
+        if statusCode == 402 {
+            // OpenRouter reports an empty balance as 402; retrying cannot
+            // fix it until the account is topped up.
+            return .fatalAPIError("\(name) reports insufficient credits (402). Top up the account and try again.")
         }
         if statusCode == 429 {
             return .apiError(message ?? "\(name) rate limit or quota exceeded (429). Try again later or check billing.")

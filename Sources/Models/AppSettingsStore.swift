@@ -289,7 +289,9 @@ enum AppSettingPresets {
         SettingsPreset(label: "Gemini 3.1 Pro", value: "gemini-3.1-pro-preview"),
         SettingsPreset(label: "Gemini 3.6 Flash", value: "gemini-3.6-flash"),
         SettingsPreset(label: "Gemini 3.5 Flash-Lite", value: "gemini-3.5-flash-lite"),
-        SettingsPreset(label: "Local server (LM Studio / Ollama)", value: "local/")
+        SettingsPreset(label: "Local server (LM Studio / Ollama)", value: "local/"),
+        SettingsPreset(label: "OpenRouter: Qwen 3.7 Max", value: "openrouter/qwen/qwen3.7-max"),
+        SettingsPreset(label: "OpenRouter: Qwen 3.7 Plus", value: "openrouter/qwen/qwen3.7-plus")
     ]
 }
 
@@ -325,6 +327,7 @@ final class AppSettingsStore: ObservableObject {
     @Published var openAIAPIKey: String { didSet { save() } }
     @Published var anthropicAPIKey: String { didSet { save() } }
     @Published var googleAPIKey: String { didSet { save() } }
+    @Published var openRouterAPIKey: String { didSet { save() } }
     /// Base URL of the OpenAI-compatible server used by `local/` models.
     @Published var localTranslationEndpoint: String { didSet { save() } }
     @Published var translationSourceLanguage: String { didSet { save() } }
@@ -404,6 +407,7 @@ final class AppSettingsStore: ObservableObject {
     private static let apiKeyAccount = "openAIAPIKey"
     private static let anthropicKeyAccount = "anthropicAPIKey"
     private static let googleKeyAccount = "googleAPIKey"
+    private static let openRouterKeyAccount = "openRouterAPIKey"
     nonisolated static let mlxTurboModel = "mlx-community/whisper-large-v3-turbo"
     nonisolated static let fasterTurboModel = "large-v3-turbo"
     nonisolated static let qwen3DefaultModel = "Qwen/Qwen3-ASR-1.7B"
@@ -493,6 +497,9 @@ final class AppSettingsStore: ObservableObject {
         let resolvedGoogleKey = readSecret(Self.googleKeyAccount) ?? ""
         googleAPIKey = resolvedGoogleKey
         persistedGoogleKey = resolvedGoogleKey
+        let resolvedOpenRouterKey = readSecret(Self.openRouterKeyAccount) ?? ""
+        openRouterAPIKey = resolvedOpenRouterKey
+        persistedOpenRouterKey = resolvedOpenRouterKey
 
         normalizeModelForSelectedBackend()
         save()
@@ -505,6 +512,7 @@ final class AppSettingsStore: ObservableObject {
     private var persistedAPIKey = ""
     private var persistedAnthropicKey = ""
     private var persistedGoogleKey = ""
+    private var persistedOpenRouterKey = ""
 
     var currentTranslationProvider: TranslationProvider {
         TranslationProvider.infer(from: openAIModel)
@@ -522,7 +530,7 @@ final class AppSettingsStore: ObservableObject {
         switch currentTranslationProvider {
         case .local:
             return !localTranslationEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case .openai, .anthropic, .google:
+        case .openai, .anthropic, .google, .openRouter:
             return !currentTranslationAPIKey.isEmpty
         }
     }
@@ -532,6 +540,7 @@ final class AppSettingsStore: ObservableObject {
         case .openai: return openAIAPIKey
         case .anthropic: return anthropicAPIKey
         case .google: return googleAPIKey
+        case .openRouter: return openRouterAPIKey
         // Local servers need no API key.
         case .local: return ""
         }
@@ -582,6 +591,10 @@ final class AppSettingsStore: ObservableObject {
         if anthropicAPIKey != persistedAnthropicKey {
             writeSecret(anthropicAPIKey, Self.anthropicKeyAccount)
             persistedAnthropicKey = anthropicAPIKey
+        }
+        if openRouterAPIKey != persistedOpenRouterKey {
+            writeSecret(openRouterAPIKey, Self.openRouterKeyAccount)
+            persistedOpenRouterKey = openRouterAPIKey
         }
         if googleAPIKey != persistedGoogleKey {
             writeSecret(googleAPIKey, Self.googleKeyAccount)

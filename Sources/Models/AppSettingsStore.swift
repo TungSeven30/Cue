@@ -308,6 +308,9 @@ final class AppSettingsStore: ObservableObject {
     @Published var generateSummary: Bool { didSet { save() } }
     @Published var autoStartAddedJobs: Bool { didSet { save() } }
     @Published var autoExportSidecar: Bool { didSet { save() } }
+    @Published var watchFolderEnabled: Bool { didSet { save() } }
+    @Published var watchFolderPath: String { didSet { save() } }
+    @Published var watchFolderProfile: JobSettingsOverrides { didSet { save() } }
     @Published var showAdvancedControls: Bool { didSet { save() } }
     @Published var translationChunkMode: TranslationChunkMode { didSet { save() } }
     @Published var translationParallelism: Int {
@@ -398,6 +401,14 @@ final class AppSettingsStore: ObservableObject {
         generateSummary = defaults.bool(forKey: "generateIntroSummary")
         autoStartAddedJobs = defaults.object(forKey: "autoStartAddedJobs") as? Bool ?? true
         autoExportSidecar = defaults.bool(forKey: "autoExportSidecar")
+        watchFolderEnabled = defaults.bool(forKey: "watchFolderEnabled")
+        watchFolderPath = defaults.string(forKey: "watchFolderPath") ?? ""
+        if let data = defaults.data(forKey: "watchFolderProfile"),
+           let profile = try? JSONDecoder().decode(JobSettingsOverrides.self, from: data) {
+            watchFolderProfile = profile
+        } else {
+            watchFolderProfile = JobSettingsOverrides()
+        }
         showAdvancedControls = defaults.bool(forKey: "showAdvancedControls")
         translationChunkMode = TranslationChunkMode(rawValue: defaults.string(forKey: "translationChunkMode") ?? "") ?? .balanced
         translationParallelism = max(1, min(4, defaults.object(forKey: "translationParallelism") as? Int ?? 2))
@@ -477,6 +488,11 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(generateSummary, forKey: "generateIntroSummary")
         defaults.set(autoStartAddedJobs, forKey: "autoStartAddedJobs")
         defaults.set(autoExportSidecar, forKey: "autoExportSidecar")
+        defaults.set(watchFolderEnabled, forKey: "watchFolderEnabled")
+        defaults.set(watchFolderPath, forKey: "watchFolderPath")
+        if let data = try? JSONEncoder().encode(watchFolderProfile) {
+            defaults.set(data, forKey: "watchFolderProfile")
+        }
         defaults.set(showAdvancedControls, forKey: "showAdvancedControls")
         defaults.set(translationChunkMode.rawValue, forKey: "translationChunkMode")
         defaults.set(translationParallelism, forKey: "translationParallelism")

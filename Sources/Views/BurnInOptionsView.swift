@@ -51,7 +51,7 @@ struct BurnInOptionsView: View {
                 Button("Export…") { chooseDestinationAndStart() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
-                    .disabled(model.burnInPreflight?.available != true)
+                    .disabled(model.burnInPreflight?.available != true || !model.canBurnIn)
             }
             .padding(.top, 8)
         }
@@ -83,9 +83,18 @@ struct BurnInOptionsView: View {
         let doc = document
         dismiss()
         DispatchQueue.main.async {
-            if panel.runModal() == .OK, let output = panel.url {
-                model.startBurnIn(AppModel.BurnInRequest(document: doc, textSize: size, output: output))
+            guard panel.runModal() == .OK, let output = panel.url else { return }
+            // A watch-folder ingest can start a job while the save panel is
+            // up; startBurnIn's guard would then no-op silently. Say so.
+            guard model.canBurnIn else {
+                let alert = NSAlert()
+                alert.messageText = "Cannot Start Burn-In"
+                alert.informativeText = "Another job started while choosing a destination. Wait for it to finish, then try again."
+                alert.alertStyle = .warning
+                alert.runModal()
+                return
             }
+            model.startBurnIn(AppModel.BurnInRequest(document: doc, textSize: size, output: output))
         }
     }
 }

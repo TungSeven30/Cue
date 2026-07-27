@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-26
 **Branch:** `v2-workflow`, cut from master `fdefa3e`
-**Status:** Approved, ready for implementation planning
+**Status:** Implemented on v2-workflow
 
 ## Goal
 

@@ -383,8 +383,14 @@ final class AppModel: ObservableObject {
             // (spec §2.3 rule 4): canceled or manual jobs block too.
             return self.watchLedger.fingerprints.union(self.jobs.map(\.sourceFingerprint))
         }
-        watchFolderService.onScanCompleted = { [weak self] existingPaths in
-            self?.watchLedger.prune(fileExists: { existingPaths.contains($0) })
+        watchFolderService.onScanCompleted = { [weak self] folderPath, existingPaths in
+            // Prune only entries under the folder that was actually scanned:
+            // switching watch folders must not wipe the other folder's
+            // history, or its completed files would re-ingest on switch-back.
+            let prefix = folderPath.hasSuffix("/") ? folderPath : folderPath + "/"
+            self?.watchLedger.prune(fileExists: { path in
+                !path.hasPrefix(prefix) || existingPaths.contains(path)
+            })
         }
         watchFolderService.onFilesReady = { [weak self] urls in
             self?.ingestWatchFolderFiles(urls)

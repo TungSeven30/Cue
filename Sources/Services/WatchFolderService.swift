@@ -22,8 +22,10 @@ final class WatchFolderService {
     var blockedFingerprints: () -> Set<String> = { [] }
     /// Called with files that passed every scan rule.
     var onFilesReady: ([URL]) -> Void = { _ in }
-    /// Lets the ledger prune entries for files that vanished.
-    var onScanCompleted: (_ existingPaths: Set<String>) -> Void = { _ in }
+    /// Lets the ledger prune entries for files that vanished. Reports the
+    /// folder that was scanned so the caller can scope pruning to it —
+    /// entries for other folders must survive a folder switch.
+    var onScanCompleted: (_ folderPath: String, _ existingPaths: Set<String>) -> Void = { _, _ in }
 
     func start(path: String) {
         stop()
@@ -49,13 +51,17 @@ final class WatchFolderService {
             lastError = "Could not open the watch folder. Check that it exists and is readable."
         }
 
-        timer = Timer.scheduledTimer(withTimeInterval: Self.rescanInterval, repeats: true) { _ in
-            Task { @MainActor [weak self] in self?.scan() }
+        let rescanTimer = Timer.scheduledTimer(withTimeInterval: Self.rescanInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.scan() }
         }
+        // Generous tolerance lets macOS coalesce wakeups; the cadence is a
+        // safety net, not a deadline.
+        rescanTimer.tolerance = 5
+        timer = rescanTimer
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
-        ) { _ in
-            Task { @MainActor [weak self] in self?.scan() }
+        ) { [weak self] _ in
+            Task { @MainActor in self?.scan() }
         }
         scan()
     }
@@ -103,7 +109,7 @@ final class WatchFolderService {
             now: Date(),
             blockedFingerprints: blockedFingerprints()
         )
-        onScanCompleted(Set(observations.map(\.path)))
+        onScanCompleted(watchedPath, Set(observations.map(\.path)))
         if !ready.isEmpty {
             onFilesReady(ready.map { URL(fileURLWithPath: $0.path) })
         }

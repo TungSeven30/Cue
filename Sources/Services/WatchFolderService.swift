@@ -6,7 +6,7 @@ import Foundation
 /// the low-latency hint, a 60-second timer plus wake/launch scans are the
 /// truth. scan() is idempotent, so redundant triggers are free.
 @MainActor
-final class WatchFolderService {
+final class WatchFolderService: ObservableObject {
     static let rescanInterval: TimeInterval = 60
 
     private var engine = WatchFolderScanEngine()
@@ -16,7 +16,7 @@ final class WatchFolderService {
     private var wakeObserver: NSObjectProtocol?
     private(set) var watchedPath: String?
     /// Set when the folder cannot be read; shown in Settings (spec errors).
-    private(set) var lastError: String?
+    @Published private(set) var lastError: String?
 
     /// Fingerprints that must not be ingested (ledger + all existing jobs).
     var blockedFingerprints: () -> Set<String> = { [] }

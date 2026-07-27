@@ -115,10 +115,11 @@ struct SettingsView: View {
                 SecureField("OpenAI API key", text: $settings.openAIAPIKey)
                 SecureField("Anthropic API key", text: $settings.anthropicAPIKey)
                 SecureField("Google API key", text: $settings.googleAPIKey)
+                TextField("Local server URL", text: $settings.localTranslationEndpoint)
             } header: {
                 Label("Translation", systemImage: "character.bubble")
             } footer: {
-                Text("Use any OpenAI (gpt-…), Anthropic (claude-…), or Google (gemini-…) model — the provider and API key are chosen from the model name. Keys are stored in the Keychain.")
+                Text("Use any OpenAI (gpt-…), Anthropic (claude-…), or Google (gemini-…) model — the provider and API key are chosen from the model name. Keys are stored in the Keychain. A local/… model needs no key — it talks to the OpenAI-compatible server at the Local server URL (LM Studio, Ollama).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

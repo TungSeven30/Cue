@@ -232,7 +232,8 @@ enum AppSettingPresets {
         SettingsPreset(label: "Claude Haiku 4.5", value: "claude-haiku-4-5"),
         SettingsPreset(label: "Gemini 3.1 Pro", value: "gemini-3.1-pro-preview"),
         SettingsPreset(label: "Gemini 3.6 Flash", value: "gemini-3.6-flash"),
-        SettingsPreset(label: "Gemini 3.5 Flash-Lite", value: "gemini-3.5-flash-lite")
+        SettingsPreset(label: "Gemini 3.5 Flash-Lite", value: "gemini-3.5-flash-lite"),
+        SettingsPreset(label: "Local server (LM Studio / Ollama)", value: "local/")
     ]
 }
 
@@ -268,6 +269,8 @@ final class AppSettingsStore: ObservableObject {
     @Published var openAIAPIKey: String { didSet { save() } }
     @Published var anthropicAPIKey: String { didSet { save() } }
     @Published var googleAPIKey: String { didSet { save() } }
+    /// Base URL of the OpenAI-compatible server used by `local/` models.
+    @Published var localTranslationEndpoint: String { didSet { save() } }
     @Published var translationSourceLanguage: String { didSet { save() } }
     @Published var translationTargetLanguage: String { didSet { save() } }
     @Published var translationPrompt: String { didSet { save() } }
@@ -345,6 +348,8 @@ final class AppSettingsStore: ObservableObject {
     nonisolated static let mlxTurboModel = "mlx-community/whisper-large-v3-turbo"
     nonisolated static let fasterTurboModel = "large-v3-turbo"
     nonisolated static let qwen3DefaultModel = "Qwen/Qwen3-ASR-1.7B"
+    /// LM Studio's default server address.
+    nonisolated static let defaultLocalTranslationEndpoint = "http://localhost:1234/v1"
     static let defaultTranslationPrompt = """
     You are a professional subtitle translator. Translate faithfully and naturally for the target audience.
     Preserve meaning, tone, names, numbers, and cultural context. Keep each subtitle concise, readable, and aligned to the original timing.
@@ -375,6 +380,7 @@ final class AppSettingsStore: ObservableObject {
         transcriptionQualityPreset = TranscriptionQualityPreset(rawValue: defaults.string(forKey: "transcriptionQualityPreset") ?? "") ?? .balanced
         sourceLanguage = defaults.string(forKey: "sourceLanguage") ?? "auto"
         openAIModel = defaults.string(forKey: "openAIModel") ?? "gpt-5.5"
+        localTranslationEndpoint = defaults.string(forKey: "localTranslationEndpoint") ?? Self.defaultLocalTranslationEndpoint
         translationSourceLanguage = defaults.string(forKey: "translationSourceLanguage") ?? "auto"
         translationTargetLanguage = defaults.string(forKey: "translationTargetLanguage") ?? "English"
         translationPrompt = defaults.string(forKey: "translationPrompt") ?? Self.defaultTranslationPrompt
@@ -441,11 +447,26 @@ final class AppSettingsStore: ObservableObject {
         translationAPIKey(for: currentTranslationProvider)
     }
 
+    /// Whether the selected translation model can actually run: cloud
+    /// providers need their API key, the local provider needs a server URL
+    /// (and never a key). UI gates and auto-translate checks read this
+    /// instead of testing `currentTranslationAPIKey` directly.
+    var isTranslationReady: Bool {
+        switch currentTranslationProvider {
+        case .local:
+            return !localTranslationEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .openai, .anthropic, .google:
+            return !currentTranslationAPIKey.isEmpty
+        }
+    }
+
     func translationAPIKey(for provider: TranslationProvider) -> String {
         switch provider {
         case .openai: return openAIAPIKey
         case .anthropic: return anthropicAPIKey
         case .google: return googleAPIKey
+        // Local servers need no API key.
+        case .local: return ""
         }
     }
 
@@ -456,6 +477,7 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(whisperModel, forKey: "whisperModel")
         defaults.set(whisperBackend.rawValue, forKey: "whisperBackend")
         defaults.set(openAIModel, forKey: "openAIModel")
+        defaults.set(localTranslationEndpoint, forKey: "localTranslationEndpoint")
         defaults.set(translationSourceLanguage, forKey: "translationSourceLanguage")
         defaults.set(translationTargetLanguage, forKey: "translationTargetLanguage")
         defaults.set(translationPrompt, forKey: "translationPrompt")

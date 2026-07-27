@@ -82,6 +82,45 @@ struct AppSettingsStoreTests {
         #expect(store.whisperModel == AppSettingsStore.mlxTurboModel)
     }
 
+    @Test func freshInstallDefaultsLocalTranslationEndpoint() {
+        let (defaults, name) = makeSuite()
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let store = makeStore(defaults: defaults)
+
+        #expect(store.localTranslationEndpoint == "http://localhost:1234/v1")
+    }
+
+    @Test func localTranslationEndpointPersistsAcrossLaunches() {
+        let (defaults, name) = makeSuite()
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let store = makeStore(defaults: defaults)
+        store.localTranslationEndpoint = "http://192.168.1.20:1234/v1"
+
+        let reloaded = makeStore(defaults: defaults)
+        #expect(reloaded.localTranslationEndpoint == "http://192.168.1.20:1234/v1")
+    }
+
+    @Test func translationReadinessIsProviderAware() {
+        let (defaults, name) = makeSuite()
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let store = makeStore(defaults: defaults)
+        // No API keys are configured (secrets are stubbed to nil).
+        store.openAIModel = "local/qwen3.6-35b"
+        #expect(store.isTranslationReady)
+
+        store.localTranslationEndpoint = "   "
+        #expect(!store.isTranslationReady)
+
+        store.openAIModel = "gpt-5.5"
+        #expect(!store.isTranslationReady)
+
+        store.openAIAPIKey = "sk-test"
+        #expect(store.isTranslationReady)
+    }
+
     // MARK: - .auto dispatch resolution
 
     @Test func autoDispatchResolvesToNativeWithDefaultModel() {

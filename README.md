@@ -84,6 +84,10 @@ The flags matter on Homebrew's Python 3.12+, which rejects a plain `pip install`
 
 ffmpeg (`brew install ffmpeg`) is only needed for the **Clean audio** preprocessing option and for rare containers the system decoders can't read.
 
+#### Local translation
+
+Translation can also run free and offline against any OpenAI-compatible server (LM Studio, Ollama, mlx-lm) instead of a cloud API. Pick the **Local server (LM Studio / Ollama)** model in Settings — or any `local/…` model name — and point **Local server URL** at your server (default `http://localhost:1234/v1`, LM Studio's address); no API key is needed. LM Studio's "serve on local network" toggle even lets a big Mac translate for a MacBook over the LAN — just set the URL to that Mac's address.
+
 ## Building from source (for developers)
 
 ```sh

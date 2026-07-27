@@ -67,6 +67,22 @@ final class AppModel: ObservableObject {
             .removeDuplicates()
             .sink { [weak self] _ in self?.runDiagnostics() }
             .store(in: &cancellables)
+        // The translation-key row depends on the selected model (provider),
+        // the local server URL, and the API keys, so edits to any of them
+        // must also re-run diagnostics. Unlike the backend picker, these
+        // fields change on every keystroke and runDiagnostics shells out to
+        // probe processes, so the debounce is load-bearing: it collapses a
+        // typing burst into one re-run after the user pauses.
+        Publishers.MergeMany(
+            settings.$openAIModel.dropFirst().removeDuplicates().map { _ in () },
+            settings.$localTranslationEndpoint.dropFirst().removeDuplicates().map { _ in () },
+            settings.$openAIAPIKey.dropFirst().removeDuplicates().map { _ in () },
+            settings.$anthropicAPIKey.dropFirst().removeDuplicates().map { _ in () },
+            settings.$googleAPIKey.dropFirst().removeDuplicates().map { _ in () }
+        )
+        .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
+        .sink { [weak self] _ in self?.runDiagnostics() }
+        .store(in: &cancellables)
         runDiagnostics()
     }
 
@@ -138,7 +154,7 @@ final class AppModel: ObservableObject {
 
     var canTranslate: Bool {
         !transcriptSegments.isEmpty && !isSelectedJobRunning && currentJob?.status != .queued
-            && !settings.currentTranslationAPIKey.isEmpty
+            && settings.isTranslationReady
     }
 
     var canCancel: Bool {
@@ -152,7 +168,7 @@ final class AppModel: ObservableObject {
         return !job.transcriptSegments.isEmpty
             && !job.status.isRunning
             && !isGeneratingSummary
-            && !settings.currentTranslationAPIKey.isEmpty
+            && settings.isTranslationReady
     }
 
     var hasPendingWork: Bool {
@@ -295,7 +311,7 @@ final class AppModel: ObservableObject {
         Task {
             diagnostics = await diagnosticsService.run(
                 translationAPIKey: settings.currentTranslationAPIKey,
-                providerLabel: settings.currentTranslationProvider.label,
+                translationProvider: settings.currentTranslationProvider,
                 selectedBackend: settings.whisperBackend
             )
             isRunningDiagnostics = false
@@ -340,7 +356,7 @@ final class AppModel: ObservableObject {
         if job.status.isRunning { return false }
         if job.status == .queued { return true }
         if job.transcriptSegments.isEmpty { return true }
-        return job.translatedSegments.isEmpty && !settings.currentTranslationAPIKey.isEmpty
+        return job.translatedSegments.isEmpty && settings.isTranslationReady
     }
 
     /// Runs the next queued job. Serial on purpose: one model on the GPU at
@@ -415,7 +431,7 @@ final class AppModel: ObservableObject {
             appendLog("Skipped transcription because this file and transcription settings already have a transcript.", to: jobID)
             // Same guard as the real completion path: auto-translating with
             // no API key would immediately mark this finished job as Failed.
-            if settings.autoTranslateAfterTranscription && !hasTranslation && !settings.currentTranslationAPIKey.isEmpty {
+            if settings.autoTranslateAfterTranscription && !hasTranslation && settings.isTranslationReady {
                 startTranslation(jobID: jobID)
             } else {
                 processQueue()
@@ -440,7 +456,7 @@ final class AppModel: ObservableObject {
                 let result = try await transcriptionService.transcribe(videoURL: videoURL, settings: settings) { [weak self] progress in
                     self?.updateProgress(progress, for: jobID)
                 }
-                let willTranslate = settings.autoTranslateAfterTranscription && !settings.currentTranslationAPIKey.isEmpty
+                let willTranslate = settings.autoTranslateAfterTranscription && settings.isTranslationReady
                 // When a translation follows, the summary is generated from
                 // the translated text instead, at the end of that step.
                 var summary: String?
@@ -514,6 +530,7 @@ final class AppModel: ObservableObject {
                     segments: segments,
                     sourceLanguage: settings.sourceLanguage,
                     settings: settings,
+                    localEndpoint: settings.localTranslationEndpoint,
                     existingTranslations: existingTranslations
                 ) { [weak self] progress in
                     self?.updateProgress(progress, for: jobID)
@@ -879,7 +896,8 @@ final class AppModel: ObservableObject {
                 let summary = try await translationService.summarize(
                     segments: segments,
                     language: language,
-                    settings: settings
+                    settings: settings,
+                    localEndpoint: settings.localTranslationEndpoint
                 )
                 updateJob(id) { job in
                     job.summary = summary
@@ -905,8 +923,11 @@ final class AppModel: ObservableObject {
         for id: UUID
     ) async -> String? {
         guard settings.generateSummary, !segments.isEmpty else { return nil }
-        guard !settings.currentTranslationAPIKey.isEmpty else {
-            appendLog("Skipped the intro summary because no \(settings.currentTranslationProvider.label) API key is configured.", to: id)
+        guard settings.isTranslationReady else {
+            let reason = settings.currentTranslationProvider == .local
+                ? "no local server URL is configured"
+                : "no \(settings.currentTranslationProvider.label) API key is configured"
+            appendLog("Skipped the intro summary because \(reason).", to: id)
             return nil
         }
         updateJob(id, debouncePersist: true) { job in
@@ -916,7 +937,8 @@ final class AppModel: ObservableObject {
             let summary = try await translationService.summarize(
                 segments: segments,
                 language: language,
-                settings: settings
+                settings: settings,
+                localEndpoint: settings.localTranslationEndpoint
             )
             appendLog("Generated intro summary: \(summary)", to: id)
             return summary

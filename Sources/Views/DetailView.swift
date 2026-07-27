@@ -259,8 +259,10 @@ struct DetailView: View {
         if model.transcriptSegments.isEmpty {
             return "Transcribe the video first, then translate the segments into \(model.translationTargetLabel)."
         }
-        if model.settings.currentTranslationAPIKey.isEmpty {
-            return "Add a \(model.settings.currentTranslationProvider.label) API key in Settings (⌘,) to translate the transcript into \(model.translationTargetLabel)."
+        if !model.settings.isTranslationReady {
+            return model.settings.currentTranslationProvider == .local
+                ? "Set the Local server URL in Settings (⌘,) to translate the transcript into \(model.translationTargetLabel)."
+                : "Add a \(model.settings.currentTranslationProvider.label) API key in Settings (⌘,) to translate the transcript into \(model.translationTargetLabel)."
         }
         return "Translate the transcript into natural \(model.translationTargetLabel) subtitles with your configured model."
     }
@@ -439,10 +441,14 @@ private struct HeaderCard: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(!model.canTranslate)
 
-                if model.settings.currentTranslationAPIKey.isEmpty {
-                    Text("Add a \(model.settings.currentTranslationProvider.label) API key in Settings to enable translation.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if !model.settings.isTranslationReady {
+                    Text(
+                        model.settings.currentTranslationProvider == .local
+                            ? "Set the Local server URL in Settings to enable translation."
+                            : "Add a \(model.settings.currentTranslationProvider.label) API key in Settings to enable translation."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 } else if !model.partialTranslatedSegments.isEmpty {
                     Text("\(model.partialTranslatedSegments.count) segment(s) already saved.")
                         .font(.caption)

@@ -27,7 +27,7 @@ struct EnvironmentDiagnosticsTests {
     @Test func runLeadsWithPassedBuiltInEngineDiagnostic() async throws {
         let diagnostics = await EnvironmentDiagnosticsService().run(
             translationAPIKey: "key",
-            providerLabel: "OpenAI",
+            translationProvider: .openai,
             selectedBackend: .native
         )
         let first = try #require(diagnostics.first)
@@ -40,5 +40,26 @@ struct EnvironmentDiagnosticsTests {
         // on — pin them so the seam cannot drift silently.
         let ids = Set(diagnostics.map(\.id))
         #expect(ids.isSuperset(of: ["mlx-whisper", "faster-whisper", "qwen3-asr"]))
+    }
+
+    @Test func translationKeyRowPassesForLocalProvider() async throws {
+        let diagnostics = await EnvironmentDiagnosticsService().run(
+            translationAPIKey: "",
+            translationProvider: .local,
+            selectedBackend: .native
+        )
+        let row = try #require(diagnostics.first { $0.id == "translation-key" })
+        #expect(row.state == .passed)
+        #expect(row.detail == "Local server — no API key needed.")
+    }
+
+    @Test func translationKeyRowWarnsForCloudProviderWithoutKey() async throws {
+        let diagnostics = await EnvironmentDiagnosticsService().run(
+            translationAPIKey: "",
+            translationProvider: .openai,
+            selectedBackend: .native
+        )
+        let row = try #require(diagnostics.first { $0.id == "translation-key" })
+        #expect(row.state == .warning)
     }
 }

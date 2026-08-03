@@ -67,3 +67,53 @@ struct IntroSummaryTests {
         } catch {}
     }
 }
+
+
+struct IntroCueSplittingTests {
+    @Test func shortSummaryStaysWhole() {
+        #expect(SubtitleWriter.introCueTexts("A quiet town hides a secret.") == ["A quiet town hides a secret."])
+    }
+
+    @Test func longSummarySplitsOnSentenceBoundaries() {
+        let sentence = "In a rain-soaked port town, a retired detective takes one last case."
+        let summary = Array(repeating: sentence, count: 8).joined(separator: " ")
+        let chunks = SubtitleWriter.introCueTexts(summary)
+        #expect(chunks.count > 1)
+        #expect(chunks.allSatisfy { $0.count <= 220 })
+        // Nothing lost, nothing reordered.
+        #expect(chunks.joined(separator: " ") == summary)
+        // Every chunk ends on a sentence boundary, not mid-sentence.
+        #expect(chunks.allSatisfy { $0.hasSuffix("case.") })
+    }
+
+    @Test func multiCueIntroTimesSequentiallyAndRenumbers() {
+        let sentence = "In a rain-soaked port town, a retired detective takes one last case."
+        let summary = Array(repeating: sentence, count: 8).joined(separator: " ")
+        let dialogue = [TranscriptionSegment(id: 1, start: 2.0, end: 4.0, text: "Hello.")]
+        let result = SubtitleWriter.segmentsPrependingIntro(summary, to: dialogue)
+        let introCount = result.count - dialogue.count
+        #expect(introCount > 1)
+        // Sequential, non-overlapping intro cues starting at zero.
+        #expect(result[0].start == 0)
+        for index in 1..<introCount {
+            #expect(result[index].start == result[index - 1].end)
+        }
+        // Ids re-sequenced across the whole file.
+        #expect(result.map(\.id) == Array(1...result.count))
+        // Dialogue timing untouched.
+        #expect(result.last?.start == 2.0)
+    }
+
+    @Test func detailedPromptRaisesTheBudget() {
+        let brief = TranslationService.summaryInstructions(detail: .brief, language: "English")
+        let detailed = TranslationService.summaryInstructions(detail: .detailed, language: "English")
+        #expect(brief.contains("280"))
+        #expect(detailed.contains("900"))
+        #expect(detailed.contains("5-8 sentences"))
+        // Both stay spoiler-safe and JSON-shaped.
+        for prompt in [brief, detailed] {
+            #expect(prompt.contains("Do not reveal"))
+            #expect(prompt.contains(#"{"summary":"..."}"#))
+        }
+    }
+}

@@ -1241,7 +1241,8 @@ final class AppModel: ObservableObject {
                     segments: segments,
                     language: language,
                     settings: resolvedSettings,
-                    credentials: makeTranslationCredentials()
+                    credentials: makeTranslationCredentials(),
+                    detail: settings.summaryDetail
                 )
                 updateJob(id) { job in
                     job.summary = summary
@@ -1283,7 +1284,8 @@ final class AppModel: ObservableObject {
                 segments: segments,
                 language: language,
                 settings: JobSettingsSnapshot(settings: settings).applying(overrides),
-                credentials: makeTranslationCredentials()
+                credentials: makeTranslationCredentials(),
+                detail: settings.summaryDetail
             )
             appendLog("Generated intro summary: \(summary)", to: id)
             return summary

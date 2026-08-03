@@ -175,6 +175,21 @@ extension TranscriptionQualityPreset {
     }
 }
 
+/// How thorough the spoiler-free intro summary should be.
+enum SummaryDetail: String, CaseIterable, Identifiable, Codable, Hashable {
+    case brief
+    case detailed
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .brief: return "Brief"
+        case .detailed: return "Detailed"
+        }
+    }
+}
+
 struct SettingsPreset: Identifiable, Hashable {
     let label: String
     let value: String
@@ -337,6 +352,7 @@ final class AppSettingsStore: ObservableObject {
     /// Generate a spoiler-free intro from the subtitles when a job finishes,
     /// shown as the first cue of SRT/VTT exports.
     @Published var generateSummary: Bool { didSet { save() } }
+    @Published var summaryDetail: SummaryDetail { didSet { save() } }
     @Published var autoStartAddedJobs: Bool { didSet { save() } }
     @Published var autoExportSidecar: Bool { didSet { save() } }
     @Published var watchFolders: [WatchFolder] { didSet { save() } }
@@ -447,6 +463,7 @@ final class AppSettingsStore: ObservableObject {
         translationPrompt = defaults.string(forKey: "translationPrompt") ?? Self.defaultTranslationPrompt
         autoTranslateAfterTranscription = defaults.bool(forKey: "autoTranslateAfterTranscription")
         generateSummary = defaults.bool(forKey: "generateIntroSummary")
+        summaryDetail = SummaryDetail(rawValue: defaults.string(forKey: "summaryDetail") ?? "") ?? .brief
         autoStartAddedJobs = defaults.object(forKey: "autoStartAddedJobs") as? Bool ?? true
         autoExportSidecar = defaults.bool(forKey: "autoExportSidecar")
         if let data = defaults.data(forKey: "watchFolders"),
@@ -566,6 +583,7 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(translationPrompt, forKey: "translationPrompt")
         defaults.set(autoTranslateAfterTranscription, forKey: "autoTranslateAfterTranscription")
         defaults.set(generateSummary, forKey: "generateIntroSummary")
+        defaults.set(summaryDetail.rawValue, forKey: "summaryDetail")
         defaults.set(autoStartAddedJobs, forKey: "autoStartAddedJobs")
         defaults.set(autoExportSidecar, forKey: "autoExportSidecar")
         if let data = try? JSONEncoder().encode(watchFolders) {

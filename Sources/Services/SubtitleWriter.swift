@@ -105,17 +105,66 @@ enum SubtitleWriter {
         guard let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty else {
             return segments
         }
-        let end: Double
-        if let firstStart = segments.first?.start {
-            end = min(max(3.0, firstStart), 10.0)
+        let chunks = introCueTexts(summary)
+        var introCues: [TranscriptionSegment] = []
+        if chunks.count == 1 {
+            // Single short summary: keep the original before-the-dialogue
+            // window (min 3s for readability, capped at 10s).
+            let end: Double
+            if let firstStart = segments.first?.start {
+                end = min(max(3.0, firstStart), 10.0)
+            } else {
+                end = 8.0
+            }
+            introCues = [TranscriptionSegment(id: 1, start: 0, end: end, text: chunks[0])]
         } else {
-            end = 8.0
+            // A detailed summary runs as a sequence of cues, each held for
+            // its reading time. They may overlap early dialogue — SRT allows
+            // overlapping cues and players stack them; losing the intro to a
+            // fast cold open would be worse.
+            var cursor = 0.0
+            for (index, chunk) in chunks.enumerated() {
+                let duration = min(8.0, max(3.5, Double(chunk.count) * 0.055))
+                introCues.append(TranscriptionSegment(id: index + 1, start: cursor, end: cursor + duration, text: chunk))
+                cursor += duration
+            }
         }
-        let intro = TranscriptionSegment(id: 1, start: 0, end: end, text: summary)
         let renumbered = segments.enumerated().map { index, segment in
-            TranscriptionSegment(id: index + 2, start: segment.start, end: segment.end, text: segment.text)
+            TranscriptionSegment(id: index + introCues.count + 1, start: segment.start, end: segment.end, text: segment.text)
         }
-        return [intro] + renumbered
+        return introCues + renumbered
+    }
+
+    /// Splits a summary into screen-sized pieces on sentence boundaries,
+    /// packing sentences together while they fit. A short summary stays
+    /// whole; a detailed one becomes a readable sequence instead of a wall
+    /// of text in a single cue.
+    static func introCueTexts(_ summary: String, limit: Int = 220) -> [String] {
+        guard summary.count > limit else { return [summary] }
+        var sentences: [String] = []
+        summary.enumerateSubstrings(in: summary.startIndex..., options: .bySentences) { piece, _, _, _ in
+            if let piece = piece?.trimmingCharacters(in: .whitespacesAndNewlines), !piece.isEmpty {
+                sentences.append(piece)
+            }
+        }
+        guard !sentences.isEmpty else { return [summary] }
+
+        var chunks: [String] = []
+        var current = ""
+        for sentence in sentences {
+            if current.isEmpty {
+                current = sentence
+            } else if current.count + 1 + sentence.count <= limit {
+                current += " " + sentence
+            } else {
+                chunks.append(current)
+                current = sentence
+            }
+        }
+        if !current.isEmpty {
+            chunks.append(current)
+        }
+        return chunks
     }
 
     /// A blank line terminates a cue in SRT/VTT, so a translation containing

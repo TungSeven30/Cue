@@ -361,7 +361,8 @@ struct TranslationService {
         segments: [TranscriptionSegment],
         language: String,
         settings: JobSettingsSnapshot,
-        credentials: TranslationCredentials
+        credentials: TranslationCredentials,
+        detail: SummaryDetail = .brief
     ) async throws -> String {
         let model = settings.openAIModel
         let provider = credentials.provider
@@ -372,14 +373,7 @@ struct TranslationService {
             throw TranslationServiceError.missingAPIKey(provider.label)
         }
 
-        let systemPrompt = """
-        You write spoiler-free introductions for films based on their subtitles.
-        Write 1-3 short sentences introducing the setting, main characters, and premise — like the blurb on the back of a DVD box.
-        Do not reveal plot developments beyond the opening act, twists, or the ending.
-        Write the introduction in \(language).
-        Keep it under 280 characters so it fits on screen as a subtitle.
-        Return JSON only in the shape {"summary":"..."}.
-        """
+        let systemPrompt = Self.summaryInstructions(detail: detail, language: language)
         // Even a 3-hour film's subtitles fit comfortably in a modern context
         // window; the cap is a guard against pathological inputs.
         let subtitleText = String(segments.map(\.text).joined(separator: "\n").prefix(200_000))
@@ -403,6 +397,30 @@ struct TranslationService {
             throw Self.classifyAPIError(provider: provider, data: data, statusCode: httpResponse.statusCode, model: model)
         }
         return try Self.parseSummary(from: Self.extractOutputText(provider: provider, data: data))
+    }
+
+    /// Internal (not private) so prompt selection can be unit-tested.
+    static func summaryInstructions(detail: SummaryDetail, language: String) -> String {
+        switch detail {
+        case .brief:
+            return """
+            You write spoiler-free introductions for films based on their subtitles.
+            Write 1-3 short sentences introducing the setting, main characters, and premise — like the blurb on the back of a DVD box.
+            Do not reveal plot developments beyond the opening act, twists, or the ending.
+            Write the introduction in \(language).
+            Keep it under 280 characters so it fits on screen as a subtitle.
+            Return JSON only in the shape {"summary":"..."}.
+            """
+        case .detailed:
+            return """
+            You write spoiler-free introductions for films based on their subtitles.
+            Write a detailed introduction of 5-8 sentences: the setting and era, the main characters and how they relate to each other, the premise that sets the story in motion, and the film's tone or genre — like the opening of a thoughtful review that gives nothing away.
+            Do not reveal plot developments beyond the opening act, twists, or the ending.
+            Write the introduction in \(language). Plain sentences only — no markdown, no headings, no lists.
+            Keep it under 900 characters; it will be shown as a sequence of subtitles.
+            Return JSON only in the shape {"summary":"..."}.
+            """
+        }
     }
 
     /// Internal (not private) so the parsing can be unit-tested.

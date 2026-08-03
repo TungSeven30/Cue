@@ -593,6 +593,17 @@ private struct RunOptionsRow: View {
                 Toggle("Intro summary", isOn: $model.settings.generateSummary)
                     .toggleStyle(.checkbox)
                     .help("Generate a spoiler-free intro from the subtitles, shown at the start of exported SRT/VTT files")
+                if model.settings.generateSummary {
+                    Picker("", selection: $model.settings.summaryDetail) {
+                        ForEach(SummaryDetail.allCases) { detail in
+                            Text(detail.label).tag(detail)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 140)
+                    .labelsHidden()
+                    .help("Brief: 1-3 sentences in one subtitle. Detailed: a fuller spoiler-free introduction shown as a sequence of subtitles")
+                }
                 Toggle("Advanced", isOn: $model.settings.showAdvancedControls)
                     .toggleStyle(.checkbox)
                 Text("\(model.settings.translationSourceLanguage) → \(model.settings.translationTargetLanguage)")

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Status buckets for the optional grouped sidebar view, in display order.
@@ -263,6 +264,13 @@ struct SidebarView: View {
                 Label("Burn In Video…", systemImage: "film")
             }
             .disabled(model.isProcessing || job.status.isRunning)
+        }
+        Button {
+            // Sidecars and burned-in videos land next to the source, so
+            // revealing the source file IS the destination folder.
+            NSWorkspace.shared.activateFileViewerSelecting([job.sourceURL])
+        } label: {
+            Label("Open Destination Folder", systemImage: "folder")
         }
         Divider()
         Button(role: .destructive) {

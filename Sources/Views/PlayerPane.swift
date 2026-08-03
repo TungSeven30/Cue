@@ -103,49 +103,83 @@ final class PlayerController: ObservableObject {
     }
 }
 
+/// Subtitle text drawn over the video. Lives inside AVPlayerView's
+/// contentOverlayView so it follows the player into native full screen;
+/// a plain SwiftUI sibling would stay behind in the window.
+private struct SubtitleOverlay: View {
+    @ObservedObject var controller: PlayerController
+
+    var body: some View {
+        GeometryReader { proxy in
+            VStack {
+                Spacer()
+                if !controller.overlayText.isEmpty {
+                    Text(controller.overlayText)
+                        // Scale with the video: 16pt reads fine in the
+                        // preview pane but vanishes on a full 27" screen.
+                        .font(.system(size: max(16, proxy.size.height * 0.035), weight: .medium))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 6))
+                        .padding(.bottom, 56)
+                        .padding(.horizontal, 24)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// NSHostingView that never claims clicks, so the playback controls under
+/// the subtitle overlay keep working.
+private final class PassThroughHostingView<Content: View>: NSHostingView<Content> {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// AppKit-backed player view. The SwiftUI `VideoPlayer` wrapper crashes at
 /// metadata-initialization time in SwiftPM-built apps on macOS 26, so embed
 /// AVKit's AVPlayerView directly.
 private struct PlayerViewRepresentable: NSViewRepresentable {
-    let player: AVPlayer
+    let controller: PlayerController
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
-        view.player = player
+        view.player = controller.player
         view.controlsStyle = .inline
-        view.showsFullScreenToggleButton = false
+        view.showsFullScreenToggleButton = true
+        if let overlay = view.contentOverlayView {
+            let host = PassThroughHostingView(rootView: SubtitleOverlay(controller: controller))
+            host.translatesAutoresizingMaskIntoConstraints = false
+            overlay.addSubview(host)
+            NSLayoutConstraint.activate([
+                host.leadingAnchor.constraint(equalTo: overlay.leadingAnchor),
+                host.trailingAnchor.constraint(equalTo: overlay.trailingAnchor),
+                host.topAnchor.constraint(equalTo: overlay.topAnchor),
+                host.bottomAnchor.constraint(equalTo: overlay.bottomAnchor),
+            ])
+        }
         return view
     }
 
     func updateNSView(_ view: AVPlayerView, context: Context) {
-        if view.player !== player {
-            view.player = player
+        if view.player !== controller.player {
+            view.player = controller.player
         }
     }
 }
 
-/// Video preview with the current subtitle rendered over the picture.
+/// Video preview; the subtitle overlay rides inside the player view so it
+/// survives the native full-screen presentation.
 struct PlayerPane: View {
     @ObservedObject var controller: PlayerController
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            PlayerViewRepresentable(player: controller.player)
-            if !controller.overlayText.isEmpty {
-                Text(controller.overlayText)
-                    .font(.system(size: 16, weight: .medium))
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 6))
-                    .padding(.bottom, 56)
-                    .padding(.horizontal, 24)
-                    .allowsHitTesting(false)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .background(Color.black, in: RoundedRectangle(cornerRadius: 12))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        PlayerViewRepresentable(controller: controller)
+            .frame(maxWidth: .infinity)
+            .background(Color.black, in: RoundedRectangle(cornerRadius: 12))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }

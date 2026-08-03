@@ -240,13 +240,18 @@ struct SidebarView: View {
     /// menu races the menu teardown re-activating this app, which leaves
     /// Finder's window behind ours — indistinguishable from a dead button.
     private func revealInFinder(_ url: URL) {
+        NSLog("reveal: requested %@", url.path)
         DispatchQueue.main.async {
             if FileManager.default.fileExists(atPath: url.path) {
+                NSLog("reveal: file exists, revealing")
                 NSWorkspace.shared.activateFileViewerSelecting([url])
             } else if FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path) {
                 // The file moved or was deleted; its folder is still useful.
-                NSWorkspace.shared.open(url.deletingLastPathComponent())
+                NSLog("reveal: file missing, opening parent")
+                let opened = NSWorkspace.shared.open(url.deletingLastPathComponent())
+                NSLog("reveal: open(parent) -> %d", opened ? 1 : 0)
             } else {
+                NSLog("reveal: nothing exists at %@", url.path)
                 NSSound.beep()
             }
         }

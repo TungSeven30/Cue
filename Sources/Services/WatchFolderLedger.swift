@@ -54,6 +54,17 @@ final class WatchFolderLedger {
         persist()
     }
 
+    /// Forgets only the entries under one folder, so clearing a single watch
+    /// folder's history cannot make another folder's completed files re-run.
+    func clear(underPath folderPath: String) {
+        let prefix = folderPath.hasSuffix("/") ? folderPath : folderPath + "/"
+        let before = entries.count
+        entries = entries.filter { !Self.path(fromFingerprint: $0.key).hasPrefix(prefix) }
+        if entries.count != before {
+            persist()
+        }
+    }
+
     /// The fingerprint is "path|size|mtime"; the path itself may contain
     /// pipes, so strip exactly the two trailing components.
     static func path(fromFingerprint fingerprint: String) -> String {

@@ -86,12 +86,7 @@ struct WhisperDeskApp: App {
         }
 
         Settings {
-            SettingsView(
-                settings: model.settings,
-                watchFolderService: model.watchFolderService,
-                onWatchFolderSettingChange: { model.restartWatchFolder() },
-                onClearWatchHistory: { model.clearWatchHistory() }
-            )
+            SettingsView(settings: model.settings)
             .frame(width: 620, height: 780)
         }
     }

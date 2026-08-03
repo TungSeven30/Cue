@@ -23,8 +23,10 @@ Everything runs locally except translation and summaries, which call the API pro
 - Prepended as the first cue of SRT/VTT exports, shown from 0s until the first dialogue (3s minimum, 10s cap)
 - Generated in the translation's target language, or the film's own language for untranslated jobs
 
-**Watch folder**
-- Settings > Watch Folder: turn it on, choose a folder, and set that folder's own language/preset/translation profile once — every video dropped in afterward is queued, transcribed, and translated automatically, with SRT sidecars saved next to each file
+**Watch folders**
+- The sidebar's Watch Folders section: click Add Watch Folder (or drag a folder from Finder into the sidebar) and every video dropped into it afterward is queued, transcribed, and translated automatically, with SRT sidecars saved next to each file
+- Watch as many folders as you like, each with its own language/preset/translation profile (right-click > Folder Settings) — e.g. one inbox that translates Japanese to Vietnamese and another that only transcribes English
+- Right-click a folder to pause/resume watching, reveal it in Finder, or stop watching it
 - The app holds a sleep assertion while jobs are running, so an idle Mac won't nap mid-batch — but a closed lid still puts it to sleep, so leave the lid open or connect a display for overnight runs
 - "Clear Watch History" forgets which files were already processed, so everything currently in the folder is picked up again
 

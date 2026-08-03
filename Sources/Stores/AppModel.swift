@@ -43,7 +43,9 @@ final class AppModel: ObservableObject {
     private let diagnosticsService = EnvironmentDiagnosticsService()
     private let jobStore = JobStore()
     private let burnInService = BurnInService()
-    let watchFolderService = WatchFolderService()
+    /// One service per enabled watch folder, keyed by the folder's id and
+    /// reconciled against `settings.watchFolders` by syncWatchFolders().
+    private(set) var watchServices: [UUID: WatchFolderService] = [:]
     private let watchLedger = WatchFolderLedger()
     private var activeTask: Task<Void, Never>?
     private(set) var activeJobID: UUID?
@@ -108,10 +110,7 @@ final class AppModel: ObservableObject {
         .sink { [weak self] _ in self?.runDiagnostics() }
         .store(in: &cancellables)
         runDiagnostics()
-        configureWatchFolder()
-        if settings.watchFolderEnabled && !settings.watchFolderPath.isEmpty {
-            watchFolderService.start(path: settings.watchFolderPath)
-        }
+        syncWatchFolders()
     }
 
     /// Writes every pending job mutation to disk synchronously. Called on
@@ -447,51 +446,105 @@ final class AppModel: ObservableObject {
         }
     }
 
-    // MARK: - Watch folder
+    // MARK: - Watch folders
 
-    private func configureWatchFolder() {
-        watchFolderService.blockedFingerprints = { [weak self] in
+    /// Reconciles running services with the settings list: starts services
+    /// for newly enabled folders, stops removed/disabled ones, restarts a
+    /// folder whose path changed. Idempotent, so callers just mutate
+    /// `settings.watchFolders` and call this.
+    func syncWatchFolders() {
+        let wanted = Dictionary(uniqueKeysWithValues: settings.watchFolders
+            .filter { $0.enabled && !$0.path.isEmpty }
+            .map { ($0.id, $0) })
+
+        for (id, service) in watchServices where wanted[id] == nil {
+            service.stop()
+            watchServices[id] = nil
+        }
+        for (id, folder) in wanted {
+            if let existing = watchServices[id] {
+                if existing.watchedPath != folder.path {
+                    existing.start(path: folder.path)
+                }
+            } else {
+                let service = makeWatchService(folderID: id)
+                // Forward the service's lastError changes so sidebar rows
+                // re-render; the row itself cannot @ObservedObject an
+                // Optional service.
+                service.objectWillChange
+                    .sink { [weak self] _ in self?.objectWillChange.send() }
+                    .store(in: &cancellables)
+                watchServices[id] = service
+                service.start(path: folder.path)
+            }
+        }
+        objectWillChange.send()
+    }
+
+    private func makeWatchService(folderID: UUID) -> WatchFolderService {
+        let service = WatchFolderService()
+        service.blockedFingerprints = { [weak self] in
             guard let self else { return [] }
             // Ledger entries plus every job's fingerprint, any status
             // (spec §2.3 rule 4): canceled or manual jobs block too.
             return self.watchLedger.fingerprints.union(self.jobs.map(\.sourceFingerprint))
         }
-        watchFolderService.onScanCompleted = { [weak self] folderPath, existingPaths in
+        service.onScanCompleted = { [weak self] folderPath, existingPaths in
             // Prune only entries under the folder that was actually scanned:
-            // switching watch folders must not wipe the other folder's
-            // history, or its completed files would re-ingest on switch-back.
+            // other folders' histories must survive untouched.
             let prefix = folderPath.hasSuffix("/") ? folderPath : folderPath + "/"
             self?.watchLedger.prune(fileExists: { path in
                 !path.hasPrefix(prefix) || existingPaths.contains(path)
             })
         }
-        watchFolderService.onFilesReady = { [weak self] urls in
-            self?.ingestWatchFolderFiles(urls)
+        service.onFilesReady = { [weak self] urls in
+            self?.ingestWatchFolderFiles(urls, folderID: folderID)
         }
+        return service
     }
 
-    /// Called from Settings when the toggle or path changes.
-    func restartWatchFolder() {
-        watchFolderService.stop()
-        if settings.watchFolderEnabled && !settings.watchFolderPath.isEmpty {
-            watchFolderService.start(path: settings.watchFolderPath)
-        }
+    func addWatchFolder(path: String) {
+        // Re-adding a watched path is a no-op, not a duplicate watcher.
+        guard !settings.watchFolders.contains(where: { $0.path == path }) else { return }
+        settings.watchFolders.append(WatchFolder(path: path))
+        syncWatchFolders()
     }
 
-    func clearWatchHistory() {
-        watchLedger.clear()
+    func removeWatchFolder(_ id: UUID) {
+        settings.watchFolders.removeAll { $0.id == id }
+        syncWatchFolders()
+    }
+
+    func setWatchFolderEnabled(_ id: UUID, _ enabled: Bool) {
+        guard let index = settings.watchFolders.firstIndex(where: { $0.id == id }) else { return }
+        settings.watchFolders[index].enabled = enabled
+        syncWatchFolders()
+    }
+
+    func setWatchFolderProfile(_ id: UUID, _ profile: JobSettingsOverrides) {
+        guard let index = settings.watchFolders.firstIndex(where: { $0.id == id }) else { return }
+        settings.watchFolders[index].profile = profile
+    }
+
+    func clearWatchHistory(for id: UUID) {
+        guard let folder = settings.watchFolders.first(where: { $0.id == id }) else { return }
+        watchLedger.clear(underPath: folder.path)
     }
 
     /// Ingest deliberately does NOT go through enqueueJob: that clears
     /// queuePaused (spec §2.3/2.6 — arriving files must not override an
     /// explicit stop), and ignores autoStartAddedJobs, which governs
     /// interactive adds only.
-    private func ingestWatchFolderFiles(_ urls: [URL]) {
+    private func ingestWatchFolderFiles(_ urls: [URL], folderID: UUID) {
         guard !urls.isEmpty else { return }
+        // The profile is read at ingest time, so edits apply to the next
+        // file without restarting the watcher.
+        let profile = settings.watchFolders.first(where: { $0.id == folderID })?.profile
+            ?? JobSettingsOverrides()
         for url in urls {
             var job = TranscriptionJob(sourceURL: url, settings: settings)
             job.origin = .watchFolder
-            job.overrides = settings.watchFolderProfile
+            job.overrides = profile
             job.orderIndex = QueueOrdering.indexForWatchAdd(existing: jobs.map(\.orderIndex))
             job.status = .queued
             job.progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)

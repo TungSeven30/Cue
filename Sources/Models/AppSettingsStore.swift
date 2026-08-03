@@ -339,9 +339,7 @@ final class AppSettingsStore: ObservableObject {
     @Published var generateSummary: Bool { didSet { save() } }
     @Published var autoStartAddedJobs: Bool { didSet { save() } }
     @Published var autoExportSidecar: Bool { didSet { save() } }
-    @Published var watchFolderEnabled: Bool { didSet { save() } }
-    @Published var watchFolderPath: String { didSet { save() } }
-    @Published var watchFolderProfile: JobSettingsOverrides { didSet { save() } }
+    @Published var watchFolders: [WatchFolder] { didSet { save() } }
     @Published var showAdvancedControls: Bool { didSet { save() } }
     @Published var translationChunkMode: TranslationChunkMode { didSet { save() } }
     @Published var translationParallelism: Int {
@@ -451,13 +449,22 @@ final class AppSettingsStore: ObservableObject {
         generateSummary = defaults.bool(forKey: "generateIntroSummary")
         autoStartAddedJobs = defaults.object(forKey: "autoStartAddedJobs") as? Bool ?? true
         autoExportSidecar = defaults.bool(forKey: "autoExportSidecar")
-        watchFolderEnabled = defaults.bool(forKey: "watchFolderEnabled")
-        watchFolderPath = defaults.string(forKey: "watchFolderPath") ?? ""
-        if let data = defaults.data(forKey: "watchFolderProfile"),
-           let profile = try? JSONDecoder().decode(JobSettingsOverrides.self, from: data) {
-            watchFolderProfile = profile
+        if let data = defaults.data(forKey: "watchFolders"),
+           let decoded = try? JSONDecoder().decode([WatchFolder].self, from: data) {
+            watchFolders = decoded
+        } else if let legacyPath = defaults.string(forKey: "watchFolderPath"), !legacyPath.isEmpty {
+            // One-time migration from the single-folder era (v2.2.x): the
+            // legacy folder becomes the first list entry, keeping its
+            // enabled state and profile.
+            var migrated = WatchFolder(path: legacyPath)
+            migrated.enabled = defaults.bool(forKey: "watchFolderEnabled")
+            if let profileData = defaults.data(forKey: "watchFolderProfile"),
+               let profile = try? JSONDecoder().decode(JobSettingsOverrides.self, from: profileData) {
+                migrated.profile = profile
+            }
+            watchFolders = [migrated]
         } else {
-            watchFolderProfile = JobSettingsOverrides()
+            watchFolders = []
         }
         showAdvancedControls = defaults.bool(forKey: "showAdvancedControls")
         translationChunkMode = TranslationChunkMode(rawValue: defaults.string(forKey: "translationChunkMode") ?? "") ?? .balanced
@@ -561,10 +568,8 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(generateSummary, forKey: "generateIntroSummary")
         defaults.set(autoStartAddedJobs, forKey: "autoStartAddedJobs")
         defaults.set(autoExportSidecar, forKey: "autoExportSidecar")
-        defaults.set(watchFolderEnabled, forKey: "watchFolderEnabled")
-        defaults.set(watchFolderPath, forKey: "watchFolderPath")
-        if let data = try? JSONEncoder().encode(watchFolderProfile) {
-            defaults.set(data, forKey: "watchFolderProfile")
+        if let data = try? JSONEncoder().encode(watchFolders) {
+            defaults.set(data, forKey: "watchFolders")
         }
         defaults.set(showAdvancedControls, forKey: "showAdvancedControls")
         defaults.set(translationChunkMode.rawValue, forKey: "translationChunkMode")

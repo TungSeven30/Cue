@@ -141,6 +141,20 @@ struct WatchFolderLedgerTests {
         #expect(WatchFolderLedger.path(fromFingerprint: "/w/we|ird.mp4|1|2.0") == "/w/we|ird.mp4")
     }
 
+    @Test func scopedClearLeavesOtherFolders() throws {
+        let base = try makeBase()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let ledger = WatchFolderLedger(baseURL: base)
+        ledger.record("/inbox-a/movie.mp4|1|2.0", outcome: .success)
+        ledger.record("/inbox-b/movie.mp4|1|2.0", outcome: .success)
+        // A path that merely shares the prefix string must not match.
+        ledger.record("/inbox-a-archive/movie.mp4|1|2.0", outcome: .success)
+        ledger.clear(underPath: "/inbox-a")
+        #expect(!ledger.contains("/inbox-a/movie.mp4|1|2.0"))
+        #expect(ledger.contains("/inbox-b/movie.mp4|1|2.0"))
+        #expect(ledger.contains("/inbox-a-archive/movie.mp4|1|2.0"))
+    }
+
     @Test func clearEmptiesEverything() throws {
         let base = try makeBase()
         defer { try? FileManager.default.removeItem(at: base) }
@@ -149,5 +163,25 @@ struct WatchFolderLedgerTests {
         ledger.clear()
         #expect(!ledger.contains("/w/a.mp4|1|2.0"))
         #expect(!WatchFolderLedger(baseURL: base).contains("/w/a.mp4|1|2.0"))
+    }
+}
+
+
+struct WatchFolderModelTests {
+    @Test func legacySingleFolderFieldsDecodeWithDefaults() throws {
+        // Only path is required; id/enabled/profile default, so a settings
+        // blob from an older build (or a hand-edited one) still loads.
+        let folder = try JSONDecoder().decode(WatchFolder.self, from: Data(#"{"path":"/w/inbox"}"#.utf8))
+        #expect(folder.enabled)
+        #expect(folder.profile.isEmpty)
+        #expect(folder.name == "inbox")
+    }
+
+    @Test func roundTripsWithProfile() throws {
+        var folder = WatchFolder(path: "/w/dramas")
+        folder.profile.translationTargetLanguage = "Vietnamese"
+        folder.enabled = false
+        let back = try JSONDecoder().decode(WatchFolder.self, from: JSONEncoder().encode(folder))
+        #expect(back == folder)
     }
 }

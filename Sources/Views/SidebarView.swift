@@ -77,6 +77,7 @@ private enum JobStatusFilter: String, CaseIterable, Identifiable {
 struct SidebarView: View {
     @ObservedObject var model: AppModel
     @State private var searchText = ""
+    @State private var editingWatchFolderID: UUID?
     @AppStorage("sidebarGroupByStatus") private var groupByStatus = false
     @AppStorage("sidebarStatusFilter") private var statusFilterRaw = JobStatusFilter.all.rawValue
 
@@ -85,6 +86,7 @@ struct SidebarView: View {
             get: { model.selectedJobID },
             set: { model.selectJob($0) }
         )) {
+            watchFoldersSection
             if groupByStatus {
                 groupedSections
             } else {
@@ -92,7 +94,34 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        // Dropping folders from Finder starts watching them; dropped files
+        // become jobs, same as dropping on the main workspace.
+        .dropDestination(for: URL.self) { urls, _ in
+            let fileURLs = urls.filter(\.isFileURL)
+            guard !fileURLs.isEmpty else { return false }
+            var isDirectory: ObjCBool = false
+            for url in fileURLs {
+                if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                    model.addWatchFolder(path: url.path)
+                } else {
+                    model.addVideos(urls: [url])
+                }
+            }
+            return true
+        }
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search jobs")
+        // Sheet lives on the List, not inside a Section: section-scoped
+        // sheets present unreliably on macOS.
+        .sheet(item: Binding(
+            get: { editingWatchFolderID.flatMap { id in settingsWatchFolders.first { $0.id == id } } },
+            set: { editingWatchFolderID = $0?.id }
+        )) { folder in
+            JobSettingsOverridesView(
+                title: "Watch Folder Settings — \(folder.name)",
+                settings: model.settings,
+                overrides: folder.profile
+            ) { model.setWatchFolderProfile(folder.id, $0) }
+        }
         .toolbar {
             ToolbarItem {
                 Menu {
@@ -138,6 +167,86 @@ struct SidebarView: View {
             // Rows scroll beneath the inset; without a backing material the
             // list text bleeds through the buttons.
             .background(.ultraThinMaterial)
+        }
+    }
+
+    // MARK: - Watch folders
+
+    @ViewBuilder
+    private var watchFoldersSection: some View {
+        Section("Watch Folders") {
+            ForEach(settingsWatchFolders) { folder in
+                WatchFolderRow(
+                    folder: folder,
+                    service: model.watchServices[folder.id],
+                    needsProviderWarning: needsProviderWarning(folder)
+                )
+                .contextMenu { watchFolderMenu(for: folder) }
+            }
+            Button {
+                addWatchFolderViaPanel()
+            } label: {
+                Label("Add Watch Folder…", systemImage: "folder.badge.plus")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Watch a folder: files dropped into it are transcribed and translated automatically, with subtitles saved next to each video. You can also drag a folder from Finder into this sidebar.")
+        }
+    }
+
+    private var settingsWatchFolders: [WatchFolder] {
+        model.settings.watchFolders
+    }
+
+    /// The folder promises translated output its provider can't deliver yet.
+    private func needsProviderWarning(_ folder: WatchFolder) -> Bool {
+        guard folder.enabled else { return false }
+        let autoTranslate = folder.profile.autoTranslate ?? model.settings.autoTranslateAfterTranscription
+        return autoTranslate && !model.settings.isTranslationReady
+    }
+
+    @ViewBuilder
+    private func watchFolderMenu(for folder: WatchFolder) -> some View {
+        Button {
+            model.setWatchFolderEnabled(folder.id, !folder.enabled)
+        } label: {
+            Label(folder.enabled ? "Pause Watching" : "Resume Watching",
+                  systemImage: folder.enabled ? "pause.circle" : "play.circle")
+        }
+        Button {
+            editingWatchFolderID = folder.id
+        } label: {
+            Label("Folder Settings…", systemImage: "slider.horizontal.3")
+        }
+        Button {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: folder.path)])
+        } label: {
+            Label("Reveal in Finder", systemImage: "folder")
+        }
+        Button {
+            model.clearWatchHistory(for: folder.id)
+        } label: {
+            Label("Clear Watch History", systemImage: "clock.arrow.circlepath")
+        }
+        Divider()
+        Button(role: .destructive) {
+            model.removeWatchFolder(folder.id)
+        } label: {
+            Label("Stop Watching This Folder", systemImage: "trash")
+        }
+    }
+
+    private func addWatchFolderViaPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Watch"
+        panel.message = "Choose folders to watch. New videos dropped into them are processed automatically."
+        if panel.runModal() == .OK {
+            for url in panel.urls {
+                model.addWatchFolder(path: url.path)
+            }
         }
     }
 
@@ -279,6 +388,53 @@ struct SidebarView: View {
             Label("Delete", systemImage: "trash")
         }
         .disabled(job.id == model.activeJobID)
+    }
+}
+
+private struct WatchFolderRow: View {
+    let folder: WatchFolder
+    let service: WatchFolderService?
+    let needsProviderWarning: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: folder.enabled ? "folder.fill.badge.gearshape" : "folder.badge.gearshape")
+                .foregroundStyle(folder.enabled ? Color.accentColor : Color.secondary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(folder.name)
+                    .lineLimit(1)
+                Text(statusText)
+                    .font(.caption)
+                    .foregroundStyle(hasError ? .red : .secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            if !folder.profile.isEmpty {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help("This folder has its own settings")
+            }
+            if needsProviderWarning {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .help("Files will be transcribed but not translated until a translation API key or local server is configured")
+            }
+        }
+        .padding(.vertical, 2)
+        .help(folder.path)
+    }
+
+    private var hasError: Bool {
+        folder.enabled && service?.lastError != nil
+    }
+
+    private var statusText: String {
+        if !folder.enabled { return "Paused" }
+        if let error = service?.lastError { return error }
+        return "Watching"
     }
 }
 

@@ -3,10 +3,6 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var settings: AppSettingsStore
-    @ObservedObject var watchFolderService: WatchFolderService
-    let onWatchFolderSettingChange: () -> Void
-    let onClearWatchHistory: () -> Void
-    @State private var isEditingWatchProfile = false
     @State private var isBrowsingOpenRouter = false
 
     var body: some View {
@@ -148,80 +144,10 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section {
-                Toggle("Watch a folder for new videos", isOn: Binding(
-                    get: { settings.watchFolderEnabled },
-                    set: { settings.watchFolderEnabled = $0; onWatchFolderSettingChange() }
-                ))
-                .help("Files dropped into the folder are queued, transcribed, and translated automatically; subtitles are saved next to each video")
-
-                if settings.watchFolderEnabled {
-                    HStack {
-                        Text(settings.watchFolderPath.isEmpty ? "No folder chosen" : settings.watchFolderPath)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .foregroundStyle(settings.watchFolderPath.isEmpty ? .secondary : .primary)
-                        Spacer()
-                        Button("Choose…") { chooseWatchFolder() }
-                    }
-
-                    Button("Folder Settings…") { isEditingWatchProfile = true }
-                        .help("Language, model, and translation settings applied to every file this folder picks up")
-
-                    if watchFolderNeedsAPIKeyWarning {
-                        Label(
-                            "Files will be transcribed but not translated until a translation API key or local server is configured.",
-                            systemImage: "exclamationmark.triangle"
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                    }
-                    if let error = watchFolderService.lastError {
-                        Label(error, systemImage: "exclamationmark.triangle")
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-
-                    Button("Clear Watch History") { onClearWatchHistory() }
-                        .help("Forget which files were already processed, so everything in the folder is picked up again")
-                }
-            } header: {
-                Label("Watch Folder", systemImage: "folder.badge.gearshape")
-            }
         }
         .formStyle(.grouped)
         .sheet(isPresented: $isBrowsingOpenRouter) {
             OpenRouterModelBrowserView(settings: settings)
-        }
-        .sheet(isPresented: $isEditingWatchProfile) {
-            JobSettingsOverridesView(
-                title: "Watch Folder Settings",
-                settings: settings,
-                overrides: settings.watchFolderProfile
-            ) { settings.watchFolderProfile = $0 }
-        }
-    }
-
-    private var watchFolderNeedsAPIKeyWarning: Bool {
-        // Spec §2.1: the promise is *translated* sidecars — surface the
-        // missing key before bedtime, not at breakfast.
-        let autoTranslate = settings.watchFolderProfile.autoTranslate
-            ?? settings.autoTranslateAfterTranscription
-        return autoTranslate && !settings.isTranslationReady
-    }
-
-    private func chooseWatchFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Watch"
-        if !settings.watchFolderPath.isEmpty {
-            panel.directoryURL = URL(fileURLWithPath: settings.watchFolderPath, isDirectory: true)
-        }
-        if panel.runModal() == .OK, let url = panel.url {
-            settings.watchFolderPath = url.path
-            onWatchFolderSettingChange()
         }
     }
 

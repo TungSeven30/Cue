@@ -219,7 +219,7 @@ struct SidebarView: View {
             Label("Folder Settings…", systemImage: "slider.horizontal.3")
         }
         Button {
-            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: folder.path)])
+            revealInFinder(URL(fileURLWithPath: folder.path))
         } label: {
             Label("Reveal in Finder", systemImage: "folder")
         }
@@ -233,6 +233,22 @@ struct SidebarView: View {
             model.removeWatchFolder(folder.id)
         } label: {
             Label("Stop Watching This Folder", systemImage: "trash")
+        }
+    }
+
+    /// Deferred one runloop tick: revealing from inside a dismissing context
+    /// menu races the menu teardown re-activating this app, which leaves
+    /// Finder's window behind ours — indistinguishable from a dead button.
+    private func revealInFinder(_ url: URL) {
+        DispatchQueue.main.async {
+            if FileManager.default.fileExists(atPath: url.path) {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            } else if FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path) {
+                // The file moved or was deleted; its folder is still useful.
+                NSWorkspace.shared.open(url.deletingLastPathComponent())
+            } else {
+                NSSound.beep()
+            }
         }
     }
 
@@ -377,7 +393,7 @@ struct SidebarView: View {
         Button {
             // Sidecars and burned-in videos land next to the source, so
             // revealing the source file IS the destination folder.
-            NSWorkspace.shared.activateFileViewerSelecting([job.sourceURL])
+            revealInFinder(job.sourceURL)
         } label: {
             Label("Open Destination Folder", systemImage: "folder")
         }

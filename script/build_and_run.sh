@@ -5,7 +5,7 @@ MODE="${1:-run}"
 APP_NAME="WhisperDesk"
 BUNDLE_ID="com.local.WhisperDesk"
 MIN_SYSTEM_VERSION="14.0"
-APP_VERSION="${APP_VERSION:-2.2.1}"
+APP_VERSION="${APP_VERSION:-2.2.2}"
 APP_BUILD="${APP_BUILD:-1}"
 INSTALL_DIR="${INSTALL_DIR:-/Applications}"
 

@@ -44,6 +44,18 @@ import Testing
         #expect(once == twice)
     }
 
+    @Test func isIdempotentWithMultiGranularityRepeats() {
+        // Input has repeats at multiple granularities: "a b" repeats 3 times, then "c" repeats.
+        // Single pass might collapse "a b", but second pass should collapse "c c".
+        // After this test, both passes should be identical (fixed point).
+        let batch = [
+            TranscriptionSegment(id: 1, start: 0, end: 1, text: "a b a b a b c c"),
+        ]
+        let once = TranscriptionPostProcessor.cleanWindow(batch, settings: settings)
+        let twice = TranscriptionPostProcessor.cleanWindow(once, settings: settings)
+        #expect(once == twice)
+    }
+
     @Test func laterBatchesDoNotAlterEarlierOutput() {
         let a = [TranscriptionSegment(id: 1, start: 0, end: 2, text: "first")]
         let b = [TranscriptionSegment(id: 2, start: 2, end: 4, text: "second")]

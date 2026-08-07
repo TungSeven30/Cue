@@ -453,6 +453,21 @@ enum TranscriptionPostProcessor {
     }
 
     private static func collapseRepeatedText(_ text: String) -> String {
+        var current = normalizeWhitespace(text)
+        guard !current.isEmpty else { return "" }
+
+        // Iterate until stable (with a cap to protect against pathological input)
+        for _ in 0..<10 {
+            let previous = current
+            current = collapseRepeatedTextPass(current)
+            if current == previous {
+                break  // Reached fixed point
+            }
+        }
+        return current
+    }
+
+    private static func collapseRepeatedTextPass(_ text: String) -> String {
         let trimmed = normalizeWhitespace(text)
         guard !trimmed.isEmpty else { return "" }
 

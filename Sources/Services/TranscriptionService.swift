@@ -45,7 +45,8 @@ struct TranscriptionService {
     func transcribe(
         videoURL: URL,
         settings: JobSettingsSnapshot,
-        progress: @escaping @MainActor (JobProgress) -> Void
+        progress: @escaping @MainActor (JobProgress) -> Void,
+        onSegments: (@MainActor ([TranscriptionSegment]) -> Void)? = nil
     ) async throws -> TranscriptionResult {
         let resolved = Self.resolveDispatch(backend: settings.whisperBackend, model: settings.whisperModel)
         let snapshot = TranscriptionSettingsSnapshot(
@@ -66,7 +67,7 @@ struct TranscriptionService {
         )
 
         if resolved.backend == .native {
-            return try await transcribeNatively(videoURL: videoURL, snapshot: snapshot, progress: progress)
+            return try await transcribeNatively(videoURL: videoURL, snapshot: snapshot, progress: progress, onSegments: onSegments)
         }
 
         let scriptURL = try BackendScriptWriter.ensureScript()
@@ -143,12 +144,17 @@ struct TranscriptionService {
 
             let stdout = PipeCollector()
             let stderr = PipeCollector { line in
-                if let event = TranscriptionProgressEvent.decode(line) {
-                    // A serial hop to the main queue keeps progress updates in
-                    // emission order; unstructured Tasks are not ordered.
-                    DispatchQueue.main.async {
-                        MainActor.assumeIsolated {
-                            progress(event.progress)
+                guard let event = TranscriptionStreamEvent.decode(line) else { return }
+                // A serial hop to the main queue keeps progress and segment
+                // updates in emission order; unstructured Tasks are not ordered.
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        switch event {
+                        case .progress(let update):
+                            progress(update)
+                        case .segments(let batch):
+                            let cleaned = TranscriptionPostProcessor.cleanWindow(batch, settings: snapshot)
+                            if !cleaned.isEmpty { onSegments?(cleaned) }
                         }
                     }
                 }
@@ -213,7 +219,8 @@ struct TranscriptionService {
     private func transcribeNatively(
         videoURL: URL,
         snapshot: TranscriptionSettingsSnapshot,
-        progress: @escaping @MainActor (JobProgress) -> Void
+        progress: @escaping @MainActor (JobProgress) -> Void,
+        onSegments: (@MainActor ([TranscriptionSegment]) -> Void)? = nil
     ) async throws -> TranscriptionResult {
         let cachedWav = try AudioCache.cachedAudioURL(for: videoURL, preprocess: false)
         let cachedWavSize = (try? FileManager.default.attributesOfItem(atPath: cachedWav.path)[.size] as? UInt64) ?? 0
@@ -280,6 +287,13 @@ struct TranscriptionService {
                                 fraction: 0.2 + clamped * 0.72
                             ))
                         }
+                    }
+                },
+                onSegments: { batch in
+                    let cleaned = TranscriptionPostProcessor.cleanWindow(batch, settings: snapshot)
+                    guard !cleaned.isEmpty else { return }
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { onSegments?(cleaned) }
                     }
                 },
                 isCancelled: { cancelFlag.withLock { $0 } }
@@ -637,20 +651,30 @@ enum TranscriptionPostProcessor {
     }
 }
 
-private struct TranscriptionProgressEvent: Decodable {
-    let stage: JobStage
-    let detail: String
-    let fraction: Double?
+enum TranscriptionStreamEvent: Equatable {
+    case progress(JobProgress)
+    case segments([TranscriptionSegment])
 
-    var progress: JobProgress {
-        JobProgress(stage: stage, detail: detail, fraction: fraction)
+    private struct SegmentsEnvelope: Decodable {
+        let event: String
+        let segments: [TranscriptionSegment]
     }
 
-    static func decode(_ line: String) -> TranscriptionProgressEvent? {
-        guard line.hasPrefix("{"), let data = line.data(using: .utf8) else {
-            return nil
+    private struct ProgressEnvelope: Decodable {
+        let stage: JobStage
+        let detail: String
+        let fraction: Double?
+    }
+
+    static func decode(_ line: String) -> TranscriptionStreamEvent? {
+        guard line.hasPrefix("{"), let data = line.data(using: .utf8) else { return nil }
+        if let envelope = try? JSONDecoder().decode(SegmentsEnvelope.self, from: data), envelope.event == "segments" {
+            return .segments(envelope.segments)
         }
-        return try? JSONDecoder().decode(TranscriptionProgressEvent.self, from: data)
+        if let envelope = try? JSONDecoder().decode(ProgressEnvelope.self, from: data) {
+            return .progress(JobProgress(stage: envelope.stage, detail: envelope.detail, fraction: envelope.fraction))
+        }
+        return nil
     }
 }
 

@@ -53,8 +53,8 @@ struct DetailView: View {
         .onChange(of: model.selectedJobID) { syncPlayer() }
         .onChange(of: model.isPlayerVisible) { syncPlayer() }
         .onChange(of: tab) { syncOverlaySegments() }
-        .onChange(of: model.transcriptSegments) { syncOverlaySegments() }
-        .onChange(of: model.translatedSegments) { syncOverlaySegments() }
+        .onChange(of: model.displayTranscriptSegments) { syncOverlaySegments() }
+        .onChange(of: model.displayTranslatedSegments) { syncOverlaySegments() }
     }
 
     private func syncPlayer() {
@@ -64,11 +64,12 @@ struct DetailView: View {
     }
 
     private func syncOverlaySegments() {
-        // The overlay and highlight follow whichever text the user is
-        // looking at: translation on the translation tab, else the original.
-        let segments = tab == .translation && !model.translatedSegments.isEmpty
-            ? model.translatedSegments
-            : model.transcriptSegments
+        // The overlay and highlight follow whichever text the user is looking
+        // at: translation on the translation tab, else the original — live
+        // partials included while a job streams.
+        let segments = tab == .translation && !model.displayTranslatedSegments.isEmpty
+            ? model.displayTranslatedSegments
+            : model.displayTranscriptSegments
         playerController.updateSegments(segments)
     }
 
@@ -196,7 +197,7 @@ struct DetailView: View {
     private var tabContent: some View {
         switch tab {
         case .transcript:
-            if model.transcriptSegments.isEmpty {
+            if model.displayTranscriptSegments.isEmpty {
                 ContentUnavailableView {
                     Label("No Transcript Yet", systemImage: "waveform")
                 } description: {
@@ -207,10 +208,10 @@ struct DetailView: View {
                         .disabled(!model.canTranscribe)
                 }
             } else {
-                segmentList(segments: model.transcriptSegments, onEdit: model.updateTranscriptSegment)
+                segmentList(segments: model.displayTranscriptSegments, onEdit: model.updateTranscriptSegment)
             }
         case .translation:
-            if model.translatedSegments.isEmpty {
+            if model.displayTranslatedSegments.isEmpty {
                 ContentUnavailableView {
                     Label("No Translation Yet", systemImage: "character.bubble")
                 } description: {
@@ -221,7 +222,7 @@ struct DetailView: View {
                         .disabled(!model.canTranslate)
                 }
             } else {
-                segmentList(segments: model.translatedSegments, onEdit: model.updateTranslatedSegment)
+                segmentList(segments: model.displayTranslatedSegments, onEdit: model.updateTranslatedSegment)
             }
         case .log:
             ScrollView {

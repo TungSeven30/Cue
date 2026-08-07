@@ -157,6 +157,19 @@ final class AppModel: ObservableObject {
         currentJob?.translatedSegments ?? []
     }
 
+    /// What the transcript tab and player should render: the final transcript
+    /// when it exists, else the live streamed partials. Gating logic
+    /// (canTranslate, skip checks, export) must keep using the real fields.
+    var displayTranscriptSegments: [TranscriptionSegment] {
+        guard let job = currentJob else { return [] }
+        return job.transcriptSegments.isEmpty ? job.partialTranscriptSegments : job.transcriptSegments
+    }
+
+    var displayTranslatedSegments: [TranscriptionSegment] {
+        guard let job = currentJob else { return [] }
+        return job.translatedSegments.isEmpty ? job.partialTranslatedSegments : job.translatedSegments
+    }
+
     var partialTranslatedSegments: [TranscriptionSegment] {
         currentJob?.partialTranslatedSegments ?? []
     }

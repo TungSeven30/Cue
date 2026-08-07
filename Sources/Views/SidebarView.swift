@@ -408,7 +408,7 @@ struct SidebarView: View {
         } label: {
             Label("Delete", systemImage: "trash")
         }
-        .disabled(job.id == model.activeJobID)
+        .disabled(model.isJobActive(job.id))
     }
 }
 

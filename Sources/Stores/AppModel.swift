@@ -47,8 +47,17 @@ final class AppModel: ObservableObject {
     /// reconciled against `settings.watchFolders` by syncWatchFolders().
     private(set) var watchServices: [UUID: WatchFolderService] = [:]
     private let watchLedger = WatchFolderLedger()
-    private var activeTask: Task<Void, Never>?
-    private(set) var activeJobID: UUID?
+    /// The pipeline runs as two independently serial slots: the GPU slot
+    /// (transcription and burn-in — the heavyweight local consumers) and the
+    /// translation slot (network-bound). They may run at the same time on
+    /// different jobs, which is what lets job B transcribe while job A is
+    /// still translating.
+    private var gpuTask: Task<Void, Never>?
+    private(set) var gpuJobID: UUID?
+    private var translationTask: Task<Void, Never>?
+    private(set) var translationJobID: UUID?
+    /// Translation work items that run ahead of queued jobs, in FIFO order.
+    private var translationWorkQueue: [(jobID: UUID, work: @MainActor () async -> Void)] = []
     private var cancellables = Set<AnyCancellable>()
     private var persistTask: Task<Void, Never>?
     /// Held while any job is running so overnight batches survive idle sleep
@@ -56,7 +65,7 @@ final class AppModel: ObservableObject {
     private var processingActivity: NSObjectProtocol?
 
     private func updateProcessingActivity() {
-        if activeJobID != nil {
+        if isProcessing {
             guard processingActivity == nil else { return }
             processingActivity = ProcessInfo.processInfo.beginActivity(
                 options: [.userInitiated, .idleSystemSleepDisabled],
@@ -165,9 +174,15 @@ final class AppModel: ObservableObject {
         currentJob?.status == .translating
     }
 
-    /// Any job is currently running.
+    /// Any pipeline work is in flight (either slot).
     var isProcessing: Bool {
-        activeJobID != nil
+        gpuJobID != nil || translationJobID != nil
+    }
+
+    /// True while the job occupies a pipeline slot; such a job cannot be
+    /// deleted, only canceled.
+    func isJobActive(_ id: UUID) -> Bool {
+        id == gpuJobID || id == translationJobID
     }
 
     /// The job the user is looking at is the one running.
@@ -358,7 +373,7 @@ final class AppModel: ObservableObject {
 
     func deleteJob(_ id: UUID) {
         // The running job cannot be deleted; cancel it first.
-        guard id != activeJobID else { return }
+        guard !isJobActive(id) else { return }
         jobs.removeAll { $0.id == id }
         dirtyJobIDs.remove(id)
         if selectedJobID == id {
@@ -420,30 +435,78 @@ final class AppModel: ObservableObject {
         return job.translatedSegments.isEmpty && settings.isTranslationReady
     }
 
-    /// Runs the next queued job. Serial on purpose: one model on the GPU at
-    /// a time.
+    /// Pumps both slots. The GPU takes the next queued job without a
+    /// transcript; translation takes queued work items first, then queued
+    /// jobs that already have a transcript. Each slot stays serial, but the
+    /// two run independently, so the next transcription can start while the
+    /// previous job is still translating.
     private func processQueue() {
         defer { updateProcessingActivity() }
-        guard activeJobID == nil, !queuePaused else { return }
-        guard let next = jobs.filter({ $0.status == .queued }).min(by: { $0.orderIndex < $1.orderIndex }) else {
-            if didProcessQueuedJob {
-                didProcessQueuedJob = false
-                notify(title: "WhisperDesk", body: "All queued jobs finished.")
+        pumpTranslation()
+        pumpGPU()
+        // A paused queue is not a finished queue: the old processQueue bailed
+        // before the notification whenever queuePaused was set, and jobs are
+        // usually still waiting.
+        if !queuePaused, gpuJobID == nil, translationJobID == nil, translationWorkQueue.isEmpty, didProcessQueuedJob,
+           PipelineScheduler.nextGPUJob(jobs: jobViews, gpuBusy: false, queuePaused: queuePaused) == nil,
+           PipelineScheduler.nextTranslationJob(jobs: jobViews, translationBusy: false, queuePaused: queuePaused) == nil {
+            didProcessQueuedJob = false
+            notify(title: "WhisperDesk", body: "All queued jobs finished.")
+        }
+    }
+
+    private var jobViews: [PipelineScheduler.JobView] {
+        jobs.map {
+            PipelineScheduler.JobView(
+                id: $0.id,
+                orderIndex: $0.orderIndex,
+                status: $0.status,
+                hasTranscript: !$0.transcriptSegments.isEmpty
+            )
+        }
+    }
+
+    private func pumpGPU() {
+        guard let id = PipelineScheduler.nextGPUJob(jobs: jobViews, gpuBusy: gpuJobID != nil, queuePaused: queuePaused),
+              let index = jobs.firstIndex(where: { $0.id == id })
+        else { return }
+        didProcessQueuedJob = true
+        startTranscriptionNow(at: index, force: false)
+        // If the job could not start (e.g. a guard failed), fail it instead
+        // of stalling the whole queue on a stuck "queued" entry.
+        if gpuJobID == nil, jobs.first(where: { $0.id == id })?.status == .queued {
+            markFailed(id, message: "Could not start this job. Check the file and settings.")
+            processQueue()
+        }
+    }
+
+    private func pumpTranslation() {
+        guard translationTask == nil else { return }
+        if !translationWorkQueue.isEmpty {
+            let item = translationWorkQueue.removeFirst()
+            translationJobID = item.jobID
+            translationTask = Task {
+                await item.work()
+                translationTask = nil
+                translationJobID = nil
+                processQueue()
             }
             return
         }
+        guard let id = PipelineScheduler.nextTranslationJob(jobs: jobViews, translationBusy: false, queuePaused: queuePaused),
+              let index = jobs.firstIndex(where: { $0.id == id })
+        else { return }
         didProcessQueuedJob = true
-        if next.transcriptSegments.isEmpty {
-            startTranscription(jobID: next.id)
-        } else {
-            startTranslation(jobID: next.id)
-        }
-        // If the job could not start (e.g. a guard failed), fail it instead
-        // of stalling the whole queue on a stuck "queued" entry.
-        if activeJobID == nil, let job = jobs.first(where: { $0.id == next.id }), job.status == .queued {
-            markFailed(next.id, message: "Could not start this job. Check the file and settings.")
+        startTranslationNow(at: index)
+        if translationJobID == nil, jobs.first(where: { $0.id == id })?.status == .queued {
+            markFailed(id, message: "Could not start this job. Check the file and settings.")
             processQueue()
         }
+    }
+
+    /// Queues work onto the translation slot ahead of any queued jobs.
+    private func enqueueTranslationWork(jobID: UUID, _ work: @escaping @MainActor () async -> Void) {
+        translationWorkQueue.append((jobID: jobID, work: work))
     }
 
     // MARK: - Watch folders
@@ -634,7 +697,7 @@ final class AppModel: ObservableObject {
         guard !jobs[index].status.isRunning else { return }
         // Something else is running: queue this job instead of fighting for
         // the GPU.
-        if activeJobID != nil {
+        if gpuJobID != nil {
             enqueueJob(targetID)
             return
         }
@@ -660,6 +723,10 @@ final class AppModel: ObservableObject {
            jobs[index].sourceFingerprint == currentFingerprint,
            jobs[index].settings.transcriptionIdentity == resolved.transcriptionIdentity {
             let hasTranslation = !jobs[index].translatedSegments.isEmpty
+            // The run's clock starts now; transcription itself cost nothing.
+            let now = Date()
+            jobs[index].transcriptionStartedAt = now
+            jobs[index].transcriptionFinishedAt = now
             jobs[index].status = hasTranslation ? .translationComplete : .transcriptionComplete
             jobs[index].progress = JobProgress(stage: .complete, detail: "Using existing transcript for unchanged file and settings.", fraction: 1)
             appendLog("Skipped transcription because this file and transcription settings already have a transcript.", to: jobID)
@@ -678,6 +745,10 @@ final class AppModel: ObservableObject {
         jobs[index].progress = JobProgress(stage: .preflight, detail: "Starting transcription.", fraction: 0)
         jobs[index].translatedSegments = []
         jobs[index].partialTranslatedSegments = []
+        jobs[index].transcriptionStartedAt = Date()
+        jobs[index].transcriptionFinishedAt = nil
+        jobs[index].translationStartedAt = nil
+        jobs[index].finishedAt = nil
         jobs[index].sourceFingerprint = currentFingerprint
         jobs[index].settings = resolved
         if let validationMessage {
@@ -685,13 +756,14 @@ final class AppModel: ObservableObject {
         }
         appendLog("Starting transcription with \(resolved.whisperBackend.label) and model \(resolved.whisperModel).", to: jobID)
 
-        activeJobID = jobID
+        gpuJobID = jobID
         updateProcessingActivity()
-        activeTask = Task {
+        gpuTask = Task {
             do {
                 let result = try await transcriptionService.transcribe(videoURL: videoURL, settings: resolved) { [weak self] progress in
                     self?.updateProgress(progress, for: jobID)
                 }
+                updateJob(jobID) { $0.transcriptionFinishedAt = Date() }
                 let willTranslate = autoTranslate && settings.isTranslationReady
                 // When a translation follows, the summary is generated from
                 // the translated text instead, at the end of that step.
@@ -705,12 +777,17 @@ final class AppModel: ObservableObject {
                 }
                 finishTranscription(result, summary: summary, for: jobID)
                 if willTranslate {
-                    activeTask = nil
-                    activeJobID = nil
+                    // Free the GPU before handing off: the translation runs in
+                    // its own slot, so the next queued job can start
+                    // transcribing while this one translates.
+                    gpuTask = nil
+                    gpuJobID = nil
                     startTranslation(jobID: jobID)
+                    processQueue()
                     return
                 }
                 // The job ends here (no translation step follows).
+                recordCompletionTiming(for: jobID)
                 autoExportSidecars(for: jobID)
                 recordWatchOutcome(for: jobID, success: true)
                 notifyJobFinished(jobID)
@@ -727,8 +804,8 @@ final class AppModel: ObservableObject {
                     notifyJobFinished(jobID)
                 }
             }
-            activeTask = nil
-            activeJobID = nil
+            gpuTask = nil
+            gpuJobID = nil
             processQueue()
         }
     }
@@ -739,7 +816,7 @@ final class AppModel: ObservableObject {
         else { return }
         let targetID = jobs[index].id
         guard !jobs[index].status.isRunning else { return }
-        if activeJobID != nil {
+        if translationJobID != nil {
             enqueueJob(targetID)
             return
         }
@@ -755,15 +832,16 @@ final class AppModel: ObservableObject {
         let resolved = JobSettingsSnapshot(settings: settings).applying(jobs[index].overrides)
         jobs[index].status = .translating
         jobs[index].progress = JobProgress(stage: .translating, detail: "Starting translation.", fraction: 0)
+        jobs[index].translationStartedAt = jobs[index].translationStartedAt ?? Date()
         jobs[index].settings = jobs[index].settings.updatingTranslationFields(from: resolved)
         appendLog(
             "Starting translation from \(resolved.translationSourceLanguage) to \(resolved.translationTargetLanguage) with \(resolved.openAIModel) using \(resolved.translationChunkMode.label.lowercased()) chunks and \(resolved.translationParallelism) worker(s).",
             to: jobID
         )
 
-        activeJobID = jobID
+        translationJobID = jobID
         updateProcessingActivity()
-        activeTask = Task {
+        translationTask = Task {
             do {
                 let result = try await translationService.translate(
                     segments: segments,
@@ -783,6 +861,7 @@ final class AppModel: ObservableObject {
                     for: jobID
                 )
                 finishTranslation(result, summary: summary, for: jobID)
+                recordCompletionTiming(for: jobID)
             } catch is CancellationError {
                 markCanceled(jobID)
             } catch {
@@ -793,8 +872,8 @@ final class AppModel: ObservableObject {
                 }
             }
             notifyJobFinished(jobID)
-            activeTask = nil
-            activeJobID = nil
+            translationTask = nil
+            translationJobID = nil
             processQueue()
         }
     }
@@ -805,10 +884,13 @@ final class AppModel: ObservableObject {
         if queuedJobCount > 0 {
             queuePaused = true
         }
-        activeTask?.cancel()
-        // Only the actively running job may be stamped canceled; falling back
+        // Stop means stop: both slots and any pending translation work.
+        gpuTask?.cancel()
+        translationTask?.cancel()
+        translationWorkQueue.removeAll()
+        // Only the actively running jobs may be stamped canceled; falling back
         // to the selection could cancel a completed job.
-        if let id = activeJobID {
+        for id in [gpuJobID, translationJobID].compactMap({ $0 }) {
             updateJob(id) { job in
                 job.status = .canceled
                 job.progress = JobProgress(stage: .canceled, detail: "Canceling current operation.", fraction: nil)
@@ -1026,9 +1108,11 @@ final class AppModel: ObservableObject {
             job.log += "Burning \(request.document.label.lowercased()) into \(request.output.lastPathComponent).\n"
         }
 
-        activeJobID = jobID
+        // Burn-in is the other heavyweight local consumer, so it takes the
+        // GPU slot.
+        gpuJobID = jobID
         updateProcessingActivity()
-        activeTask = Task {
+        gpuTask = Task {
             do {
                 let duration = await Self.assetDurationSeconds(for: job.sourceURL)
                 try await burnInService.burnIn(
@@ -1064,8 +1148,8 @@ final class AppModel: ObservableObject {
                 }
                 presentExportError("Burn-in failed: \(error.localizedDescription)")
             }
-            activeTask = nil
-            activeJobID = nil
+            gpuTask = nil
+            gpuJobID = nil
             processQueue()
         }
     }
@@ -1216,6 +1300,29 @@ final class AppModel: ObservableObject {
         }
         autoExportSidecars(for: id)
         recordWatchOutcome(for: id, success: true)
+    }
+
+    /// Stamps finishedAt, rewrites the completion detail with the total
+    /// duration, and logs the phase breakdown (with overlap when the phases
+    /// ran concurrently).
+    private func recordCompletionTiming(for id: UUID) {
+        updateJob(id) { job in
+            job.finishedAt = Date()
+            guard let started = job.transcriptionStartedAt, let finished = job.finishedAt else { return }
+            let total = JobTimingFormatter.format(finished.timeIntervalSince(started))
+            guard !total.isEmpty else { return }
+            job.progress = JobProgress(stage: .complete, detail: job.progress.detail + " Done in \(total).", fraction: 1)
+            if let tEnd = job.transcriptionFinishedAt {
+                job.log += "Transcription took \(JobTimingFormatter.format(tEnd.timeIntervalSince(started))).\n"
+            }
+            if let xStart = job.translationStartedAt {
+                job.log += "Translation took \(JobTimingFormatter.format(finished.timeIntervalSince(xStart))).\n"
+                if let tEnd = job.transcriptionFinishedAt, xStart < tEnd {
+                    job.log += "Translation overlapped transcription by \(JobTimingFormatter.format(tEnd.timeIntervalSince(xStart))).\n"
+                }
+            }
+            job.log += "Job finished in \(total).\n"
+        }
     }
 
     /// Generates (or regenerates) the intro summary for the selected job on

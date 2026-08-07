@@ -55,7 +55,7 @@ enum AudioCache {
         ) else { return }
 
         // Safe to sweep unconditionally: the app runs one extraction at a time
-        // (single activeTask in AppModel), so no in-flight temp file can exist
+        // (AppModel's serial GPU slot), so no in-flight temp file can exist
         // when prune runs.
         for url in entries where url.lastPathComponent.contains(".partial-") {
             try? fileManager.removeItem(at: url)

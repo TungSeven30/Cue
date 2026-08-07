@@ -76,7 +76,7 @@ struct ModelDownloader: Sendable {
     ///   file behind so the next attempt continues the download.
     ///
     /// Concurrent calls for the same model are unguarded by design: the app
-    /// runs one transcription job at a time (single activeTask in AppModel).
+    /// runs one transcription job at a time (AppModel's serial GPU slot).
     func ensureInstalled(
         model: String,
         onProgress: @escaping @Sendable (JobProgress) -> Void

@@ -30,11 +30,14 @@ actor WhisperCppEngine {
     // through the callbacks' user_data as an unretained box.
     private final class CallbackBox {
         let onProgress: @Sendable (Double) -> Void
+        let onSegments: @Sendable ([TranscriptionSegment]) -> Void
         let isCancelled: @Sendable () -> Bool
 
         init(onProgress: @escaping @Sendable (Double) -> Void,
+             onSegments: @escaping @Sendable ([TranscriptionSegment]) -> Void,
              isCancelled: @escaping @Sendable () -> Bool) {
             self.onProgress = onProgress
+            self.onSegments = onSegments
             self.isCancelled = isCancelled
         }
     }
@@ -77,6 +80,7 @@ actor WhisperCppEngine {
         beamSize: Int,
         noSpeechThreshold: Double,
         onProgress: @escaping @Sendable (Double) -> Void,
+        onSegments: @escaping @Sendable ([TranscriptionSegment]) -> Void = { _ in },
         isCancelled: @escaping @Sendable () -> Bool
     ) throws -> Result {
         let samples = try Self.loadPCM16AsFloat(wavURL)
@@ -95,7 +99,7 @@ actor WhisperCppEngine {
         params.print_progress = false
         params.no_context = true  // match condition_on_previous_text=False
 
-        let box = CallbackBox(onProgress: onProgress, isCancelled: isCancelled)
+        let box = CallbackBox(onProgress: onProgress, onSegments: onSegments, isCancelled: isCancelled)
         let userData = Unmanaged.passUnretained(box).toOpaque()
         params.progress_callback = { _, _, progress, userData in
             guard let userData else { return }
@@ -103,6 +107,23 @@ actor WhisperCppEngine {
                 .onProgress(Double(progress) / 100.0)
         }
         params.progress_callback_user_data = userData
+        params.new_segment_callback = { ctx, _, nNew, userData in
+            guard let ctx, let userData, nNew > 0 else { return }
+            let box = Unmanaged<CallbackBox>.fromOpaque(userData).takeUnretainedValue()
+            let total = Int(whisper_full_n_segments(ctx))
+            let first = max(0, total - Int(nNew))
+            var batch: [TranscriptionSegment] = []
+            for index in first..<total {
+                batch.append(WhisperCppEngine.mapSegment(
+                    index: index,
+                    t0: whisper_full_get_segment_t0(ctx, Int32(index)),
+                    t1: whisper_full_get_segment_t1(ctx, Int32(index)),
+                    text: String(cString: whisper_full_get_segment_text(ctx, Int32(index)))
+                ))
+            }
+            if !batch.isEmpty { box.onSegments(batch) }
+        }
+        params.new_segment_callback_user_data = userData
         params.abort_callback = { userData in
             guard let userData else { return false }
             return Unmanaged<CallbackBox>.fromOpaque(userData).takeUnretainedValue().isCancelled()

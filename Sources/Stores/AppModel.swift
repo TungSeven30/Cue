@@ -58,6 +58,13 @@ final class AppModel: ObservableObject {
     private(set) var translationJobID: UUID?
     /// Translation work items that run ahead of queued jobs, in FIFO order.
     private var translationWorkQueue: [(jobID: UUID, work: @MainActor () async -> Void)] = []
+    /// Live progressive-translation sessions, keyed by job. A driver exists
+    /// from the moment a translating job starts transcribing until its
+    /// translation finishes; all of its work runs in the translation slot.
+    private var drivers: [UUID: ProgressiveTranslationDriver] = [:]
+    /// The last translation fraction seen while the job was still
+    /// transcribing, so the transcription progress line can report both.
+    private var streamingTranslationFraction: [UUID: Double] = [:]
     private var cancellables = Set<AnyCancellable>()
     private var persistTask: Task<Void, Never>?
     /// Held while any job is running so overnight batches survive idle sleep
@@ -513,6 +520,18 @@ final class AppModel: ObservableObject {
         translationWorkQueue.append((jobID: jobID, work: work))
     }
 
+    /// Ends a job's streaming session: the driver, its remembered translation
+    /// fraction, and any of its work items still waiting on the translation
+    /// slot. Dropping the queued items matters even on the success path — a
+    /// mid-stream pass that ended after the finish pass was queued can leave
+    /// one more incremental item behind it, which would otherwise re-run
+    /// against the already-completed job.
+    private func endStreamingSession(for id: UUID) {
+        drivers[id] = nil
+        streamingTranslationFraction[id] = nil
+        translationWorkQueue.removeAll { $0.jobID == id }
+    }
+
     // MARK: - Watch folders
 
     /// Reconciles running services with the settings list: starts services
@@ -753,6 +772,7 @@ final class AppModel: ObservableObject {
         jobs[index].progress = JobProgress(stage: .preflight, detail: "Starting transcription.", fraction: 0)
         jobs[index].translatedSegments = []
         jobs[index].partialTranslatedSegments = []
+        jobs[index].partialTranscriptSegments = []
         jobs[index].transcriptionStartedAt = Date()
         jobs[index].transcriptionFinishedAt = nil
         jobs[index].translationStartedAt = nil
@@ -764,15 +784,63 @@ final class AppModel: ObservableObject {
         }
         appendLog("Starting transcription with \(resolved.whisperBackend.label) and model \(resolved.whisperModel).", to: jobID)
 
+        // A translating job gets a driver up front, so streamed batches can be
+        // translated behind the transcription frontier. A local server is the
+        // exception: it competes with whisper for this machine's GPU, so it
+        // only translates once transcription is done (one whole-transcript
+        // pass, exactly like the sequential path).
+        let willTranslate = autoTranslate && settings.isTranslationReady
+        if willTranslate {
+            let overlapAllowed = settings.currentTranslationProvider != .local
+            // Fresh per run, never persisted onto the job.
+            let credentials = makeTranslationCredentials()
+            drivers[jobID] = ProgressiveTranslationDriver(
+                chunkSize: resolved.translationChunkMode.chunkSize,
+                overlapAllowed: overlapAllowed,
+                translate: { [weak self] segments, existing, onPartial in
+                    guard let self else { throw CancellationError() }
+                    return try await self.translationService.translate(
+                        segments: segments,
+                        sourceLanguage: resolved.sourceLanguage,
+                        settings: resolved,
+                        credentials: credentials,
+                        existingTranslations: existing,
+                        progress: { [weak self] update in
+                            self?.recordStreamingTranslationProgress(update, for: jobID)
+                        },
+                        onPartial: onPartial
+                    )
+                },
+                onPartial: { [weak self] batch in
+                    self?.updatePartialTranslation(batch, for: jobID)
+                },
+                onNeedsTranslation: { [weak self] in
+                    guard let self, let driver = self.drivers[jobID] else { return }
+                    self.updateJob(jobID, debouncePersist: true) { job in
+                        job.translationStartedAt = job.translationStartedAt ?? Date()
+                    }
+                    self.enqueueTranslationWork(jobID: jobID) {
+                        await driver.translateAvailable()
+                    }
+                    self.processQueue()
+                }
+            )
+        }
+
         gpuJobID = jobID
         updateProcessingActivity()
         gpuTask = Task {
             do {
-                let result = try await transcriptionService.transcribe(videoURL: videoURL, settings: resolved) { [weak self] progress in
+                let result = try await transcriptionService.transcribe(videoURL: videoURL, settings: resolved, progress: { [weak self] progress in
                     self?.updateProgress(progress, for: jobID)
-                }
+                }, onSegments: { [weak self] batch in
+                    guard let self else { return }
+                    self.updateJob(jobID, debouncePersist: true) { job in
+                        job.partialTranscriptSegments += batch
+                    }
+                    self.drivers[jobID]?.ingest(batch)
+                })
                 updateJob(jobID) { $0.transcriptionFinishedAt = Date() }
-                let willTranslate = autoTranslate && settings.isTranslationReady
                 // When a translation follows, the summary is generated from
                 // the translated text instead, at the end of that step.
                 var summary: String?
@@ -793,14 +861,51 @@ final class AppModel: ObservableObject {
                     // Nothing awaits between the transcribe call and here, so
                     // a Stop that landed while this continuation was pending
                     // never surfaced as a CancellationError — check it by hand
-                    // or the translation phase starts on a canceled job. The
-                    // handoff also re-queues without resuming the queue: being
-                    // pushed back for a busy slot is not the user asking for
-                    // more work (spec §2.3/2.6).
-                    if Task.isCancelled {
+                    // or the translation phase starts on a canceled job. A
+                    // missing driver means the same thing: only a stop tears
+                    // one down before its finish pass.
+                    guard !Task.isCancelled, let driver = drivers[jobID] else {
                         markCanceled(jobID)
-                    } else {
-                        startTranslation(jobID: jobID, resumeQueue: false)
+                        endStreamingSession(for: jobID)
+                        processQueue()
+                        return
+                    }
+                    // The finish pass reconciles whatever was translated
+                    // during transcription onto the final transcript and
+                    // translates the tail. It goes straight onto the
+                    // translation slot's work queue rather than re-queueing
+                    // the job: being pushed back for a busy slot is not the
+                    // user asking for more work (spec §2.3/2.6), so the
+                    // queue's paused state is left alone.
+                    updateJob(jobID) { job in
+                        job.status = .translating
+                        job.translationStartedAt = job.translationStartedAt ?? Date()
+                        job.progress = JobProgress(stage: .translating, detail: "Finishing translation.", fraction: nil)
+                    }
+                    appendLog(
+                        "Starting translation from \(resolved.translationSourceLanguage) to \(resolved.translationTargetLanguage) with \(resolved.openAIModel) using \(resolved.translationChunkMode.label.lowercased()) chunks and \(resolved.translationParallelism) worker(s).",
+                        to: jobID
+                    )
+                    enqueueTranslationWork(jobID: jobID) { [weak self] in
+                        guard let self else { return }
+                        do {
+                            let final = self.jobs.first(where: { $0.id == jobID })?.transcriptSegments ?? []
+                            let translated = try await driver.finish(finalTranscript: final)
+                            let target = resolved.translationTargetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let summary = await self.makeIntroSummary(
+                                from: translated,
+                                language: target.isEmpty ? "English" : target,
+                                for: jobID
+                            )
+                            self.finishTranslation(translated, summary: summary, for: jobID)
+                            self.recordCompletionTiming(for: jobID)
+                        } catch is CancellationError {
+                            self.markCanceled(jobID)
+                        } catch {
+                            self.markFailed(jobID, message: "Translation failed: \(error.localizedDescription)")
+                        }
+                        self.endStreamingSession(for: jobID)
+                        self.notifyJobFinished(jobID)
                     }
                     processQueue()
                     return
@@ -812,6 +917,10 @@ final class AppModel: ObservableObject {
                 notifyJobFinished(jobID)
             } catch is CancellationError {
                 markCanceled(jobID)
+                // The partial transcript stays on the job (spec §6) so a retry
+                // can resume from it, but the session is over: no finish pass
+                // is coming, so the driver and its queued work must go.
+                endStreamingSession(for: jobID)
             } catch {
                 // A killed helper can surface its exit error in a race with
                 // the cancellation check; don't overwrite "Canceled" with
@@ -822,6 +931,7 @@ final class AppModel: ObservableObject {
                     markFailed(jobID, message: "Transcription failed: \(error.localizedDescription)")
                     notifyJobFinished(jobID)
                 }
+                endStreamingSession(for: jobID)
             }
             gpuTask = nil
             gpuJobID = nil
@@ -918,6 +1028,9 @@ final class AppModel: ObservableObject {
         gpuTask?.cancel()
         translationTask?.cancel()
         translationWorkQueue.removeAll()
+        // Cancel is an app-wide stop, so every streaming session dies with it.
+        drivers.removeAll()
+        streamingTranslationFraction.removeAll()
         // Only the actively running jobs may be stamped canceled; falling back
         // to the selection could cancel a completed job.
         for id in [gpuJobID, translationJobID].compactMap({ $0 }) {
@@ -1311,6 +1424,8 @@ final class AppModel: ObservableObject {
     private func finishTranscription(_ result: TranscriptionResult, summary: String?, for id: UUID) {
         updateJob(id) { job in
             job.transcriptSegments = result.segments
+            // The cleaned transcript supersedes the streamed preview.
+            job.partialTranscriptSegments = []
             job.translatedSegments = []
             job.summary = summary
             job.status = .transcriptionComplete
@@ -1465,9 +1580,30 @@ final class AppModel: ObservableObject {
     }
 
     private func updateProgress(_ progress: JobProgress, for id: UUID) {
+        var composed = progress
+        if progress.stage == .transcribing,
+           let translated = streamingTranslationFraction[id],
+           let fraction = progress.fraction {
+            composed = JobProgress(
+                stage: .transcribing,
+                detail: "Transcribing \(Int(fraction * 100))% · Translated \(Int(translated * 100))%",
+                fraction: fraction
+            )
+        }
         updateJob(id, debouncePersist: true) { job in
-            job.progress = progress
-            job.log += "\(progress.stage.label): \(progress.detail)\n"
+            job.progress = composed
+            job.log += "\(composed.stage.label): \(composed.detail)\n"
+        }
+    }
+
+    /// Translation progress arriving while the job is still transcribing must
+    /// not overwrite the transcription progress bar; remember the fraction and
+    /// let the transcription updates compose the two-line detail.
+    private func recordStreamingTranslationProgress(_ update: JobProgress, for id: UUID) {
+        guard let fraction = update.fraction else { return }
+        streamingTranslationFraction[id] = fraction
+        if jobs.first(where: { $0.id == id })?.status == .translating {
+            updateProgress(update, for: id)
         }
     }
 

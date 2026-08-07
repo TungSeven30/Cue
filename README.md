@@ -109,7 +109,7 @@ Translation can also run free and offline against any OpenAI-compatible server (
 ## Building from source (for developers)
 
 ```sh
-git clone git@github.com:TungSeven30/WhisperDesk.git
+git clone git@github.com:TungSeven30/Cue.git
 cd Cue
 ./script/build_and_run.sh            # debug build, opens the app
 ```

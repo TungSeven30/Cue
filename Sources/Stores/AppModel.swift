@@ -812,14 +812,28 @@ final class AppModel: ObservableObject {
                     )
                 },
                 onPartial: { [weak self] batch in
-                    self?.updatePartialTranslation(batch, for: jobID)
+                    guard let self else { return }
+                    self.updatePartialTranslation(batch, for: jobID)
+                    // How far the translation has come is a count of segments,
+                    // not what the service reports: every pass ends at
+                    // fraction 1.0 but only covers what had streamed when it
+                    // started, so the service number would sit at 100% from
+                    // the first pass on.
+                    if let driver = self.drivers[jobID] {
+                        self.streamingTranslationFraction[jobID] =
+                            Double(driver.partials.count) / Double(max(1, driver.streamed.count))
+                    }
                 },
                 onNeedsTranslation: { [weak self] in
                     guard let self, let driver = self.drivers[jobID] else { return }
                     self.updateJob(jobID, debouncePersist: true) { job in
                         job.translationStartedAt = job.translationStartedAt ?? Date()
                     }
-                    self.enqueueTranslationWork(jobID: jobID) {
+                    self.enqueueTranslationWork(jobID: jobID) { [weak self] in
+                        // The session can end between queueing and running
+                        // (stop, or a failed transcription): never translate
+                        // for a job whose driver is gone.
+                        guard self?.drivers[jobID] != nil else { return }
                         await driver.translateAvailable()
                     }
                     self.processQueue()
@@ -1027,13 +1041,18 @@ final class AppModel: ObservableObject {
         // Stop means stop: both slots and any pending translation work.
         gpuTask?.cancel()
         translationTask?.cancel()
+        // A streaming job whose finish pass is still queued owns neither slot
+        // (its GPU slot was released at handoff), so dropping the queue would
+        // strand it in Translating with nothing left to run it. Those jobs get
+        // stamped canceled alongside the running ones.
+        let queuedIDs = Set(translationWorkQueue.map(\.jobID))
         translationWorkQueue.removeAll()
         // Cancel is an app-wide stop, so every streaming session dies with it.
         drivers.removeAll()
         streamingTranslationFraction.removeAll()
-        // Only the actively running jobs may be stamped canceled; falling back
-        // to the selection could cancel a completed job.
-        for id in [gpuJobID, translationJobID].compactMap({ $0 }) {
+        // Only the actively running (or queued-for-work) jobs may be stamped
+        // canceled; falling back to the selection could cancel a completed job.
+        for id in queuedIDs.union([gpuJobID, translationJobID].compactMap { $0 }) {
             updateJob(id) { job in
                 job.status = .canceled
                 job.progress = JobProgress(stage: .canceled, detail: "Canceling current operation.", fraction: nil)
@@ -1596,15 +1615,17 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Translation progress arriving while the job is still transcribing must
-    /// not overwrite the transcription progress bar; remember the fraction and
-    /// let the transcription updates compose the two-line detail.
+    /// Translation progress from a streaming session. While the job is still
+    /// transcribing it is dropped: it must not overwrite the transcription
+    /// progress bar, and the two-line detail uses the count-based fraction
+    /// recorded in the driver's onPartial instead. Once the job is translating
+    /// it takes the normal path, minus the completion an incremental pass
+    /// reports for itself — only finishTranslation may write the terminal
+    /// state, or a job still awaiting its finish pass would read "complete".
     private func recordStreamingTranslationProgress(_ update: JobProgress, for id: UUID) {
-        guard let fraction = update.fraction else { return }
-        streamingTranslationFraction[id] = fraction
-        if jobs.first(where: { $0.id == id })?.status == .translating {
-            updateProgress(update, for: id)
-        }
+        guard jobs.first(where: { $0.id == id })?.status == .translating else { return }
+        guard update.stage != .complete || drivers[id] == nil else { return }
+        updateProgress(update, for: id)
     }
 
     private func updatePartialTranslation(_ segments: [TranscriptionSegment], for id: UUID) {

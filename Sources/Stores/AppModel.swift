@@ -392,8 +392,10 @@ final class AppModel: ObservableObject {
     }
 
     func deleteJob(_ id: UUID) {
-        // The running job cannot be deleted; cancel it first.
-        guard !isJobActive(id) else { return }
+        // The running job cannot be deleted; cancel it first. A streaming job
+        // between the GPU handoff and its finish pass owns neither slot but
+        // still has work queued, so check the translation queue too.
+        guard !isJobActive(id), !translationWorkQueue.contains(where: { $0.jobID == id }) else { return }
         jobs.removeAll { $0.id == id }
         dirtyJobIDs.remove(id)
         if selectedJobID == id {
@@ -438,13 +440,11 @@ final class AppModel: ObservableObject {
     }
 
     /// Adds one job to the queue (or starts it right away when nothing is
-    /// running). `resumeQueue: false` keeps an explicit stop in force — for
-    /// internal re-queues that are not a user asking for more work.
-    func enqueueJob(_ id: UUID, resumeQueue: Bool = true) {
+    /// running). Every caller is a user asking for more work, so an explicit
+    /// stop is lifted.
+    func enqueueJob(_ id: UUID) {
         guard let job = jobs.first(where: { $0.id == id }), !job.status.isRunning else { return }
-        if resumeQueue {
-            queuePaused = false
-        }
+        queuePaused = false
         updateJob(id) { job in
             job.status = .queued
             job.progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
@@ -862,6 +862,11 @@ final class AppModel: ObservableObject {
                     self?.updateProgress(progress, for: jobID)
                 }, onSegments: { [weak self] batch in
                     guard let self else { return }
+                    // A Python backend's stderr can be buffered, so a segments
+                    // line can arrive after the run already finished. Dropping
+                    // it keeps cleared partials cleared instead of leaving
+                    // stale ones on a completed job forever.
+                    guard self.jobs.first(where: { $0.id == jobID })?.status == .transcribing else { return }
                     self.updateJob(jobID, debouncePersist: true) { job in
                         job.partialTranscriptSegments += batch
                     }
@@ -917,6 +922,19 @@ final class AppModel: ObservableObject {
                         guard let self else { return }
                         do {
                             let final = self.jobs.first(where: { $0.id == jobID })?.transcriptSegments ?? []
+                            // Persist the reconciled partials *before* the
+                            // finish pass runs. Mid-stream partials are keyed
+                            // by streamed segment ids; if this pass fails or is
+                            // canceled before its first result lands, those
+                            // stale ids would survive on the job and a later
+                            // manual Translate would seed them by id against
+                            // the renumbered final transcript — silently
+                            // pairing translations with the wrong cues. The
+                            // reconciled set is what a retry should resume
+                            // from, and it is the same remap `finish` does.
+                            let reconciled = TranslationReconciliation.remap(
+                                partials: driver.partials, streamed: driver.streamed, final: final)
+                            self.updatePartialTranslation(reconciled, for: jobID)
                             let translated = try await driver.finish(finalTranscript: final)
                             let target = resolved.translationTargetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
                             let summary = await self.makeIntroSummary(
@@ -966,14 +984,14 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func startTranslation(jobID: UUID? = nil, resumeQueue: Bool = true) {
+    func startTranslation(jobID: UUID? = nil) {
         guard let index = jobs.firstIndex(where: { $0.id == (jobID ?? selectedJobID) }),
               !jobs[index].transcriptSegments.isEmpty
         else { return }
         let targetID = jobs[index].id
         guard !jobs[index].status.isRunning else { return }
         if translationJobID != nil {
-            enqueueJob(targetID, resumeQueue: resumeQueue)
+            enqueueJob(targetID)
             return
         }
         startTranslationNow(at: index)

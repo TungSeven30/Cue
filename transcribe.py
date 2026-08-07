@@ -223,7 +223,6 @@ def load_with_qwen3(audio_path: Path, model: str, language: str, stream_segments
         except Exception:
             chunks = [(0.0, None)]  # unreadable as plain WAV: fall back to one call
 
-    all_tokens = []
     all_segments = []
     next_id = 1
     for chunk_index, (chunk_start, chunk_end) in enumerate(chunks):
@@ -265,7 +264,6 @@ def load_with_qwen3(audio_path: Path, model: str, language: str, stream_segments
                 "end": float(end or 0.0) + chunk_start,
                 "text": str(text).strip(),
             })
-        all_tokens.extend(tokens)
         batch = []
         for group in group_timed_tokens(tokens):
             batch.append({"id": next_id, "start": group["start"], "end": group["end"], "text": group["text"].strip()})

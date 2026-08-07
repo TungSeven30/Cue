@@ -77,7 +77,7 @@ struct ContentView: View {
                 } label: {
                     Label("Cancel", systemImage: "stop.fill")
                 }
-                .help("Cancel the running job")
+                .help("Stop all running jobs and pause the queue")
             }
         }
     }

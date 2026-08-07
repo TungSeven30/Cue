@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-07
 **Branch:** to be cut from master
-**Status:** Approved, not yet implemented
+**Status:** Implemented
 
 ## Goal
 

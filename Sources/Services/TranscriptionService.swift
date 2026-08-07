@@ -372,6 +372,25 @@ enum TranscriptionPostProcessor {
         return renumber(cleaned)
     }
 
+    /// Window-local subset of `clean` for streamed batches: deterministic,
+    /// idempotent, per-segment only. No renumbering (ids are globally
+    /// monotonic across windows), no merges, no cross-window dedupe — the
+    /// full `clean` pass at completion remains authoritative.
+    static func cleanWindow(_ segments: [TranscriptionSegment], settings: TranscriptionSettingsSnapshot) -> [TranscriptionSegment] {
+        var cleaned = segments.map { segment in
+            TranscriptionSegment(id: segment.id, start: segment.start, end: segment.end, text: normalizeWhitespace(segment.text))
+        }
+        if settings.removeRepeatedText {
+            cleaned = cleaned.map { segment in
+                TranscriptionSegment(id: segment.id, start: segment.start, end: segment.end, text: collapseRepeatedText(segment.text))
+            }
+        }
+        if settings.removeEmptySegments {
+            cleaned = cleaned.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
+        return repairInvalidTimings(cleaned)
+    }
+
     /// Whisper-style transcribers sometimes stretch a short utterance across
     /// a long run of silence or music. Cap the display time to roughly what
     /// the text needs to be read, so a one-word subtitle does not linger on

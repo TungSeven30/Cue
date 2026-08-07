@@ -417,10 +417,14 @@ final class AppModel: ObservableObject {
         processQueue()
     }
 
-    /// Adds one job to the queue (or starts it right away when nothing is running).
-    func enqueueJob(_ id: UUID) {
+    /// Adds one job to the queue (or starts it right away when nothing is
+    /// running). `resumeQueue: false` keeps an explicit stop in force — for
+    /// internal re-queues that are not a user asking for more work.
+    func enqueueJob(_ id: UUID, resumeQueue: Bool = true) {
         guard let job = jobs.first(where: { $0.id == id }), !job.status.isRunning else { return }
-        queuePaused = false
+        if resumeQueue {
+            queuePaused = false
+        }
         updateJob(id) { job in
             job.status = .queued
             job.progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
@@ -724,9 +728,13 @@ final class AppModel: ObservableObject {
            jobs[index].settings.transcriptionIdentity == resolved.transcriptionIdentity {
             let hasTranslation = !jobs[index].translatedSegments.isEmpty
             // The run's clock starts now; transcription itself cost nothing.
+            // The previous run's stamps must go, or its translation time is
+            // reported again for this one.
             let now = Date()
             jobs[index].transcriptionStartedAt = now
             jobs[index].transcriptionFinishedAt = now
+            jobs[index].translationStartedAt = nil
+            jobs[index].finishedAt = nil
             jobs[index].status = hasTranslation ? .translationComplete : .transcriptionComplete
             jobs[index].progress = JobProgress(stage: .complete, detail: "Using existing transcript for unchanged file and settings.", fraction: 1)
             appendLog("Skipped transcription because this file and transcription settings already have a transcript.", to: jobID)
@@ -782,7 +790,18 @@ final class AppModel: ObservableObject {
                     // transcribing while this one translates.
                     gpuTask = nil
                     gpuJobID = nil
-                    startTranslation(jobID: jobID)
+                    // Nothing awaits between the transcribe call and here, so
+                    // a Stop that landed while this continuation was pending
+                    // never surfaced as a CancellationError — check it by hand
+                    // or the translation phase starts on a canceled job. The
+                    // handoff also re-queues without resuming the queue: being
+                    // pushed back for a busy slot is not the user asking for
+                    // more work (spec §2.3/2.6).
+                    if Task.isCancelled {
+                        markCanceled(jobID)
+                    } else {
+                        startTranslation(jobID: jobID, resumeQueue: false)
+                    }
                     processQueue()
                     return
                 }
@@ -810,14 +829,14 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func startTranslation(jobID: UUID? = nil) {
+    func startTranslation(jobID: UUID? = nil, resumeQueue: Bool = true) {
         guard let index = jobs.firstIndex(where: { $0.id == (jobID ?? selectedJobID) }),
               !jobs[index].transcriptSegments.isEmpty
         else { return }
         let targetID = jobs[index].id
         guard !jobs[index].status.isRunning else { return }
         if translationJobID != nil {
-            enqueueJob(targetID)
+            enqueueJob(targetID, resumeQueue: resumeQueue)
             return
         }
         startTranslationNow(at: index)
@@ -832,7 +851,18 @@ final class AppModel: ObservableObject {
         let resolved = JobSettingsSnapshot(settings: settings).applying(jobs[index].overrides)
         jobs[index].status = .translating
         jobs[index].progress = JobProgress(stage: .translating, detail: "Starting translation.", fraction: 0)
-        jobs[index].translationStartedAt = jobs[index].translationStartedAt ?? Date()
+        // Translating a job whose previous run already finished starts a new
+        // run: the old run's clock must not carry over, or a Monday
+        // transcript translated on Wednesday reports a two-day total. Within
+        // a run (a resumed partial translation) the original start stands.
+        if jobs[index].finishedAt != nil {
+            jobs[index].transcriptionStartedAt = nil
+            jobs[index].transcriptionFinishedAt = nil
+            jobs[index].finishedAt = nil
+            jobs[index].translationStartedAt = Date()
+        } else {
+            jobs[index].translationStartedAt = jobs[index].translationStartedAt ?? Date()
+        }
         jobs[index].settings = jobs[index].settings.updatingTranslationFields(from: resolved)
         appendLog(
             "Starting translation from \(resolved.translationSourceLanguage) to \(resolved.translationTargetLanguage) with \(resolved.openAIModel) using \(resolved.translationChunkMode.label.lowercased()) chunks and \(resolved.translationParallelism) worker(s).",
@@ -1307,13 +1337,16 @@ final class AppModel: ObservableObject {
     /// ran concurrently).
     private func recordCompletionTiming(for id: UUID) {
         updateJob(id) { job in
-            job.finishedAt = Date()
-            guard let started = job.transcriptionStartedAt, let finished = job.finishedAt else { return }
+            let finished = Date()
+            job.finishedAt = finished
+            // A translation-only run has no transcription phase, so its clock
+            // starts when the translation did.
+            guard let started = job.transcriptionStartedAt ?? job.translationStartedAt else { return }
             let total = JobTimingFormatter.format(finished.timeIntervalSince(started))
             guard !total.isEmpty else { return }
             job.progress = JobProgress(stage: .complete, detail: job.progress.detail + " Done in \(total).", fraction: 1)
-            if let tEnd = job.transcriptionFinishedAt {
-                job.log += "Transcription took \(JobTimingFormatter.format(tEnd.timeIntervalSince(started))).\n"
+            if let tStart = job.transcriptionStartedAt, let tEnd = job.transcriptionFinishedAt {
+                job.log += "Transcription took \(JobTimingFormatter.format(tEnd.timeIntervalSince(tStart))).\n"
             }
             if let xStart = job.translationStartedAt {
                 job.log += "Translation took \(JobTimingFormatter.format(finished.timeIntervalSince(xStart))).\n"

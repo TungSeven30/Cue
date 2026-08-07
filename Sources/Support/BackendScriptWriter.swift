@@ -2,7 +2,7 @@ import Foundation
 
 enum BackendScriptWriter {
     static func ensureScript() throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("whisperdesk_backend.py")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("cue_backend.py")
         let data = Data(BackendScript.source.utf8)
 
         if !FileManager.default.fileExists(atPath: url.path) || (try? Data(contentsOf: url)) != data {
@@ -95,7 +95,7 @@ def audio_cache_path(input_path: Path, preprocess_audio: bool) -> Path:
     stat = input_path.stat()
     payload = f"{input_path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|preprocess={preprocess_audio}".encode("utf-8")
     digest = hashlib.sha256(payload).hexdigest()[:24]
-    cache_dir = Path.home() / "Library" / "Caches" / "WhisperDesk" / "audio"
+    cache_dir = Path.home() / "Library" / "Caches" / "Cue" / "audio"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / f"{digest}.wav"
 
@@ -384,7 +384,7 @@ def main() -> int:
         print(f"File not found: {input_path}", file=sys.stderr)
         return 1
 
-    with tempfile.TemporaryDirectory(prefix="whisperdesk_") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="cue_") as temp_dir:
         emit("preflight", "Preparing transcription helper.", 0.02)
         try:
             audio_path = prepare_audio(

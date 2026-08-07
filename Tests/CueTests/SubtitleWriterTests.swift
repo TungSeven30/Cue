@@ -1,10 +1,10 @@
 import Foundation
 import Testing
-@testable import WhisperDesk
+@testable import Cue
 
 private func makeTempDirectory() throws -> URL {
     let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("whisperdesk-tests-\(UUID().uuidString)")
+        .appendingPathComponent("cue-tests-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
 }

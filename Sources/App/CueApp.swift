@@ -2,9 +2,15 @@ import AppKit
 import SwiftUI
 
 @main
-struct WhisperDeskApp: App {
+struct CueApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = AppModel()
+
+    // AppModel is created lazily on first render, so migrating here keeps
+    // the WhisperDesk-era data move ahead of every disk and defaults read.
+    init() {
+        LegacyMigration.run()
+    }
 
     var body: some Scene {
         // A single-window scene: File > New Window on a WindowGroup would

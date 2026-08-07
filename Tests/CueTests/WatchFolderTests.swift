@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import WhisperDesk
+@testable import Cue
 
 struct WatchFolderScanEngineTests {
     private let base = Date(timeIntervalSince1970: 1_700_000_000)
@@ -99,7 +99,7 @@ struct WatchFolderScanEngineTests {
 struct WatchFolderLedgerTests {
     private func makeBase() throws -> URL {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("whisperdesk-ledger-\(UUID().uuidString)")
+            .appendingPathComponent("cue-ledger-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }

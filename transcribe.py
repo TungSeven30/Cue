@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Local subtitle generation helper for WhisperDesk.
+Local subtitle generation helper for Cue (formerly WhisperDesk).
 
 Examples:
     python3 transcribe.py clip.mp4
@@ -112,7 +112,7 @@ def load_with_faster_whisper(audio_path: Path, model: str, language: str) -> tup
 
 
 def transcribe(input_path: Path, model: str, language: str, backend: str) -> dict[str, Any]:
-    with tempfile.TemporaryDirectory(prefix="whisperdesk_") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="cue_") as temp_dir:
         emit("preflight", "Preparing transcription helper.", 0.02)
         audio_path = Path(temp_dir) / "audio.wav"
         extract_audio(input_path, audio_path)

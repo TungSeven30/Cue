@@ -1,6 +1,6 @@
 import Foundation
 
-/// Persists each job as its own file under Application Support/WhisperDesk/jobs/.
+/// Persists each job as its own file under Application Support/Cue/jobs/.
 /// Writes happen on a background queue from an immutable snapshot, so saving
 /// a large job never blocks the main thread, and one corrupt file can only
 /// lose one job instead of the whole history.
@@ -10,20 +10,20 @@ final class JobStore {
     private let jobsFolderURL: URL
     private let legacyFileURL: URL
     private let fileManager: FileManager
-    private let ioQueue = DispatchQueue(label: "WhisperDesk.JobStore", qos: .utility)
+    private let ioQueue = DispatchQueue(label: "Cue.JobStore", qos: .utility)
 
     init(fileManager: FileManager = .default, baseURL: URL? = nil) {
         self.fileManager = fileManager
         let resolvedBase = baseURL
             ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
-        folderURL = resolvedBase.appendingPathComponent("WhisperDesk", isDirectory: true)
+        folderURL = resolvedBase.appendingPathComponent("Cue", isDirectory: true)
         jobsFolderURL = folderURL.appendingPathComponent("jobs", isDirectory: true)
         legacyFileURL = folderURL.appendingPathComponent("jobs.json")
         do {
             try fileManager.createDirectory(at: jobsFolderURL, withIntermediateDirectories: true)
         } catch {
-            NSLog("WhisperDesk: could not create the jobs folder at %@ (%@); job history will not persist.", jobsFolderURL.path, "\(error)")
+            NSLog("Cue: could not create the jobs folder at %@ (%@); job history will not persist.", jobsFolderURL.path, "\(error)")
         }
     }
 
@@ -42,7 +42,7 @@ final class JobStore {
                 let backupURL = file.deletingPathExtension().appendingPathExtension("corrupt.json")
                 try? fileManager.removeItem(at: backupURL)
                 try? fileManager.copyItem(at: file, to: backupURL)
-                NSLog("WhisperDesk: job file %@ could not be decoded (%@); preserved at %@", file.lastPathComponent, "\(error)", backupURL.path)
+                NSLog("Cue: job file %@ could not be decoded (%@); preserved at %@", file.lastPathComponent, "\(error)", backupURL.path)
             }
         }
 
@@ -71,7 +71,7 @@ final class JobStore {
                 let data = try Self.makeEncoder().encode(job)
                 try data.write(to: url, options: .atomic)
             } catch {
-                NSLog("WhisperDesk: failed to save job %@ (%@); its latest state will be lost on quit.", job.id.uuidString, "\(error)")
+                NSLog("Cue: failed to save job %@ (%@); its latest state will be lost on quit.", job.id.uuidString, "\(error)")
             }
         }
     }
@@ -115,12 +115,12 @@ final class JobStore {
             let backupURL = folderURL.appendingPathComponent("jobs.migrated.json")
             try? fileManager.removeItem(at: backupURL)
             try? fileManager.moveItem(at: legacyFileURL, to: backupURL)
-            NSLog("WhisperDesk: migrated %d job(s) to per-job storage.", jobs.count)
+            NSLog("Cue: migrated %d job(s) to per-job storage.", jobs.count)
         } catch {
             let backupURL = folderURL.appendingPathComponent("jobs.corrupt.json")
             try? fileManager.removeItem(at: backupURL)
             try? fileManager.copyItem(at: legacyFileURL, to: backupURL)
-            NSLog("WhisperDesk: legacy job history could not be decoded (%@); preserved at %@", "\(error)", backupURL.path)
+            NSLog("Cue: legacy job history could not be decoded (%@); preserved at %@", "\(error)", backupURL.path)
         }
     }
 

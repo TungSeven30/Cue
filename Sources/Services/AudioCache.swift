@@ -10,7 +10,7 @@ enum AudioCache {
     /// Same location the Python helper hardcodes.
     static var directory: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Caches/WhisperDesk/audio", isDirectory: true)
+            .appendingPathComponent("Library/Caches/Cue/audio", isDirectory: true)
     }
 
     /// Cache file for `sourceURL`: sha256 over

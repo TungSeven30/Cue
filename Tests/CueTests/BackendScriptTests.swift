@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import WhisperDesk
+@testable import Cue
 
 /// Runs the embedded Python helper for real (python3 ships with macOS) with a
 /// fake ffmpeg on PATH, under a scratch HOME so the shared audio cache is

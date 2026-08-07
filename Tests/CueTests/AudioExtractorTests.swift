@@ -1,7 +1,7 @@
 import AVFoundation
 import Foundation
 import Testing
-@testable import WhisperDesk
+@testable import Cue
 
 struct AudioExtractorTests {
     /// Writes a 2-second 440 Hz stereo 44.1 kHz WAV fixture with AVAudioFile.

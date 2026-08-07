@@ -2,12 +2,8 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-APP_NAME="WhisperDesk"
-# User-visible name (bundle folder, Finder/Dock, DMG). The executable,
-# process name, and bundle id stay WhisperDesk so Keychain "Always Allow"
-# grants and the Application Support folder keep working.
-DISPLAY_NAME="Cue"
-BUNDLE_ID="com.local.WhisperDesk"
+APP_NAME="Cue"
+BUNDLE_ID="com.local.Cue"
 MIN_SYSTEM_VERSION="14.0"
 APP_VERSION="${APP_VERSION:-2.2.2}"
 APP_BUILD="${APP_BUILD:-1}"
@@ -15,7 +11,7 @@ INSTALL_DIR="${INSTALL_DIR:-/Applications}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
-APP_BUNDLE="$DIST_DIR/$DISPLAY_NAME.app"
+APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
@@ -80,9 +76,9 @@ build_bundle() {
   <key>CFBundleIdentifier</key>
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
-  <string>$DISPLAY_NAME</string>
+  <string>$APP_NAME</string>
   <key>CFBundleDisplayName</key>
-  <string>$DISPLAY_NAME</string>
+  <string>$APP_NAME</string>
   <key>CFBundleIconFile</key>
   <string>$ICON_FILE</string>
   <key>CFBundlePackageType</key>
@@ -112,6 +108,8 @@ PLIST
     # A stable local identity keeps the app's code signature constant across
     # rebuilds, so Keychain "Always Allow" grants persist. Ad-hoc signing (-)
     # changes every build and re-triggers the password prompt each install.
+    # The cert keeps its WhisperDesk-era name: renaming it would mint a new
+    # identity and void every Keychain "Always Allow" grant on this Mac.
     local identity="${SIGN_IDENTITY:-WhisperDesk Local Signing}"
     if security find-identity -v -p codesigning 2>/dev/null | grep -q "$identity"; then
       # An expired or untrusted local cert must not abort the build silently
@@ -143,6 +141,8 @@ make_release_dmg() {
     echo "install it in Keychain Access, then re-run. Or pass DEV_ID_IDENTITY explicitly." >&2
     exit 1
   fi
+  # Profile name predates the Cue rename; stored notarytool credentials are
+  # keyed to it, so keep it unless you re-run store-credentials.
   local notary_profile="${NOTARY_PROFILE:-whisperdesk-notary}"
 
   build_bundle release
@@ -155,9 +155,9 @@ make_release_dmg() {
   staging="$(mktemp -d)"
   cp -R "$APP_BUNDLE" "$staging/"
   ln -s /Applications "$staging/Applications"
-  local dmg="$DIST_DIR/$DISPLAY_NAME.dmg"
+  local dmg="$DIST_DIR/$APP_NAME.dmg"
   rm -f "$dmg"
-  hdiutil create -volname "$DISPLAY_NAME" -srcfolder "$staging" -ov -format UDZO "$dmg"
+  hdiutil create -volname "$APP_NAME" -srcfolder "$staging" -ov -format UDZO "$dmg"
   rm -rf "$staging"
   # Sign the DMG container too, so the image itself passes signature
   # evaluation (the app inside is what Gatekeeper ultimately assesses).
@@ -203,7 +203,7 @@ install_app() {
   fi
   mkdir -p "$target_dir"
 
-  local installed_app="$target_dir/$DISPLAY_NAME.app"
+  local installed_app="$target_dir/$APP_NAME.app"
   rm -rf "$installed_app"
   /usr/bin/ditto "$APP_BUNDLE" "$installed_app"
   xattr -dr com.apple.quarantine "$installed_app" >/dev/null 2>&1 || true

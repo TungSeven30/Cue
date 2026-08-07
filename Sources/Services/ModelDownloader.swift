@@ -45,7 +45,7 @@ struct ModelDownloader: Sendable {
     init(baseDirectory: URL? = nil, network: any ModelNetwork = URLSessionModelNetwork()) {
         self.baseDirectory = baseDirectory
             ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/WhisperDesk", isDirectory: true)
+                .appendingPathComponent("Library/Application Support/Cue", isDirectory: true)
         self.network = network
     }
 
@@ -207,7 +207,7 @@ private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate, @unc
         // The system deletes `location` once this callback returns, so the
         // move must happen synchronously here.
         let kept = FileManager.default.temporaryDirectory
-            .appendingPathComponent("whisperdesk-model-\(UUID().uuidString)")
+            .appendingPathComponent("cue-model-\(UUID().uuidString)")
         do {
             try FileManager.default.moveItem(at: location, to: kept)
             result = .success(kept)

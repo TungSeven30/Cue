@@ -49,7 +49,7 @@ struct BurnInService {
     /// user-controlled text never reaches the filter string (spec §3.2).
     static func makeWorkingSubtitleURL() -> URL {
         FileManager.default.temporaryDirectory
-            .appendingPathComponent("whisperdesk-burnin-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("cue-burnin-\(UUID().uuidString)", isDirectory: true)
             .appendingPathComponent("subs.srt")
     }
 

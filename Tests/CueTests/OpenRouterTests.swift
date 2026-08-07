@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import WhisperDesk
+@testable import Cue
 
 struct OpenRouterProviderTests {
     @Test func openRouterPrefixSelectsProvider() {

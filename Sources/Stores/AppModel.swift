@@ -428,7 +428,7 @@ final class AppModel: ObservableObject {
         guard let next = jobs.filter({ $0.status == .queued }).min(by: { $0.orderIndex < $1.orderIndex }) else {
             if didProcessQueuedJob {
                 didProcessQueuedJob = false
-                notify(title: "WhisperDesk", body: "All queued jobs finished.")
+                notify(title: "Cue", body: "All queued jobs finished.")
             }
             return
         }

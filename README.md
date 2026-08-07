@@ -1,11 +1,11 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/wordmark-dark.svg">
-    <img src="docs/wordmark-light.svg" alt="WhisperDesk" width="420">
+    <img src="docs/wordmark-light.svg" alt="Cue" width="420">
   </picture>
 </p>
 
-A native macOS app that turns local video and audio into subtitles: transcribe on-device with Whisper-family models, translate with the LLM of your choice, review and edit every segment with a synced video preview, and export clean SRT/WebVTT files — including an optional spoiler-free intro cue generated from the film itself.
+**Cue** (formerly WhisperDesk) is a native macOS app that turns local video and audio into subtitles: transcribe on-device with Whisper-family models, translate with the LLM of your choice, review and edit every segment with a synced video preview, and export clean SRT/WebVTT files — including an optional spoiler-free intro cue generated from the film itself.
 
 Everything runs locally except translation and summaries, which call the API provider you configure with your own key.
 

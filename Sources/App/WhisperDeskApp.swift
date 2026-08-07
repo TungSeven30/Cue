@@ -9,7 +9,7 @@ struct WhisperDeskApp: App {
     var body: some Scene {
         // A single-window scene: File > New Window on a WindowGroup would
         // open extra windows sharing this one AppModel and AVPlayer.
-        Window("WhisperDesk", id: "main") {
+        Window("Cue", id: "main") {
             ContentView(model: model)
                 .frame(minWidth: 1080, minHeight: 720)
         }

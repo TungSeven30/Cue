@@ -19,12 +19,12 @@ struct SetupGuideView: View {
                 Image(systemName: "wand.and.stars")
                     .font(.title2)
                     .foregroundStyle(.tint)
-                Text("Set Up WhisperDesk")
+                Text("Set Up Cue")
                     .font(.title3.weight(.semibold))
                 Spacer()
             }
 
-            Text("WhisperDesk works out of the box. The items below are optional engines and features. To add one, open Terminal (Applications → Utilities), paste its command, press Return, and wait for it to finish. Then come back and hit Check Again.")
+            Text("Cue works out of the box. The items below are optional engines and features. To add one, open Terminal (Applications → Utilities), paste its command, press Return, and wait for it to finish. Then come back and hit Check Again.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

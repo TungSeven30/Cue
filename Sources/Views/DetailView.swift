@@ -42,7 +42,7 @@ struct DetailView: View {
                 workspace
             }
         }
-        .navigationTitle("WhisperDesk")
+        .navigationTitle("Cue")
         .navigationSubtitle(model.currentJob?.title ?? "")
         .dropDestination(for: URL.self) { urls, _ in
             let fileURLs = urls.filter(\.isFileURL)

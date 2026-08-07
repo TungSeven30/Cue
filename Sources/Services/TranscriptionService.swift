@@ -139,6 +139,8 @@ struct TranscriptionService {
                 "\(snapshot.temperature)",
                 "--no-speech-threshold",
                 "\(snapshot.noSpeechThreshold)",
+                "--stream-segments",
+                "true",
             ] + finalAudioArguments
             processBox.process = process
 

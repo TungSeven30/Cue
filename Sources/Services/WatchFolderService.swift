@@ -89,6 +89,9 @@ final class WatchFolderService: ObservableObject {
         guard FileManager.default.fileExists(atPath: path, isDirectory: &probeIsDirectory), probeIsDirectory.boolValue else {
             return nil
         }
+        guard FileManager.default.isReadableFile(atPath: path) else {
+            return nil
+        }
         let keys: Set<URLResourceKey> = [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]
         return MediaFileTypes.collectMediaFiles(under: folderURL).compactMap { url in
             guard let values = try? url.resourceValues(forKeys: keys),

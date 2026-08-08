@@ -189,6 +189,21 @@ struct WatchFolderServiceTests {
     @Test func observeMediaFilesReturnsNilForMissingFolder() {
         #expect(WatchFolderService.observeMediaFiles(underPath: "/nonexistent/\(UUID().uuidString)") == nil)
     }
+
+    @Test func observeMediaFilesReturnsNilForUnreadableFolder() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("watch-unreadable-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            // Restore permissions before cleanup, or removeItem fails on the
+            // still-locked-down directory.
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: root.path)
+
+        #expect(WatchFolderService.observeMediaFiles(underPath: root.path) == nil)
+    }
 }
 
 struct WatchFolderModelTests {

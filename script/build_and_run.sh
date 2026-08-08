@@ -5,7 +5,7 @@ MODE="${1:-run}"
 APP_NAME="Cue"
 BUNDLE_ID="com.local.Cue"
 MIN_SYSTEM_VERSION="14.0"
-APP_VERSION="${APP_VERSION:-2.3.1}"
+APP_VERSION="${APP_VERSION:-2.3.2}"
 INSTALL_DIR="${INSTALL_DIR:-/Applications}"
 # Public half of the Sparkle EdDSA pair; the private key lives in the
 # login Keychain of the release machine (generate_keys).

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import WhisperDesk
+@testable import Cue
 
 @Suite struct PipelineSchedulerTests {
     private func job(_ order: Double, status: JobStatus = .queued, hasTranscript: Bool = false) -> PipelineScheduler.JobView {

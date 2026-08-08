@@ -1,11 +1,11 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/wordmark-dark.svg">
-    <img src="docs/wordmark-light.svg" alt="WhisperDesk" width="420">
+    <img src="docs/wordmark-light.svg" alt="Cue" width="420">
   </picture>
 </p>
 
-A native macOS app that turns local video and audio into subtitles: transcribe on-device with Whisper-family models, translate with the LLM of your choice, review and edit every segment with a synced video preview, and export clean SRT/WebVTT files — including an optional spoiler-free intro cue generated from the film itself.
+**Cue** (formerly WhisperDesk) is a native macOS app that turns local video and audio into subtitles: transcribe on-device with Whisper-family models, translate with the LLM of your choice, review and edit every segment with a synced video preview, and export clean SRT/WebVTT files — including an optional spoiler-free intro cue generated from the film itself.
 
 Everything runs locally except translation and summaries, which call the API provider you configure with your own key.
 
@@ -82,7 +82,7 @@ Notes on reading the table:
 
 ## Installing (for users)
 
-Grab `WhisperDesk.dmg` (notarized, from a release or shared directly), drag the app to Applications, and launch it. That's it — no Homebrew, no Python: transcription runs on the built-in whisper.cpp engine out of the box. The first transcription downloads the default model (~574 MB, one-time) with progress shown on the job.
+Grab `Cue.dmg` (notarized, from a release or shared directly), drag the app to Applications, and launch it. That's it — no Homebrew, no Python: transcription runs on the built-in whisper.cpp engine out of the box. The first transcription downloads the default model (~574 MB, one-time) with progress shown on the job.
 
 To translate, add an OpenAI, Anthropic, or Google API key in Settings (⌘,).
 
@@ -109,8 +109,8 @@ Translation can also run free and offline against any OpenAI-compatible server (
 ## Building from source (for developers)
 
 ```sh
-git clone git@github.com:TungSeven30/WhisperDesk.git
-cd WhisperDesk
+git clone git@github.com:TungSeven30/Cue.git
+cd Cue
 ./script/build_and_run.sh            # debug build, opens the app
 ```
 
@@ -119,7 +119,7 @@ Other script modes:
 | Command | What it does |
 |---|---|
 | `./script/build_and_run.sh --install` | Release build installed to `/Applications` (or `~/Applications`) |
-| `./script/build_and_run.sh --release` | Developer ID-signed, notarized, stapled `dist/WhisperDesk.dmg` |
+| `./script/build_and_run.sh --release` | Developer ID-signed, notarized, stapled `dist/Cue.dmg` |
 | `./script/build_and_run.sh --debug` | Debug build under `lldb` |
 | `./script/build_and_run.sh --logs` | Debug build with live log streaming |
 | `./script/run_tests.sh` | Runs the swift-testing suite |
@@ -142,7 +142,7 @@ Other script modes:
 - **UI**: SwiftUI with AppKit panels, single-window, `@MainActor` state in `AppModel`
 - **Transcription**: the default backend calls whisper.cpp (pinned SwiftPM dependency, Metal) in-process; the optional Python backends use a self-contained helper script (embedded in the app, written to disk at runtime) invoked as a subprocess, with JSON progress events streaming back over stderr
 - **Translation/summaries**: direct HTTPS to the provider APIs with JSON-schema-constrained outputs; no SDK dependencies
-- **Persistence**: one JSON file per job under `~/Library/Application Support/WhisperDesk/jobs/`, written atomically off the main thread and flushed on quit; corrupt files are quarantined, never overwritten
+- **Persistence**: one JSON file per job under `~/Library/Application Support/Cue/jobs/`, written atomically off the main thread and flushed on quit; corrupt files are quarantined, never overwritten
 - **Layout**: `Sources/` — `App`, `Views`, `Stores`, `Services`, `Models`, `Support`; `Tests/` — swift-testing suite; `script/` — build, test, and release tooling
 
 ## Notes

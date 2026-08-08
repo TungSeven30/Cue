@@ -20,7 +20,7 @@ fi
 swift build --build-tests
 
 BIN_PATH="$(swift build --show-bin-path)"
-BUNDLE_BINARY="$BIN_PATH/WhisperDeskPackageTests.xctest/Contents/MacOS/WhisperDeskPackageTests"
+BUNDLE_BINARY="$BIN_PATH/CuePackageTests.xctest/Contents/MacOS/CuePackageTests"
 RUNNER_DIR="$BIN_PATH/test-runner"
 RUNNER="$RUNNER_DIR/run-tests"
 RUNNER_SOURCE="$RUNNER_DIR/run-tests.swift"

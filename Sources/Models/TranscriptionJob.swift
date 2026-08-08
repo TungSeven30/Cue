@@ -29,7 +29,10 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
     var orderIndex: Double
 
     var sourceURL: URL {
-        URL(fileURLWithPath: sourcePath)
+        // .notDirectory skips the lstat that URL(fileURLWithPath:) performs to
+        // sniff directory-ness; on a cold network mount that stat can block for
+        // hundreds of ms, and this getter runs in the sidebar's row rendering.
+        URL(filePath: sourcePath, directoryHint: .notDirectory)
     }
 
     var title: String {

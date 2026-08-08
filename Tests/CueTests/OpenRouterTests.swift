@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import WhisperDesk
+@testable import Cue
 
 struct OpenRouterProviderTests {
     @Test func openRouterPrefixSelectsProvider() {
@@ -25,7 +25,7 @@ struct OpenRouterProviderTests {
         )
         #expect(request.url?.absoluteString == "https://openrouter.ai/api/v1/chat/completions")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer sk-or-test")
-        #expect(request.value(forHTTPHeaderField: "X-Title") == "WhisperDesk")
+        #expect(request.value(forHTTPHeaderField: "X-Title") == "Cue")
         let body = try #require(request.httpBody)
         let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         // The openrouter/ prefix is routing-only; the wire model is the

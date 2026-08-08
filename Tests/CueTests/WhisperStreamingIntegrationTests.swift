@@ -1,7 +1,7 @@
 import Foundation
 import os
 import Testing
-@testable import WhisperDesk
+@testable import Cue
 
 @Suite struct WhisperStreamingIntegrationTests {
     @Test func streamedSegmentsMatchFinalResult() async throws {

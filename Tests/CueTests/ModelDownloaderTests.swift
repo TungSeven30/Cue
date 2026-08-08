@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import WhisperDesk
+@testable import Cue
 
 /// Records calls and serves canned outcomes so no test touches the network.
 private final class FakeNetwork: ModelNetwork, @unchecked Sendable {
@@ -45,7 +45,7 @@ struct ModelDownloaderTests {
     @Test func derivesDestinationAndSourceForKnownModel() {
         let defaultDownloader = ModelDownloader()
         let expected = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/WhisperDesk/models/ggml-tiny.bin")
+            .appendingPathComponent("Library/Application Support/Cue/models/ggml-tiny.bin")
         #expect(defaultDownloader.destinationURL(for: "ggml-tiny.bin").path == expected.path)
         #expect(
             ModelDownloader.sourceURL(for: "ggml-tiny.bin").absoluteString

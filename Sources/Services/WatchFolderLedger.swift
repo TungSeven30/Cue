@@ -17,7 +17,7 @@ final class WatchFolderLedger {
         let resolvedBase = baseURL
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        let folder = resolvedBase.appendingPathComponent("WhisperDesk", isDirectory: true)
+        let folder = resolvedBase.appendingPathComponent("Cue", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         fileURL = folder.appendingPathComponent("watch-ledger.json")
         if let data = try? Data(contentsOf: fileURL),

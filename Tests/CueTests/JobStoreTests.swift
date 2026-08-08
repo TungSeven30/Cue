@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import WhisperDesk
+@testable import Cue
 
 @MainActor
 struct JobStoreTests {
@@ -8,7 +8,7 @@ struct JobStoreTests {
 
     init() throws {
         baseURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("whisperdesk-jobstore-\(UUID().uuidString)")
+            .appendingPathComponent("cue-jobstore-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: baseURL, withIntermediateDirectories: true)
     }
 
@@ -69,7 +69,7 @@ struct JobStoreTests {
         store.saveJob(job)
         store.flush()
 
-        let jobsFolder = baseURL.appendingPathComponent("WhisperDesk/jobs", isDirectory: true)
+        let jobsFolder = baseURL.appendingPathComponent("Cue/jobs", isDirectory: true)
         let files = try FileManager.default.contentsOfDirectory(atPath: jobsFolder.path)
         #expect(files.contains("\(job.id.uuidString).json"), "flush() must guarantee the write hit disk")
     }
@@ -86,7 +86,7 @@ struct JobStoreTests {
         staleJob.log = "stale legacy data\n"
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let legacyURL = baseURL.appendingPathComponent("WhisperDesk/jobs.json")
+        let legacyURL = baseURL.appendingPathComponent("Cue/jobs.json")
         try encoder.encode([staleJob]).write(to: legacyURL)
 
         let reloaded = JobStore(baseURL: baseURL).loadJobs()
@@ -99,7 +99,7 @@ struct JobStoreTests {
         let job = try makeJob(status: .transcriptionComplete, log: "legacy only\n")
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let folder = baseURL.appendingPathComponent("WhisperDesk", isDirectory: true)
+        let folder = baseURL.appendingPathComponent("Cue", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try encoder.encode([job]).write(to: folder.appendingPathComponent("jobs.json"))
 

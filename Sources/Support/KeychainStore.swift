@@ -3,9 +3,23 @@ import Security
 
 /// Minimal wrapper around a single generic-password Keychain item.
 enum KeychainStore {
-    static let service = "com.local.WhisperDesk"
+    static let service = "com.local.Cue"
+    /// Service used while the app was WhisperDesk; read as a fallback so
+    /// existing API keys survive the rename, then rewritten under `service`.
+    private static let legacyService = "com.local.WhisperDesk"
 
     static func read(account: String) -> String? {
+        if let value = read(account: account, service: service) {
+            return value
+        }
+        guard let legacy = read(account: account, service: legacyService) else {
+            return nil
+        }
+        write(legacy, account: account)
+        return legacy
+    }
+
+    private static func read(account: String, service: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -35,7 +49,7 @@ enum KeychainStore {
         }
 
         let data = Data(value.utf8)
-        // WhisperDesk only reads keys while in the foreground, so the item
+        // Cue only reads keys while in the foreground, so the item
         // never needs to be readable before unlock. Setting the attribute on
         // update too migrates items created by earlier builds.
         let attributes: [String: Any] = [
@@ -51,7 +65,7 @@ enum KeychainStore {
         }
         if status != errSecSuccess {
             // A silently failed write means the key vanishes on next launch.
-            NSLog("WhisperDesk: Keychain write for %@ failed with status %d.", account, status)
+            NSLog("Cue: Keychain write for %@ failed with status %d.", account, status)
         }
     }
 }

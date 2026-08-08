@@ -627,8 +627,8 @@ struct TranslationService {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             // Attribution headers OpenRouter asks apps to send; optional but
             // harmless and they identify traffic in the user's dashboard.
-            request.setValue("https://github.com/TungSeven30/WhisperDesk", forHTTPHeaderField: "HTTP-Referer")
-            request.setValue("WhisperDesk", forHTTPHeaderField: "X-Title")
+            request.setValue("https://github.com/TungSeven30/Cue", forHTTPHeaderField: "HTTP-Referer")
+            request.setValue("Cue", forHTTPHeaderField: "X-Title")
             // The "openrouter/" prefix is routing-only; the remainder is the
             // catalog id the gateway expects on the wire.
             let wireModel = String(model.trimmingCharacters(in: .whitespacesAndNewlines).dropFirst("openrouter/".count))

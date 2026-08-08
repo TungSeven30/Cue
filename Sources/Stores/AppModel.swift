@@ -475,7 +475,7 @@ final class AppModel: ObservableObject {
            PipelineScheduler.nextGPUJob(jobs: jobViews, gpuBusy: false, queuePaused: queuePaused) == nil,
            PipelineScheduler.nextTranslationJob(jobs: jobViews, translationBusy: false, queuePaused: queuePaused) == nil {
             didProcessQueuedJob = false
-            notify(title: "WhisperDesk", body: "All queued jobs finished.")
+            notify(title: "Cue", body: "All queued jobs finished.")
         }
     }
 

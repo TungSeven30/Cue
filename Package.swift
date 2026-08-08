@@ -8,12 +8,12 @@ let cltFrameworks = "/Library/Developer/CommandLineTools/Library/Developer/Frame
 let cltTestingLibs = "/Library/Developer/CommandLineTools/Library/Developer/usr/lib"
 
 let package = Package(
-    name: "WhisperDesk",
+    name: "Cue",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "WhisperDesk", targets: ["WhisperDesk"])
+        .executable(name: "Cue", targets: ["Cue"])
     ],
     dependencies: [
         // Pinned to v1.7.2 (commit 6266a9f): the newest whisper.cpp tag whose
@@ -30,14 +30,14 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "WhisperDesk",
+            name: "Cue",
             dependencies: [.product(name: "whisper", package: "whisper.cpp")],
             path: "Sources",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
-            name: "WhisperDeskTests",
-            dependencies: ["WhisperDesk"],
+            name: "CueTests",
+            dependencies: ["Cue"],
             path: "Tests",
             swiftSettings: [
                 .swiftLanguageMode(.v5),

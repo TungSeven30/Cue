@@ -1,5 +1,5 @@
 import Testing
-@testable import WhisperDesk
+@testable import Cue
 
 @Suite struct StreamCleanupTests {
     private var settings: TranscriptionSettingsSnapshot {

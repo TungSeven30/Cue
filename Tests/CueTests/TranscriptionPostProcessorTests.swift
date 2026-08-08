@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import WhisperDesk
+@testable import Cue
 
 struct TranscriptionPostProcessorTests {
     // A zero-duration segment whose successor starts at (or before) the same

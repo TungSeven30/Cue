@@ -84,6 +84,8 @@ Notes on reading the table:
 
 Grab `Cue.dmg` (notarized, from a release or shared directly), drag the app to Applications, and launch it. That's it — no Homebrew, no Python: transcription runs on the built-in whisper.cpp engine out of the box. The first transcription downloads the default model (~574 MB, one-time) with progress shown on the job.
 
+Updates are built in: the app offers new versions itself (Sparkle, fed from the public [cue-releases](https://github.com/TungSeven30/cue-releases) repo), or check manually via **Cue > Check for Updates…**. Publishing an update is one command on the release machine: `script/release_update.sh <version>`.
+
 To translate, add an OpenAI, Anthropic, or Google API key in Settings (⌘,).
 
 Requires macOS 14+ and Apple Silicon (the DMG is arm64-only). On Intel Macs, build from source — the built-in engine runs CPU-only there (slow).

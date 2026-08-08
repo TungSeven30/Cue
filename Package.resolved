@@ -1,6 +1,15 @@
 {
-  "originHash" : "7a9bfeb55bc30dda86b06e246da9bc8ab15697d70cdf5ed8cbcabf3c6a272c44",
+  "originHash" : "771088a4f89cddba1a59815402abb6f81e09f27d1711368fe4377d361dd7dd18",
   "pins" : [
+    {
+      "identity" : "sparkle",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sparkle-project/Sparkle",
+      "state" : {
+        "revision" : "79bc9e872948e47877e76f194cb0c8e0412b0b90",
+        "version" : "2.9.5"
+      }
+    },
     {
       "identity" : "whisper.cpp",
       "kind" : "remoteSourceControl",

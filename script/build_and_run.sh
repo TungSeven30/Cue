@@ -6,10 +6,16 @@ APP_NAME="Cue"
 BUNDLE_ID="com.local.Cue"
 MIN_SYSTEM_VERSION="14.0"
 APP_VERSION="${APP_VERSION:-2.3.0}"
-APP_BUILD="${APP_BUILD:-1}"
 INSTALL_DIR="${INSTALL_DIR:-/Applications}"
+# Public half of the Sparkle EdDSA pair; the private key lives in the
+# login Keychain of the release machine (generate_keys).
+SPARKLE_PUBLIC_KEY="enyN4b2NQyac4vMMX3Zp8dge4IYwiXX5ysBYLIunnBg="
+SPARKLE_FEED_URL="https://raw.githubusercontent.com/TungSeven30/cue-releases/main/appcast.xml"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Sparkle compares CFBundleVersion, so releases need a strictly increasing
+# build number; the commit count provides one with no bookkeeping.
+APP_BUILD="${APP_BUILD:-$(git -C "$ROOT_DIR" rev-list --count HEAD 2>/dev/null || echo 1)}"
 DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
@@ -39,6 +45,13 @@ build_bundle() {
   mkdir -p "$APP_MACOS" "$APP_RESOURCES"
   cp "$BUILD_BINARY" "$APP_BINARY"
   chmod +x "$APP_BINARY"
+  # Sparkle ships as a framework SwiftPM leaves next to the binary; embed it
+  # and point the binary's rpath at the bundle's Frameworks directory.
+  if [[ -d "$BUILD_DIR/Sparkle.framework" ]]; then
+    mkdir -p "$APP_CONTENTS/Frameworks"
+    cp -R "$BUILD_DIR/Sparkle.framework" "$APP_CONTENTS/Frameworks/"
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_BINARY" 2>/dev/null || true
+  fi
   if [[ -f "$ICON_SOURCE" ]]; then
     cp "$ICON_SOURCE" "$APP_RESOURCES/$ICON_FILE"
   fi
@@ -103,6 +116,10 @@ build_bundle() {
   <string>NSApplication</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.video</string>
+  <key>SUFeedURL</key>
+  <string>$SPARKLE_FEED_URL</string>
+  <key>SUPublicEDKey</key>
+  <string>$SPARKLE_PUBLIC_KEY</string>
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © $(date +%Y). All rights reserved.</string>
 </dict>
@@ -154,7 +171,9 @@ make_release_dmg() {
   build_bundle release
   # Replace the local dev signature with the distribution one: Developer ID,
   # hardened runtime, and a secure timestamp are all required by notarization.
-  codesign --force --options runtime --timestamp --sign "$identity" "$APP_BUNDLE"
+  # --deep so the embedded Sparkle framework gets the Developer ID
+  # signature too; notarization rejects mixed-identity nesting.
+  codesign --force --deep --options runtime --timestamp --sign "$identity" "$APP_BUNDLE"
   codesign --verify --strict --verbose=2 "$APP_BUNDLE"
 
   local staging

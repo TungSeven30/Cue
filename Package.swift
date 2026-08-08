@@ -26,12 +26,18 @@ let package = Package(
         .package(
             url: "https://github.com/ggml-org/whisper.cpp",
             revision: "6266a9f9e56a5b925e9892acf650f3eb1245814d" // tag v1.7.2
-        )
+        ),
+        // In-app updates. Ships as a prebuilt XCFramework, so it builds fine
+        // on CLT-only machines.
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0")
     ],
     targets: [
         .executableTarget(
             name: "Cue",
-            dependencies: [.product(name: "whisper", package: "whisper.cpp")],
+            dependencies: [
+                .product(name: "whisper", package: "whisper.cpp"),
+                .product(name: "Sparkle", package: "Sparkle"),
+            ],
             path: "Sources",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

@@ -1,4 +1,5 @@
 import AppKit
+import Sparkle
 import SwiftUI
 
 @main
@@ -6,6 +7,13 @@ struct CueApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = AppModel()
     @AppStorage("showMenuBarExtra") private var showMenuBarExtra = true
+    /// Sparkle updater; one instance for the app's lifetime. Feed URL and
+    /// public key come from Info.plist (SUFeedURL / SUPublicEDKey).
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true,
+        updaterDelegate: nil,
+        userDriverDelegate: nil
+    )
 
     // AppModel is created lazily on first render, so migrating here keeps
     // the WhisperDesk-era data move ahead of every disk and defaults read.
@@ -22,6 +30,11 @@ struct CueApp: App {
                 .frame(minWidth: 1080, minHeight: 720)
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    updaterController.checkForUpdates(nil)
+                }
+            }
             CommandGroup(after: .newItem) {
                 Button(model.primaryActionTitle) {
                     model.performPrimaryAction()

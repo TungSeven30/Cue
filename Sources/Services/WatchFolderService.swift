@@ -80,22 +80,21 @@ final class WatchFolderService: ObservableObject {
         watchedPath = nil
     }
 
-    func scan() {
-        guard let watchedPath else { return }
-        let folderURL = URL(fileURLWithPath: watchedPath, isDirectory: true)
-        let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]
-        guard let contents = try? FileManager.default.contentsOfDirectory(
-            at: folderURL, includingPropertiesForKeys: keys, options: []
-        ) else {
-            // Do not spin or tear down: the folder may be a briefly
-            // unmounted volume. The timer keeps trying; Settings shows this.
-            lastError = "The watch folder could not be read."
-            return
+    /// Snapshot of every media file under the folder, at any depth. `nil`
+    /// when the folder itself is unreadable (unmounted volume), so callers
+    /// can distinguish "gone" from "empty".
+    static func observeMediaFiles(underPath path: String) -> [FileObservation]? {
+        let folderURL = URL(fileURLWithPath: path, isDirectory: true)
+        var probeIsDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &probeIsDirectory), probeIsDirectory.boolValue else {
+            return nil
         }
-        lastError = nil
-
-        let observations: [FileObservation] = contents.compactMap { url in
-            guard let values = try? url.resourceValues(forKeys: Set(keys)),
+        guard FileManager.default.isReadableFile(atPath: path) else {
+            return nil
+        }
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]
+        return MediaFileTypes.collectMediaFiles(under: folderURL).compactMap { url in
+            guard let values = try? url.resourceValues(forKeys: keys),
                   values.isRegularFile == true
             else { return nil }
             return FileObservation(
@@ -104,6 +103,17 @@ final class WatchFolderService: ObservableObject {
                 modifiedAt: values.contentModificationDate ?? Date(timeIntervalSince1970: 0)
             )
         }
+    }
+
+    func scan() {
+        guard let watchedPath else { return }
+        guard let observations = Self.observeMediaFiles(underPath: watchedPath) else {
+            // Do not spin or tear down: the folder may be a briefly
+            // unmounted volume. The timer keeps trying; Settings shows this.
+            lastError = "The watch folder could not be read."
+            return
+        }
+        lastError = nil
 
         let ready = engine.filesReadyToIngest(
             observations: observations,

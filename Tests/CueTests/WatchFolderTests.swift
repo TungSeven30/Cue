@@ -137,6 +137,38 @@ struct WatchFolderLedgerTests {
         #expect(ledger.contains("/w/kept.mp4|1|2.0"))
     }
 
+    // Mirrors AppModel's onScanCompleted prune predicate: a subfolder that's
+    // transiently unreadable/unmounted drops its files from existingPaths,
+    // but the file is still on disk, so its ledger entry must survive —
+    // otherwise it re-ingests as a duplicate once the subfolder is readable
+    // again. A truly deleted file (missing from existingPaths AND disk) is
+    // still pruned.
+    @Test func pruneKeepsEntriesForTransientlyUnreadableSubfolders() throws {
+        let base = try makeBase()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let ledger = WatchFolderLedger(baseURL: base)
+
+        let survivingFile = base.appendingPathComponent("subfolder/survives.mp4")
+        try FileManager.default.createDirectory(at: survivingFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: survivingFile)
+        let goneFile = base.appendingPathComponent("subfolder/gone.mp4") // never created
+
+        let survivingFingerprint = "\(survivingFile.path)|1|2.0"
+        let goneFingerprint = "\(goneFile.path)|1|2.0"
+        ledger.record(survivingFingerprint, outcome: .success)
+        ledger.record(goneFingerprint, outcome: .success)
+
+        // Scan came back empty this pass (e.g. the subfolder was unreadable).
+        let prefix = base.path.hasSuffix("/") ? base.path : base.path + "/"
+        let existingPaths: Set<String> = []
+        ledger.prune(fileExists: { path in
+            !path.hasPrefix(prefix) || existingPaths.contains(path) || FileManager.default.fileExists(atPath: path)
+        })
+
+        #expect(ledger.contains(survivingFingerprint), "still on disk, must survive a scan miss")
+        #expect(!ledger.contains(goneFingerprint), "truly deleted, must be pruned")
+    }
+
     @Test func pathExtractionSurvivesPipesInNames() {
         #expect(WatchFolderLedger.path(fromFingerprint: "/w/we|ird.mp4|1|2.0") == "/w/we|ird.mp4")
     }
@@ -166,6 +198,45 @@ struct WatchFolderLedgerTests {
     }
 }
 
+
+@MainActor
+struct WatchFolderServiceTests {
+    @Test func observesMediaFilesInSubfolders() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("watch-recursive-\(UUID().uuidString)", isDirectory: true)
+        let sub = root.appendingPathComponent("season1", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        FileManager.default.createFile(atPath: root.appendingPathComponent("top.mp4").path, contents: Data("x".utf8))
+        FileManager.default.createFile(atPath: sub.appendingPathComponent("ep1.mkv").path, contents: Data("xx".utf8))
+        FileManager.default.createFile(atPath: sub.appendingPathComponent("notes.txt").path, contents: Data())
+
+        let observations = try #require(WatchFolderService.observeMediaFiles(underPath: root.path))
+        let names = Set(observations.map { URL(fileURLWithPath: $0.path).lastPathComponent })
+        #expect(names == ["top.mp4", "ep1.mkv"])
+        let sizes = Dictionary(uniqueKeysWithValues: observations.map { (URL(fileURLWithPath: $0.path).lastPathComponent, $0.size) })
+        #expect(sizes["ep1.mkv"] == 2)
+    }
+
+    @Test func observeMediaFilesReturnsNilForMissingFolder() {
+        #expect(WatchFolderService.observeMediaFiles(underPath: "/nonexistent/\(UUID().uuidString)") == nil)
+    }
+
+    @Test func observeMediaFilesReturnsNilForUnreadableFolder() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("watch-unreadable-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            // Restore permissions before cleanup, or removeItem fails on the
+            // still-locked-down directory.
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: root.path)
+
+        #expect(WatchFolderService.observeMediaFiles(underPath: root.path) == nil)
+    }
+}
 
 struct WatchFolderModelTests {
     @Test func legacySingleFolderFieldsDecodeWithDefaults() throws {

@@ -333,12 +333,22 @@ final class AppModel: ObservableObject {
             types.append(mkv)
         }
         panel.allowedContentTypes = types
-        panel.canChooseDirectories = false
+        panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
         panel.prompt = "Add"
-        panel.message = "Choose one or more video or audio files to add as jobs."
+        panel.message = "Choose video or audio files, or folders to add everything inside them (including subfolders)."
         if panel.runModal() == .OK {
-            addVideos(urls: panel.urls)
+            let added = addMedia(urls: panel.urls)
+            if added == 0, panel.urls.contains(where: { url in
+                var isDirectory: ObjCBool = false
+                return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+            }) {
+                let alert = NSAlert()
+                alert.messageText = "No Video or Audio Files Found"
+                alert.informativeText = "The chosen folder does not contain any video or audio files."
+                alert.alertStyle = .informational
+                alert.runModal()
+            }
         }
     }
 
@@ -357,6 +367,17 @@ final class AppModel: ObservableObject {
     /// Adds a video as a new job. Used by the file picker and drag-and-drop.
     func addVideo(url: URL) {
         addVideos(urls: [url])
+    }
+
+    /// Adds a mixed list of files and folders: folders contribute every
+    /// media file inside them, at any depth, in one batch. Returns how many
+    /// jobs were added so interactive callers can tell an empty folder from
+    /// a successful add.
+    @discardableResult
+    func addMedia(urls: [URL]) -> Int {
+        let expanded = MediaFileTypes.expandForAdd(urls: urls)
+        addVideos(urls: expanded)
+        return expanded.count
     }
 
     /// Adds videos as separate jobs. Used by the file picker and drag-and-drop.
@@ -590,10 +611,14 @@ final class AppModel: ObservableObject {
         }
         service.onScanCompleted = { [weak self] folderPath, existingPaths in
             // Prune only entries under the folder that was actually scanned:
-            // other folders' histories must survive untouched.
+            // other folders' histories must survive untouched. A subfolder
+            // that's transiently unreadable/unmounted drops out of
+            // existingPaths too, so also keep any entry whose file is still
+            // actually on disk — otherwise it gets pruned and re-ingested as
+            // a duplicate the moment the subfolder becomes readable again.
             let prefix = folderPath.hasSuffix("/") ? folderPath : folderPath + "/"
             self?.watchLedger.prune(fileExists: { path in
-                !path.hasPrefix(prefix) || existingPaths.contains(path)
+                !path.hasPrefix(prefix) || existingPaths.contains(path) || FileManager.default.fileExists(atPath: path)
             })
         }
         service.onFilesReady = { [weak self] urls in

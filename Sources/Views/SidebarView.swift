@@ -86,6 +86,7 @@ struct SidebarView: View {
     @State private var editingWatchFolderID: UUID?
     @AppStorage("sidebarGroupByStatus") private var groupByStatus = false
     @AppStorage("sidebarStatusFilter") private var statusFilterRaw = JobStatusFilter.all.rawValue
+    @AppStorage("sidebarSortOrder") private var sortOrderRaw = JobSortOrder.queueOrder.rawValue
 
     var body: some View {
         List(selection: Binding(
@@ -139,9 +140,14 @@ struct SidebarView: View {
                             Text(filter.label).tag(filter.rawValue)
                         }
                     }
+                    Picker("Sort by", selection: $sortOrderRaw) {
+                        ForEach(JobSortOrder.allCases) { order in
+                            Text(order.label).tag(order.rawValue)
+                        }
+                    }
                 } label: {
                     Label("Organize", systemImage: organizeMenuIcon)
-                        .help("Filter the job list or group it by status")
+                        .help("Filter, sort, or group the job list")
                 }
             }
         }
@@ -288,27 +294,33 @@ struct SidebarView: View {
         JobStatusFilter(rawValue: statusFilterRaw) ?? .all
     }
 
-    /// A filled funnel marks an active filter, so a shortened list is never
-    /// mistaken for missing jobs.
+    /// A filled funnel marks an active filter or non-default sort, so a
+    /// shortened or rearranged list is never mistaken for missing jobs.
     private var organizeMenuIcon: String {
-        statusFilter == .all
+        statusFilter == .all && sortOrder == .queueOrder
             ? "line.3.horizontal.decrease.circle"
             : "line.3.horizontal.decrease.circle.fill"
     }
 
+    private var sortOrder: JobSortOrder {
+        JobSortOrder(rawValue: sortOrderRaw) ?? .queueOrder
+    }
+
     private var visibleJobs: [TranscriptionJob] {
         let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return model.jobs.filter { job in
+        let filtered = model.jobs.filter { job in
             guard statusFilter.includes(job) else { return false }
             guard !trimmedSearch.isEmpty else { return true }
             return job.title.localizedCaseInsensitiveContains(trimmedSearch)
         }
+        guard sortOrder != .queueOrder else { return filtered }
+        return sortOrder.sortedOffsets(of: filtered.map(JobSortOrder.Key.init(job:))).map { filtered[$0] }
     }
 
     /// Drag-reorder only works on the full flat list: reordering a filtered
     /// subset would move jobs relative to neighbours the user cannot see.
     private var isReorderable: Bool {
-        !groupByStatus && statusFilter == .all
+        !groupByStatus && statusFilter == .all && sortOrder == .queueOrder
             && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 

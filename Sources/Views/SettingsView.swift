@@ -24,6 +24,19 @@ struct SettingsView: View {
                     selection: $settings.sourceLanguage
                 )
                 Toggle("Start jobs automatically when files are added", isOn: $settings.autoStartAddedJobs)
+                Picker("Auto-archive finished jobs", selection: $settings.autoArchiveDays) {
+                    Text("Never").tag(0)
+                    Text("After 7 days").tag(7)
+                    Text("After 30 days").tag(30)
+                    Text("After 90 days").tag(90)
+                }
+                .help("Archived jobs leave the sidebar (see the Archived filter) but keep their transcripts on disk")
+                Picker("When the queue finishes", selection: $settings.afterQueueAction) {
+                    ForEach(AfterQueueAction.allCases) { action in
+                        Text(action.label).tag(action)
+                    }
+                }
+                .help("Runs after the last queued job completes — useful for overnight batches")
                 Toggle("Show advanced transcription controls", isOn: $settings.showAdvancedControls)
                 if settings.showAdvancedControls {
                     backendPicker

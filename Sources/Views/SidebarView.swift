@@ -48,6 +48,7 @@ private enum JobStatusFilter: String, CaseIterable, Identifiable {
     case inProgress
     case done
     case stopped
+    case archived
 
     var id: String { rawValue }
 
@@ -57,19 +58,24 @@ private enum JobStatusFilter: String, CaseIterable, Identifiable {
         case .inProgress: return "In Progress"
         case .done: return "Done"
         case .stopped: return "Canceled & Failed"
+        case .archived: return "Archived"
         }
     }
 
-    func includes(_ status: JobStatus) -> Bool {
+    func includes(_ job: TranscriptionJob) -> Bool {
+        // Archived jobs appear only under their own filter, so day-to-day
+        // views stay small no matter how much history accumulates.
+        guard self != .archived else { return job.archivedAt != nil }
+        guard job.archivedAt == nil else { return false }
         switch self {
-        case .all:
+        case .all, .archived:
             return true
         case .inProgress:
-            return status.isRunning || status == .queued || status == .idle
+            return job.status.isRunning || job.status == .queued || job.status == .idle
         case .done:
-            return status == .transcriptionComplete || status == .translationComplete
+            return job.status == .transcriptionComplete || job.status == .translationComplete
         case .stopped:
-            return status == .canceled || status == .failed
+            return job.status == .canceled || job.status == .failed
         }
     }
 }
@@ -288,7 +294,7 @@ struct SidebarView: View {
     private var visibleJobs: [TranscriptionJob] {
         let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return model.jobs.filter { job in
-            guard statusFilter.includes(job.status) else { return false }
+            guard statusFilter.includes(job) else { return false }
             guard !trimmedSearch.isEmpty else { return true }
             return job.title.localizedCaseInsensitiveContains(trimmedSearch)
         }
@@ -403,6 +409,15 @@ struct SidebarView: View {
             Label("Open Destination Folder", systemImage: "folder")
         }
         Divider()
+        Button {
+            model.setArchived(job.id, job.archivedAt == nil)
+        } label: {
+            Label(
+                job.archivedAt == nil ? "Archive" : "Unarchive",
+                systemImage: job.archivedAt == nil ? "archivebox" : "tray.and.arrow.up"
+            )
+        }
+        .disabled(job.status.isRunning || job.status == .queued)
         Button(role: .destructive) {
             model.deleteJob(job.id)
         } label: {

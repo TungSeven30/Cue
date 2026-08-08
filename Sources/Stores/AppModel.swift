@@ -87,7 +87,8 @@ final class AppModel: ObservableObject {
     init() {
         isPlayerVisible = UserDefaults.standard.object(forKey: "isPlayerVisible") as? Bool ?? true
         jobs = jobStore.loadJobs().sorted { $0.orderIndex < $1.orderIndex }
-        selectedJobID = jobs.first?.id
+        autoArchiveOldJobs()
+        selectedJobID = jobs.first(where: { $0.archivedAt == nil })?.id ?? jobs.first?.id
         // `settings` is a nested ObservableObject; changes to its fields do not
         // fire AppModel's objectWillChange on their own, so forward them.
         settings.objectWillChange
@@ -473,7 +474,38 @@ final class AppModel: ObservableObject {
         processQueue()
     }
 
+    /// Archives terminal jobs older than the configured window. Runs once at
+    /// launch so the sidebar and queue only carry recent, relevant jobs.
+    private func autoArchiveOldJobs() {
+        let days = settings.autoArchiveDays
+        guard days > 0 else { return }
+        let now = Date()
+        for index in jobs.indices where jobs[index].archivedAt == nil {
+            let job = jobs[index]
+            if TranscriptionJob.shouldAutoArchive(
+                status: job.status,
+                finishedAt: job.finishedAt,
+                updatedAt: job.updatedAt,
+                olderThanDays: days,
+                now: now
+            ) {
+                jobs[index].archivedAt = now
+                jobStore.saveJob(jobs[index])
+            }
+        }
+    }
+
+    func setArchived(_ id: UUID, _ archived: Bool) {
+        updateJob(id) { job in
+            job.archivedAt = archived ? Date() : nil
+        }
+        if archived, selectedJobID == id {
+            selectedJobID = jobs.first(where: { $0.archivedAt == nil })?.id
+        }
+    }
+
     func jobNeedsWork(_ job: TranscriptionJob) -> Bool {
+        if job.archivedAt != nil { return false }
         if job.status.isRunning { return false }
         if job.status == .queued { return true }
         if job.transcriptSegments.isEmpty { return true }
@@ -501,7 +533,7 @@ final class AppModel: ObservableObject {
     }
 
     private var jobViews: [PipelineScheduler.JobView] {
-        jobs.map {
+        jobs.filter { $0.archivedAt == nil }.map {
             PipelineScheduler.JobView(
                 id: $0.id,
                 orderIndex: $0.orderIndex,

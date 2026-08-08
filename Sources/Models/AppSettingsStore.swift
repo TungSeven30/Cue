@@ -1,5 +1,19 @@
 import Foundation
 
+enum AfterQueueAction: String, CaseIterable, Identifiable, Codable, Hashable {
+    case doNothing
+    case sleep
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .doNothing: return "Do nothing"
+        case .sleep: return "Sleep the Mac"
+        }
+    }
+}
+
 enum WhisperBackend: String, CaseIterable, Identifiable, Codable, Hashable {
     case auto
     case mlxWhisper = "mlx-whisper"
@@ -355,6 +369,10 @@ final class AppSettingsStore: ObservableObject {
     @Published var summaryDetail: SummaryDetail { didSet { save() } }
     @Published var autoStartAddedJobs: Bool { didSet { save() } }
     @Published var autoExportSidecar: Bool { didSet { save() } }
+    /// Days after which finished jobs are auto-archived at launch; 0 = never.
+    @Published var autoArchiveDays: Int { didSet { save() } }
+    /// What to do when the queue drains (sleep the Mac for overnight runs).
+    @Published var afterQueueAction: AfterQueueAction { didSet { save() } }
     @Published var watchFolders: [WatchFolder] { didSet { save() } }
     @Published var showAdvancedControls: Bool { didSet { save() } }
     @Published var translationChunkMode: TranslationChunkMode { didSet { save() } }
@@ -466,6 +484,8 @@ final class AppSettingsStore: ObservableObject {
         summaryDetail = SummaryDetail(rawValue: defaults.string(forKey: "summaryDetail") ?? "") ?? .brief
         autoStartAddedJobs = defaults.object(forKey: "autoStartAddedJobs") as? Bool ?? true
         autoExportSidecar = defaults.bool(forKey: "autoExportSidecar")
+        autoArchiveDays = defaults.object(forKey: "autoArchiveDays") as? Int ?? 30
+        afterQueueAction = AfterQueueAction(rawValue: defaults.string(forKey: "afterQueueAction") ?? "") ?? .doNothing
         if let data = defaults.data(forKey: "watchFolders"),
            let decoded = try? JSONDecoder().decode([WatchFolder].self, from: data) {
             watchFolders = decoded
@@ -586,6 +606,8 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(summaryDetail.rawValue, forKey: "summaryDetail")
         defaults.set(autoStartAddedJobs, forKey: "autoStartAddedJobs")
         defaults.set(autoExportSidecar, forKey: "autoExportSidecar")
+        defaults.set(autoArchiveDays, forKey: "autoArchiveDays")
+        defaults.set(afterQueueAction.rawValue, forKey: "afterQueueAction")
         if let data = try? JSONEncoder().encode(watchFolders) {
             defaults.set(data, forKey: "watchFolders")
         }

@@ -27,6 +27,9 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
     var origin: JobOrigin
     /// Queue/list position; lower runs and displays first.
     var orderIndex: Double
+    /// When set, the job is hidden from the default sidebar views and
+    /// skipped by the queue; its JSON stays on disk.
+    var archivedAt: Date?
 
     var sourceURL: URL {
         // .notDirectory skips the lstat that URL(fileURLWithPath:) performs to
@@ -63,6 +66,7 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         self.overrides = JobSettingsOverrides()
         self.origin = .manual
         self.orderIndex = -now.timeIntervalSince1970
+        self.archivedAt = nil
     }
 
     init(from decoder: Decoder) throws {
@@ -88,6 +92,27 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         overrides = try container.decodeIfPresent(JobSettingsOverrides.self, forKey: .overrides) ?? JobSettingsOverrides()
         origin = try container.decodeIfPresent(JobOrigin.self, forKey: .origin) ?? .manual
         orderIndex = try container.decodeIfPresent(Double.self, forKey: .orderIndex) ?? -createdAt.timeIntervalSince1970
+        archivedAt = try container.decodeIfPresent(Date.self, forKey: .archivedAt)
+    }
+
+    /// Whether an auto-archive pass should tuck this job away: terminal
+    /// status, and untouched for longer than the configured window.
+    static func shouldAutoArchive(
+        status: JobStatus,
+        finishedAt: Date?,
+        updatedAt: Date,
+        olderThanDays days: Int,
+        now: Date = Date()
+    ) -> Bool {
+        guard days > 0 else { return false }
+        switch status {
+        case .transcriptionComplete, .translationComplete, .canceled, .failed:
+            break
+        case .idle, .queued, .transcribing, .translating, .burningIn:
+            return false
+        }
+        let reference = finishedAt ?? updatedAt
+        return now.timeIntervalSince(reference) > Double(days) * 86_400
     }
 
     static func fingerprint(for url: URL) -> String {

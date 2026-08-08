@@ -3,6 +3,23 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
+## 2.3.2 — 2026-08-08
+
+- Intro summaries can use the translation model, a different cloud model,
+  or an OpenAI-compatible local model. An optional fallback runs only when
+  the primary model explicitly refuses the content for a policy/safety reason.
+- Translation requests now keep the selected provider, credentials, endpoint,
+  and model routing together throughout retries and recursive chunk splits.
+- The standalone `transcribe.py` is generated from the app's canonical backend
+  and now has the same audio cache, cancellation cleanup, and preprocessing
+  fallback behavior; CI rejects future drift.
+- Model downloads, job persistence, Keychain failures, interrupted-job
+  recovery, diagnostics, and release verification now fail visibly and retain
+  recoverable data instead of silently continuing.
+- Migrated the project to Swift 6 strict concurrency and expanded deterministic
+  coverage across the pipeline, storage, networking, packaging, and real
+  packaged Metal inference.
+
 ## 2.3.1 — 2026-08-08
 
 - In-app updates: Cue now checks for and installs new versions itself

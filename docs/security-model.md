@@ -16,8 +16,10 @@ Cue reads files the user selects and enabled watch folders. Built-in
 transcription stays in-process and local. Optional Python backends execute the
 generated helper plus locally installed Python packages; they and ffmpeg are
 therefore trusted local executables. Translation and intro summaries send
-subtitle text—not source audio/video—to the configured HTTPS provider, or to
-the explicitly configured local-server URL.
+subtitle text—not source audio/video—only to the explicitly selected HTTPS
+provider or configured local-server URL. A summary fallback is opt-in and runs
+only after a typed policy/safety refusal; ordinary failures never route text to
+another provider.
 
 The app is Developer ID signed and notarized but is not App Sandbox confined.
 That is an explicit product constraint: it must read arbitrary user-selected

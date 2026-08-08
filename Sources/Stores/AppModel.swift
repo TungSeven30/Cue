@@ -265,7 +265,7 @@ final class AppModel: ObservableObject {
         return !job.transcriptSegments.isEmpty
             && !job.status.isRunning
             && !isGeneratingSummary
-            && settings.isTranslationReady
+            && settings.isSummaryReady
     }
 
     func checkBurnInAvailability() {
@@ -965,7 +965,7 @@ final class AppModel: ObservableObject {
             recordWatchOutcome(for: jobID, success: true)
             // Same guard as the real completion path: auto-translating with
             // no usable provider would immediately mark this job as Failed.
-            if autoTranslate && !hasTranslation && settings.isTranslationReady {
+            if autoTranslate && !hasTranslation && settings.isModelReady(resolved.openAIModel) {
                 startTranslation(jobID: jobID)
             } else {
                 processQueue()
@@ -994,11 +994,11 @@ final class AppModel: ObservableObject {
         // exception: it competes with whisper for this machine's GPU, so it
         // only translates once transcription is done (one whole-transcript
         // pass, exactly like the sequential path).
-        let willTranslate = autoTranslate && settings.isTranslationReady
+        let willTranslate = autoTranslate && settings.isModelReady(resolved.openAIModel)
         if willTranslate {
-            let overlapAllowed = settings.currentTranslationProvider != .local
             // Fresh per run, never persisted onto the job.
-            let credentials = makeTranslationCredentials()
+            let credentials = makeCredentials(for: resolved.openAIModel)
+            let overlapAllowed = credentials.provider != .local
             drivers[jobID] = ProgressiveTranslationDriver(
                 chunkSize: resolved.translationChunkMode.chunkSize,
                 overlapAllowed: overlapAllowed,
@@ -1228,7 +1228,7 @@ final class AppModel: ObservableObject {
                     segments: segments,
                     sourceLanguage: resolved.sourceLanguage,
                     settings: resolved,
-                    credentials: makeTranslationCredentials(),
+                    credentials: makeCredentials(for: resolved.openAIModel),
                     existingTranslations: existingTranslations
                 ) { [weak self] progress in
                     self?.updateProgress(progress, for: jobID)
@@ -1671,21 +1671,25 @@ final class AppModel: ObservableObject {
             ? (target.isEmpty ? "English" : target)
             : "the same language as the subtitles"
         let id = job.id
-        let resolvedSettings = JobSettingsSnapshot(settings: settings).applying(job.overrides)
+        let configurations = makeSummaryConfigurations()
 
         isGeneratingSummary = true
         Task {
             do {
-                let summary = try await translationService.summarize(
+                let result = try await translationService.summarize(
                     segments: segments,
                     language: language,
-                    settings: resolvedSettings,
-                    credentials: makeTranslationCredentials(),
+                    primary: configurations.primary,
+                    fallback: configurations.fallback,
                     detail: settings.summaryDetail
                 )
                 updateJob(id) { job in
-                    job.summary = summary
-                    job.log += "Generated intro summary: \(summary)\n"
+                    job.summary = result.summary
+                    if result.usedFallback {
+                        job.log +=
+                            "The primary summary model \(configurations.primary.model) declined the content; policy fallback \(result.model) succeeded.\n"
+                    }
+                    job.log += "Generated intro summary with \(result.model): \(result.summary)\n"
                 }
             } catch {
                 appendLog("Intro summary failed: \(error.localizedDescription)", to: id)
@@ -1707,44 +1711,62 @@ final class AppModel: ObservableObject {
         for id: UUID
     ) async -> String? {
         guard settings.generateSummary, !segments.isEmpty else { return nil }
-        guard settings.isTranslationReady else {
-            let reason =
-                settings.currentTranslationProvider == .local
-                ? "no local server URL is configured"
-                : "no \(settings.currentTranslationProvider.label) API key is configured"
+        guard settings.isSummaryReady else {
+            let reason = settings.modelReadinessReason(settings.resolvedSummaryModel)
             appendLog("Skipped the intro summary because \(reason).", to: id)
             return nil
         }
         updateJob(id, debouncePersist: true) { job in
             job.progress = JobProgress(stage: job.progress.stage, detail: "Writing intro summary.", fraction: job.progress.fraction)
         }
-        let overrides = jobs.first(where: { $0.id == id })?.overrides ?? JobSettingsOverrides()
+        let configurations = makeSummaryConfigurations()
         do {
-            let summary = try await translationService.summarize(
+            let result = try await translationService.summarize(
                 segments: segments,
                 language: language,
-                settings: JobSettingsSnapshot(settings: settings).applying(overrides),
-                credentials: makeTranslationCredentials(),
+                primary: configurations.primary,
+                fallback: configurations.fallback,
                 detail: settings.summaryDetail
             )
-            appendLog("Generated intro summary: \(summary)", to: id)
-            return summary
+            if result.usedFallback {
+                appendLog(
+                    "The primary summary model \(configurations.primary.model) declined the content; policy fallback \(result.model) succeeded.",
+                    to: id
+                )
+            }
+            appendLog("Generated intro summary with \(result.model): \(result.summary)", to: id)
+            return result.summary
         } catch {
             appendLog("Intro summary failed (job still completed): \(error.localizedDescription)", to: id)
             return nil
         }
     }
 
-    /// Secrets + prompt for the current translation model. Built fresh per
-    /// run; never stored on the job.
-    private func makeTranslationCredentials() -> TranslationCredentials {
-        let provider = settings.currentTranslationProvider
+    /// Secrets + prompt matched to one explicit model. Built fresh per run;
+    /// never stored on the job.
+    private func makeCredentials(for model: String) -> TranslationCredentials {
+        let provider = TranslationProvider.infer(from: model)
         return TranslationCredentials(
             apiKey: settings.translationAPIKey(for: provider),
             prompt: settings.translationPrompt,
             provider: provider,
             localEndpoint: settings.localTranslationEndpoint
         )
+    }
+
+    private func makeSummaryConfigurations() -> (
+        primary: SummaryModelConfiguration,
+        fallback: SummaryModelConfiguration?
+    ) {
+        let primaryModel = settings.resolvedSummaryModel
+        let primary = SummaryModelConfiguration(
+            model: primaryModel,
+            credentials: makeCredentials(for: primaryModel)
+        )
+        let fallback = settings.resolvedSummaryFallbackModel.map { model in
+            SummaryModelConfiguration(model: model, credentials: makeCredentials(for: model))
+        }
+        return (primary, fallback)
     }
 
     private func markCanceled(_ id: UUID) {

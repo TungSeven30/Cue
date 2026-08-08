@@ -7,7 +7,7 @@
 
 **Cue** (formerly WhisperDesk) is a native macOS app that turns local video and audio into subtitles: transcribe on-device with Whisper-family models, translate with the LLM of your choice, review and edit every segment with a synced video preview, and export clean SRT/WebVTT files — including an optional spoiler-free intro cue generated from the film itself.
 
-Everything runs locally except translation and summaries, which call the API provider you configure with your own key.
+Transcription runs locally. Translation and summaries use only the cloud providers or OpenAI-compatible local server you explicitly configure.
 
 ## Features
 
@@ -18,13 +18,14 @@ Everything runs locally except translation and summaries, which call the API pro
 - Audio is extracted natively (AVFoundation) and cached (capped at 10 GB), so re-runs skip the extraction step
 
 **Translation**
-- OpenAI, Anthropic (Claude), or Google (Gemini) — the provider is inferred from the model name, so switching is just picking a different model
+- OpenAI, Anthropic (Claude), Google (Gemini), OpenRouter, or an OpenAI-compatible local server — the provider is inferred from the model name, so switching is just picking a different model
 - Chunked, schema-validated requests with retries, automatic chunk-splitting on oversized responses, and cross-chunk context so names, tone, and honorifics stay consistent
 - Partial translations are saved continuously and resume after an interruption or failed chunk
 - Optional auto-translate after transcription
 
 **Intro summary**
-- One click (or a toggle for every job) asks your translation LLM for a spoiler-free, back-of-the-box intro based on the subtitles
+- One click (or a toggle for every job) asks the translation model, a separate cloud model, or a local model for a spoiler-free, back-of-the-box intro based on the subtitles
+- An optional fallback model runs only when the primary model explicitly refuses the content for a policy/safety reason; rate limits, bad keys, outages, and malformed replies never switch providers
 - Prepended as the first cue of SRT/VTT exports, shown from 0s until the first dialogue (3s minimum, 10s cap)
 - Generated in the translation's target language, or the film's own language for untranslated jobs
 
@@ -86,7 +87,7 @@ Grab `Cue.dmg` (notarized, from a release or shared directly), drag the app to A
 
 Updates are built in: the app offers new versions itself (Sparkle, fed from the public [cue-releases](https://github.com/TungSeven30/cue-releases) repo), or check manually via **Cue > Check for Updates…**. Publishing a complete release is one command on the release machine: `script/release.sh <version>`.
 
-To translate, add an OpenAI, Anthropic, or Google API key in Settings (⌘,).
+To translate or summarize in the cloud, add the matching OpenAI, Anthropic, Google, or OpenRouter API key in Settings (⌘,). A `local/…` model uses your configured OpenAI-compatible server and needs no key.
 
 Requires macOS 14+ and Apple Silicon (the DMG is arm64-only). On Intel Macs, build from source — the built-in engine runs CPU-only there (slow).
 
@@ -148,12 +149,12 @@ Other script modes:
 
 - **UI**: SwiftUI with AppKit panels, single-window, `@MainActor` state in `AppModel`
 - **Transcription**: the default backend calls whisper.cpp (pinned SwiftPM dependency, Metal) in-process; the optional Python backends use a self-contained helper script (embedded in the app, written to disk at runtime) invoked as a subprocess, with JSON progress events streaming back over stderr
-- **Translation/summaries**: direct HTTPS to the provider APIs with JSON-schema-constrained outputs; no SDK dependencies
+- **Translation/summaries**: direct HTTPS to the explicitly selected provider APIs—or the configured local server—with JSON-schema-constrained outputs; no SDK dependencies
 - **Persistence**: one JSON file per job under `~/Library/Application Support/Cue/jobs/`, written atomically off the main thread and flushed on quit; corrupt files are quarantined, never overwritten
 - **Layout**: `Sources/` — `App`, `Views`, `Stores`, `Services`, `Models`, `Support`; `Tests/` — swift-testing suite; `script/` — build, test, and release tooling
 - **Audit/runbooks**: [architecture review](docs/architecture-review-2026-08-08.md), [security model](docs/security-model.md), [dependency policy](docs/dependency-policy.md), [release/rollback](docs/release-runbook.md), and [data recovery](docs/data-recovery.md)
 
 ## Notes
 
-- The default transcription setup is the built-in engine with `ggml-large-v3-turbo-q5_0` (the MLX backend uses `mlx-community/whisper-large-v3-turbo`); the default translation model and languages are configurable in Settings, as are the translator prompt, chunk sizes, and parallelism.
+- The default transcription setup is the built-in engine with `ggml-large-v3-turbo-q5_0` (the MLX backend uses `mlx-community/whisper-large-v3-turbo`); translation languages/model and independent primary/fallback summary models are configurable in Settings, as are the translator prompt, chunk sizes, and parallelism.
 - `transcribe.py` at the repo root is the generated standalone form of the exact helper embedded in the app. Edit `BackendScript.source`, run `python3 script/sync_backend_script.py`, and commit both; the test suite rejects any drift.

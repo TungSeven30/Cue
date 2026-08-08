@@ -121,6 +121,39 @@ struct AppSettingsStoreTests {
         #expect(store.isTranslationReady)
     }
 
+    @Test func summaryModelCanDifferFromTranslationAndPersists() {
+        let (defaults, name) = makeSuite()
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let store = makeStore(defaults: defaults)
+        store.openAIModel = "gpt-5.5"
+        store.summaryModel = "local/qwen3.6-35b"
+        store.summaryFallbackModel = "claude-haiku-4-5"
+
+        #expect(store.resolvedSummaryModel == "local/qwen3.6-35b")
+        #expect(store.currentSummaryProvider == .local)
+        #expect(store.isSummaryReady)
+        #expect(!store.isTranslationReady)
+
+        let reloaded = makeStore(defaults: defaults)
+        #expect(reloaded.summaryModel == "local/qwen3.6-35b")
+        #expect(reloaded.summaryFallbackModel == "claude-haiku-4-5")
+    }
+
+    @Test func blankSummaryModelInheritsTranslationAndDuplicateFallbackIsIgnored() {
+        let (defaults, name) = makeSuite()
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let store = makeStore(defaults: defaults)
+        store.openAIModel = "local/qwen"
+        store.summaryModel = "   "
+        store.summaryFallbackModel = "local/qwen"
+
+        #expect(store.resolvedSummaryModel == "local/qwen")
+        #expect(store.resolvedSummaryFallbackModel == nil)
+        #expect(store.isSummaryReady)
+    }
+
     @Test func failedLegacySecretMigrationKeepsPlaintextFallback() {
         let (defaults, name) = makeSuite()
         defer { defaults.removePersistentDomain(forName: name) }

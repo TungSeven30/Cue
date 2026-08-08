@@ -2,7 +2,7 @@ import Foundation
 
 /// The LLM provider used for translation, inferred from the model name so a
 /// single "model" setting selects both the model and the API to call.
-enum TranslationProvider {
+enum TranslationProvider: Equatable, Sendable {
     case openai
     case anthropic
     case google
@@ -49,6 +49,11 @@ enum TranslationServiceError: LocalizedError {
     case apiError(String)
     /// An error retrying cannot fix (bad key, unknown model, malformed request).
     case fatalAPIError(String)
+    /// The provider or model declined the content for a policy/safety reason.
+    /// Summary generation may retry this specific failure with an explicitly
+    /// configured fallback model; ordinary API failures must not switch
+    /// providers silently.
+    case contentRefused(String)
     case validationFailed(String)
     /// The chunk was too large for the model's input or output limits.
     /// Retrying at the same size cannot succeed, but splitting the chunk can.
@@ -57,10 +62,10 @@ enum TranslationServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingAPIKey(let provider):
-            return "Add an \(provider) API key in Settings before translating."
+            return "Add an \(provider) API key in Settings before using this model."
         case .invalidResponse:
-            return "The translation response could not be parsed."
-        case .apiError(let message), .fatalAPIError(let message):
+            return "The model response could not be parsed."
+        case .apiError(let message), .fatalAPIError(let message), .contentRefused(let message):
             return message
         case .validationFailed(let message), .responseTooLarge(let message):
             return message
@@ -83,12 +88,27 @@ private struct TranslationChunkResult {
 
 /// Secrets and prompt for a translation run, passed separately from the
 /// persisted JobSettingsSnapshot so keys never reach a job file on disk.
-struct TranslationCredentials {
+struct TranslationCredentials: Sendable {
     let apiKey: String
     let prompt: String
     let provider: TranslationProvider
     /// OpenAI-compatible server URL, used only when provider == .local.
     let localEndpoint: String
+}
+
+/// One explicit model/provider/credential bundle for summary generation.
+/// Keeping these values together prevents the model name and API key routing
+/// from drifting apart when the summary uses a different model than
+/// translation.
+struct SummaryModelConfiguration: Sendable {
+    let model: String
+    let credentials: TranslationCredentials
+}
+
+struct SummaryGenerationResult: Sendable {
+    let summary: String
+    let model: String
+    let usedFallback: Bool
 }
 
 struct TranslationService: Sendable {
@@ -185,6 +205,7 @@ struct TranslationService: Sendable {
                                 prompt: prompt,
                                 apiKey: apiKey,
                                 model: model,
+                                provider: provider,
                                 localEndpoint: localEndpoint,
                                 context: context
                             )
@@ -271,6 +292,7 @@ struct TranslationService: Sendable {
         prompt: String,
         apiKey: String,
         model: String,
+        provider: TranslationProvider,
         localEndpoint: String,
         context: [TranslationContextPair]
     ) async throws -> [TranslatedSegment] {
@@ -286,6 +308,7 @@ struct TranslationService: Sendable {
                     prompt: prompt,
                     apiKey: apiKey,
                     model: model,
+                    provider: provider,
                     localEndpoint: localEndpoint,
                     context: context
                 )
@@ -293,6 +316,9 @@ struct TranslationService: Sendable {
                 // Retrying cannot fix a rejected key or unknown model; surface
                 // it immediately instead of burning the remaining attempts.
                 if case TranslationServiceError.fatalAPIError = error {
+                    throw error
+                }
+                if case TranslationServiceError.contentRefused = error {
                     throw error
                 }
                 lastError = error
@@ -325,6 +351,7 @@ struct TranslationService: Sendable {
                 prompt: prompt,
                 apiKey: apiKey,
                 model: model,
+                provider: provider,
                 localEndpoint: localEndpoint,
                 context: context
             )
@@ -337,6 +364,7 @@ struct TranslationService: Sendable {
                 prompt: prompt,
                 apiKey: apiKey,
                 model: model,
+                provider: provider,
                 localEndpoint: localEndpoint,
                 context: context
             )
@@ -363,17 +391,49 @@ struct TranslationService: Sendable {
         }
     }
 
-    /// Generates a short spoiler-free introduction for the film from its
-    /// subtitle text, in `language`, using the configured translation model.
+    /// Generates a spoiler-free introduction with an independently selected
+    /// model. A configured fallback is tried only when the primary explicitly
+    /// refuses or policy-blocks the content.
     @MainActor
     func summarize(
         segments: [TranscriptionSegment],
         language: String,
-        settings: JobSettingsSnapshot,
-        credentials: TranslationCredentials,
+        primary: SummaryModelConfiguration,
+        fallback: SummaryModelConfiguration? = nil,
         detail: SummaryDetail = .brief
+    ) async throws -> SummaryGenerationResult {
+        do {
+            let summary = try await summarizeOnce(
+                segments: segments,
+                language: language,
+                configuration: primary,
+                detail: detail
+            )
+            return SummaryGenerationResult(summary: summary, model: primary.model, usedFallback: false)
+        } catch TranslationServiceError.contentRefused {
+            guard let fallback, fallback.model != primary.model || fallback.credentials.provider != primary.credentials.provider else {
+                throw TranslationServiceError.contentRefused(
+                    "The summary model declined this film for a policy or safety reason. Configure a different summary fallback model in Settings."
+                )
+            }
+            let summary = try await summarizeOnce(
+                segments: segments,
+                language: language,
+                configuration: fallback,
+                detail: detail
+            )
+            return SummaryGenerationResult(summary: summary, model: fallback.model, usedFallback: true)
+        }
+    }
+
+    private func summarizeOnce(
+        segments: [TranscriptionSegment],
+        language: String,
+        configuration: SummaryModelConfiguration,
+        detail: SummaryDetail
     ) async throws -> String {
-        let model = settings.openAIModel
+        let model = configuration.model
+        let credentials = configuration.credentials
         let provider = credentials.provider
         let apiKey = credentials.apiKey
         let localEndpoint = credentials.localEndpoint
@@ -464,6 +524,7 @@ struct TranslationService: Sendable {
         prompt: String,
         apiKey: String,
         model: String,
+        provider: TranslationProvider,
         localEndpoint: String,
         context: [TranslationContextPair]
     ) async throws -> [TranslatedSegment] {
@@ -497,7 +558,6 @@ struct TranslationService: Sendable {
             \(String(decoding: try JSONEncoder().encode(segments), as: UTF8.self))
             """
 
-        let provider = TranslationProvider.infer(from: model)
         let request = try Self.makeRequest(
             provider: provider,
             model: model,
@@ -618,7 +678,7 @@ struct TranslationService: Sendable {
             // "local/" prefix is routing-only — strip it for the wire model
             // (an empty remainder is fine; LM Studio ignores the model field
             // when a single model is loaded).
-            let wireModel = String(model.trimmingCharacters(in: .whitespacesAndNewlines).dropFirst("local/".count))
+            let wireModel = Self.removingRoutingPrefix("local/", from: model)
             request.httpBody = try JSONEncoder().encode(
                 ChatCompletionsRequest(
                     model: wireModel,
@@ -642,7 +702,7 @@ struct TranslationService: Sendable {
             request.setValue("Cue", forHTTPHeaderField: "X-Title")
             // The "openrouter/" prefix is routing-only; the remainder is the
             // catalog id the gateway expects on the wire.
-            let wireModel = String(model.trimmingCharacters(in: .whitespacesAndNewlines).dropFirst("openrouter/".count))
+            let wireModel = Self.removingRoutingPrefix("openrouter/", from: model)
             guard !wireModel.isEmpty else {
                 throw TranslationServiceError.fatalAPIError(
                     "Set an OpenRouter model id after the openrouter/ prefix (e.g. openrouter/qwen/qwen3.7-max), or pick one via Browse OpenRouter Models in Settings."
@@ -671,6 +731,12 @@ struct TranslationService: Sendable {
         return request
     }
 
+    private static func removingRoutingPrefix(_ prefix: String, from model: String) -> String {
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.lowercased().hasPrefix(prefix) else { return trimmed }
+        return String(trimmed.dropFirst(prefix.count))
+    }
+
     /// Pulls the model's text reply out of the provider-specific envelope.
     /// Internal (not private) so the parsing can be unit-tested.
     static func extractOutputText(provider: TranslationProvider, data: Data) throws -> String {
@@ -680,6 +746,9 @@ struct TranslationService: Sendable {
             if decoded.status == "incomplete", decoded.incomplete_details?.reason == "max_output_tokens" {
                 throw TranslationServiceError.responseTooLarge("The model's reply was cut off at its output-token limit.")
             }
+            if let refusal = decoded.refusalMessage {
+                throw TranslationServiceError.contentRefused("OpenAI declined the content: \(refusal)")
+            }
             return decoded.outputText
         case .anthropic:
             let decoded = try JSONDecoder().decode(AnthropicResponseEnvelope.self, from: data)
@@ -687,14 +756,23 @@ struct TranslationService: Sendable {
                 throw TranslationServiceError.responseTooLarge("The model's reply was cut off at its output-token limit.")
             }
             if decoded.stop_reason == "refusal" {
-                // An identical retry refuses again, so treat it as fatal.
-                throw TranslationServiceError.fatalAPIError("Claude declined to translate this chunk (refusal). Try a different model or rephrase the prompt.")
+                throw TranslationServiceError.contentRefused(
+                    "Anthropic declined the content for a policy or safety reason. Try a different model."
+                )
             }
             return decoded.outputText
         case .google:
             let decoded = try JSONDecoder().decode(GeminiResponseEnvelope.self, from: data)
             if decoded.candidates?.first?.finishReason == "MAX_TOKENS" {
                 throw TranslationServiceError.responseTooLarge("The model's reply was cut off at its output-token limit.")
+            }
+            let blockReason =
+                decoded.promptFeedback?.blockReason
+                ?? decoded.candidates?.first?.finishReason.flatMap { Self.isGeminiPolicyReason($0) ? $0 : nil }
+            if let blockReason {
+                throw TranslationServiceError.contentRefused(
+                    "Google blocked the content for a policy or safety reason (\(blockReason)). Try a different model."
+                )
             }
             return decoded.outputText
         case .local, .openRouter:
@@ -713,6 +791,9 @@ struct TranslationService: Sendable {
             }
             if choice.finish_reason == "length" {
                 throw TranslationServiceError.responseTooLarge("The model's reply was cut off at its output-token limit.")
+            }
+            if let refusal = choice.message?.refusal?.trimmingCharacters(in: .whitespacesAndNewlines), !refusal.isEmpty {
+                throw TranslationServiceError.contentRefused("The model declined the content: \(refusal)")
             }
             // Reasoning models (e.g. Qwen3.6 in LM Studio) can land the whole
             // constrained answer in reasoning_content with content empty; the
@@ -748,6 +829,14 @@ struct TranslationService: Sendable {
         let code = errorBody?["code"] as? String ?? errorBody?["status"] as? String
         let name = provider.label
 
+        // Some gateways use 403 for both authentication and content policy.
+        // Switch models only when the body explicitly identifies policy;
+        // an unqualified 401/403 remains a credential failure.
+        if Self.isPolicyRefusal(message: message, code: code) {
+            return .contentRefused(
+                "\(name) declined the content for a policy or safety reason: \(message ?? code ?? "request blocked")."
+            )
+        }
         if statusCode == 401 || statusCode == 403 {
             return .fatalAPIError("\(name) rejected the API key (\(statusCode)). Check the key in Settings.")
         }
@@ -778,6 +867,34 @@ struct TranslationService: Sendable {
             return .apiError("\(name) error (\(statusCode)): \(message)")
         }
         return .apiError("\(name) returned status \(statusCode).")
+    }
+
+    private static func isPolicyRefusal(message: String?, code: String?) -> Bool {
+        let normalizedCode = code?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let policyCodes = [
+            "content_filter", "content_policy_violation", "prohibited_content", "safety", "blocklist",
+        ]
+        if let normalizedCode, policyCodes.contains(normalizedCode) {
+            return true
+        }
+        let text = [message, code]
+            .compactMap { $0 }
+            .joined(separator: " ")
+            .lowercased()
+        let hints = [
+            "content policy", "content_policy", "policy violation", "safety policy", "safety violation",
+            "blocked for safety", "refusal", "refused", "blocked content", "prohibited_content", "blocklist",
+        ]
+        return hints.contains(where: text.contains)
+    }
+
+    private static func isGeminiPolicyReason(_ reason: String) -> Bool {
+        switch reason.uppercased() {
+        case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII":
+            return true
+        default:
+            return false
+        }
     }
 
     /// Collects the most recent already-translated pairs that precede a chunk,
@@ -950,6 +1067,13 @@ private struct OpenAIResponseEnvelope: Decodable {
             .compactMap(\.text)
             .joined(separator: "")
     }
+
+    var refusalMessage: String? {
+        output
+            .flatMap { $0.content ?? [] }
+            .compactMap(\.refusal)
+            .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
 }
 
 private struct OpenAIOutputItem: Decodable {
@@ -959,6 +1083,7 @@ private struct OpenAIOutputItem: Decodable {
 
 private struct OpenAIOutputContent: Decodable {
     let text: String?
+    let refusal: String?
 }
 
 // MARK: - Anthropic Messages API types
@@ -1027,6 +1152,7 @@ private struct ChatCompletionsEnvelope: Decodable {
     }
     struct ChoiceMessage: Decodable {
         let content: String?
+        let refusal: String?
         // Reasoning models served by LM Studio can emit the entire
         // schema-constrained answer into this channel, leaving content empty.
         let reasoning_content: String?
@@ -1059,6 +1185,9 @@ private struct GeminiRequest: Encodable {
 }
 
 private struct GeminiResponseEnvelope: Decodable {
+    struct PromptFeedback: Decodable {
+        let blockReason: String?
+    }
     struct Candidate: Decodable {
         let content: CandidateContent?
         let finishReason: String?
@@ -1071,6 +1200,7 @@ private struct GeminiResponseEnvelope: Decodable {
     }
 
     let candidates: [Candidate]?
+    let promptFeedback: PromptFeedback?
 
     var outputText: String {
         (candidates ?? [])

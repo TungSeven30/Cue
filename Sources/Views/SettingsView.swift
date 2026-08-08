@@ -147,6 +147,44 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Generate an intro summary when each job finishes", isOn: $settings.generateSummary)
+                Picker("Detail", selection: $settings.summaryDetail) {
+                    ForEach(SummaryDetail.allCases) { detail in
+                        Text(detail.label).tag(detail)
+                    }
+                }
+                presetPicker(
+                    "Summary model",
+                    presets: AppSettingPresets.summaryModels,
+                    selection: $settings.summaryModel
+                )
+                TextField("Custom summary model (blank uses translation model)", text: $settings.summaryModel)
+                presetPicker(
+                    "Policy fallback",
+                    presets: AppSettingPresets.summaryFallbackModels,
+                    selection: $settings.summaryFallbackModel
+                )
+                TextField("Custom fallback model (blank disables fallback)", text: $settings.summaryFallbackModel)
+
+                if !settings.isSummaryReady {
+                    Label(settings.modelReadinessReason(settings.resolvedSummaryModel), systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                }
+                if let fallback = settings.resolvedSummaryFallbackModel, !settings.isModelReady(fallback) {
+                    Label("Fallback unavailable: \(settings.modelReadinessReason(fallback)).", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                }
+            } header: {
+                Label("Intro Summary", systemImage: "text.badge.star")
+            } footer: {
+                Text(
+                    "The summary may use the translation model, a different cloud model, or a local/… model. The fallback is attempted only after a policy or safety refusal—not for bad keys, rate limits, outages, or malformed replies. Subtitle text is sent only to the models you select."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Section {
                 TextEditor(text: $settings.translationPrompt)
                     .font(.body)
                     .frame(minHeight: 130)

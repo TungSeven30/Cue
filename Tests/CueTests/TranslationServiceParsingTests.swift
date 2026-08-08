@@ -50,18 +50,31 @@ struct TranslationServiceParsingTests {
         }
     }
 
-    // A refusal will refuse again on an identical retry; it must be fatal so
-    // the retry loop stops immediately.
-    @Test func anthropicRefusalIsFatal() {
+    // Refusals have their own type: translation stops immediately, while
+    // summary generation may route this one failure to an explicit fallback.
+    @Test func anthropicRefusalIsTypedForFallback() {
         let json = """
             {"content": [], "stop_reason": "refusal"}
             """
         do {
             _ = try TranslationService.extractOutputText(provider: .anthropic, data: Data(json.utf8))
-            Issue.record("Expected fatalAPIError to be thrown")
-        } catch TranslationServiceError.fatalAPIError {
+            Issue.record("Expected contentRefused to be thrown")
+        } catch TranslationServiceError.contentRefused {
         } catch {
-            Issue.record("Expected fatalAPIError, got \(error)")
+            Issue.record("Expected contentRefused, got \(error)")
+        }
+    }
+
+    @Test func geminiSafetyBlockIsTypedForFallback() {
+        let json = """
+            {"promptFeedback": {"blockReason": "SAFETY"}}
+            """
+        do {
+            _ = try TranslationService.extractOutputText(provider: .google, data: Data(json.utf8))
+            Issue.record("Expected contentRefused to be thrown")
+        } catch TranslationServiceError.contentRefused {
+        } catch {
+            Issue.record("Expected contentRefused, got \(error)")
         }
     }
 
@@ -125,6 +138,30 @@ struct TranslationServiceParsingTests {
         let error = TranslationService.classifyAPIError(provider: .anthropic, data: body, statusCode: 400, model: "claude-sonnet-5")
         guard case .fatalAPIError = error else {
             Issue.record("Expected fatalAPIError, got \(error)")
+            return
+        }
+    }
+
+    @Test func policy400IsTypedForFallback() {
+        let body = Data(
+            """
+            {"error": {"message": "Request blocked by content policy", "code": "content_policy_violation"}}
+            """.utf8)
+        let error = TranslationService.classifyAPIError(provider: .openai, data: body, statusCode: 400, model: "gpt-5.5")
+        guard case .contentRefused = error else {
+            Issue.record("Expected contentRefused, got \(error)")
+            return
+        }
+    }
+
+    @Test func explicitPolicy403IsNotMisreportedAsBadKey() {
+        let body = Data(
+            """
+            {"error": {"message": "Blocked content", "code": "content_policy_violation"}}
+            """.utf8)
+        let error = TranslationService.classifyAPIError(provider: .openRouter, data: body, statusCode: 403, model: "openrouter/example")
+        guard case .contentRefused = error else {
+            Issue.record("Expected contentRefused, got \(error)")
             return
         }
     }
@@ -269,5 +306,137 @@ struct TranslationServiceParsingTests {
         } catch {
             Issue.record("Expected apiError, got \(error)")
         }
+    }
+
+    @Test @MainActor func translationUsesCredentialsProviderWhenModelNameDisagrees() async throws {
+        let suiteName = "translation-provider-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = AppSettingsStore(
+            defaults: defaults,
+            readSecret: { _ in nil },
+            writeSecret: { _, _ in true }
+        )
+        settings.openAIModel = "gpt-5.5"
+        settings.translationParallelism = 1
+
+        let response = Data(
+            """
+            {"choices":[{"message":{"content":"{\\"segments\\":[{\\"id\\":1,\\"text\\":\\"Hola\\"}]}"},"finish_reason":"stop"}]}
+            """.utf8)
+        let client = RecordingHTTPClient(responses: [.init(data: response, statusCode: 200)])
+        let service = TranslationService(httpClient: client)
+        let result = try await service.translate(
+            segments: [TranscriptionSegment(id: 1, start: 0, end: 1, text: "Hello")],
+            sourceLanguage: "English",
+            settings: JobSettingsSnapshot(settings: settings),
+            credentials: TranslationCredentials(
+                apiKey: "",
+                prompt: AppSettingsStore.defaultTranslationPrompt,
+                provider: .local,
+                localEndpoint: "http://127.0.0.1:1234/v1"
+            ),
+            existingTranslations: [],
+            progress: { _ in },
+            onPartial: { _ in }
+        )
+
+        #expect(result.map(\.text) == ["Hola"])
+        let requests = await client.capturedRequests()
+        #expect(requests.count == 1)
+        #expect(requests.first?.url?.absoluteString == "http://127.0.0.1:1234/v1/chat/completions")
+        let body = try #require(requests.first?.httpBody)
+        let decoded = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(decoded["model"] as? String == "gpt-5.5")
+    }
+
+    @Test @MainActor func summaryRetriesExplicitFallbackAfterPolicyRefusal() async throws {
+        let refusal = Data("{\"content\":[],\"stop_reason\":\"refusal\"}".utf8)
+        let success = Data(
+            """
+            {"choices":[{"message":{"content":"{\\"summary\\":\\"A quiet mystery begins.\\"}"},"finish_reason":"stop"}]}
+            """.utf8)
+        let client = RecordingHTTPClient(
+            responses: [
+                .init(data: refusal, statusCode: 200),
+                .init(data: success, statusCode: 200),
+            ]
+        )
+        let service = TranslationService(httpClient: client)
+        let result = try await service.summarize(
+            segments: [TranscriptionSegment(id: 1, start: 0, end: 1, text: "Opening dialogue")],
+            language: "English",
+            primary: SummaryModelConfiguration(
+                model: "claude-sonnet-5",
+                credentials: TranslationCredentials(
+                    apiKey: "anthropic-key",
+                    prompt: "unused",
+                    provider: .anthropic,
+                    localEndpoint: "http://127.0.0.1:1234/v1"
+                )
+            ),
+            fallback: SummaryModelConfiguration(
+                model: "local/qwen",
+                credentials: TranslationCredentials(
+                    apiKey: "",
+                    prompt: "unused",
+                    provider: .local,
+                    localEndpoint: "http://127.0.0.1:1234/v1"
+                )
+            )
+        )
+
+        #expect(result.summary == "A quiet mystery begins.")
+        #expect(result.model == "local/qwen")
+        #expect(result.usedFallback)
+        let requests = await client.capturedRequests()
+        #expect(requests.map { $0.url?.host } == ["api.anthropic.com", "127.0.0.1"])
+    }
+
+    @Test @MainActor func summaryDoesNotFallbackForRateLimit() async {
+        let rateLimit = Data("{\"error\":{\"message\":\"slow down\"}}".utf8)
+        let unusedSuccess = Data(
+            """
+            {"choices":[{"message":{"content":"{\\"summary\\":\\"Should not run.\\"}"},"finish_reason":"stop"}]}
+            """.utf8)
+        let client = RecordingHTTPClient(
+            responses: [
+                .init(data: rateLimit, statusCode: 429),
+                .init(data: unusedSuccess, statusCode: 200),
+            ]
+        )
+        let service = TranslationService(httpClient: client)
+
+        do {
+            _ = try await service.summarize(
+                segments: [TranscriptionSegment(id: 1, start: 0, end: 1, text: "Opening dialogue")],
+                language: "English",
+                primary: SummaryModelConfiguration(
+                    model: "gpt-5.5",
+                    credentials: TranslationCredentials(
+                        apiKey: "openai-key",
+                        prompt: "unused",
+                        provider: .openai,
+                        localEndpoint: "http://127.0.0.1:1234/v1"
+                    )
+                ),
+                fallback: SummaryModelConfiguration(
+                    model: "local/qwen",
+                    credentials: TranslationCredentials(
+                        apiKey: "",
+                        prompt: "unused",
+                        provider: .local,
+                        localEndpoint: "http://127.0.0.1:1234/v1"
+                    )
+                )
+            )
+            Issue.record("Expected apiError to be thrown")
+        } catch TranslationServiceError.apiError {
+        } catch {
+            Issue.record("Expected apiError, got \(error)")
+        }
+
+        let requests = await client.capturedRequests()
+        #expect(requests.count == 1)
     }
 }

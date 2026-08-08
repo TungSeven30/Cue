@@ -322,6 +322,16 @@ enum AppSettingPresets {
         SettingsPreset(label: "OpenRouter: Qwen 3.7 Max", value: "openrouter/qwen/qwen3.7-max"),
         SettingsPreset(label: "OpenRouter: Qwen 3.7 Plus", value: "openrouter/qwen/qwen3.7-plus"),
     ]
+
+    static let summaryModels: [SettingsPreset] =
+        [
+            SettingsPreset(label: "Same as translation", value: "")
+        ] + translationModels
+
+    static let summaryFallbackModels: [SettingsPreset] =
+        [
+            SettingsPreset(label: "No fallback", value: "")
+        ] + translationModels
 }
 
 @MainActor
@@ -368,6 +378,12 @@ final class AppSettingsStore: ObservableObject {
     /// shown as the first cue of SRT/VTT exports.
     @Published var generateSummary: Bool { didSet { save() } }
     @Published var summaryDetail: SummaryDetail { didSet { save() } }
+    /// Empty means use the translation model. A non-empty value selects an
+    /// independent cloud or local model for summaries.
+    @Published var summaryModel: String { didSet { save() } }
+    /// Empty disables fallback. A configured model is tried only after an
+    /// explicit policy/safety refusal from the primary summary model.
+    @Published var summaryFallbackModel: String { didSet { save() } }
     @Published var autoStartAddedJobs: Bool { didSet { save() } }
     @Published var autoExportSidecar: Bool { didSet { save() } }
     /// Days after which finished jobs are auto-archived at launch; 0 = never.
@@ -483,6 +499,8 @@ final class AppSettingsStore: ObservableObject {
         autoTranslateAfterTranscription = defaults.bool(forKey: "autoTranslateAfterTranscription")
         generateSummary = defaults.bool(forKey: "generateIntroSummary")
         summaryDetail = SummaryDetail(rawValue: defaults.string(forKey: "summaryDetail") ?? "") ?? .brief
+        summaryModel = defaults.string(forKey: "summaryModel") ?? ""
+        summaryFallbackModel = defaults.string(forKey: "summaryFallbackModel") ?? ""
         autoStartAddedJobs = defaults.object(forKey: "autoStartAddedJobs") as? Bool ?? true
         autoExportSidecar = defaults.bool(forKey: "autoExportSidecar")
         autoArchiveDays = defaults.object(forKey: "autoArchiveDays") as? Int ?? 30
@@ -574,17 +592,49 @@ final class AppSettingsStore: ObservableObject {
         translationAPIKey(for: currentTranslationProvider)
     }
 
+    var resolvedSummaryModel: String {
+        let selected = summaryModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return selected.isEmpty ? openAIModel.trimmingCharacters(in: .whitespacesAndNewlines) : selected
+    }
+
+    var resolvedSummaryFallbackModel: String? {
+        let fallback = summaryFallbackModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !fallback.isEmpty, fallback != resolvedSummaryModel else { return nil }
+        return fallback
+    }
+
+    var currentSummaryProvider: TranslationProvider {
+        TranslationProvider.infer(from: resolvedSummaryModel)
+    }
+
     /// Whether the selected translation model can actually run: cloud
     /// providers need their API key, the local provider needs a server URL
     /// (and never a key). UI gates and auto-translate checks read this
     /// instead of testing `currentTranslationAPIKey` directly.
     var isTranslationReady: Bool {
-        switch currentTranslationProvider {
+        isModelReady(openAIModel)
+    }
+
+    var isSummaryReady: Bool {
+        isModelReady(resolvedSummaryModel)
+    }
+
+    func isModelReady(_ model: String) -> Bool {
+        let provider = TranslationProvider.infer(from: model)
+        switch provider {
         case .local:
             return !localTranslationEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .openai, .anthropic, .google, .openRouter:
-            return !currentTranslationAPIKey.isEmpty
+            return !translationAPIKey(for: provider).isEmpty
         }
+    }
+
+    func modelReadinessReason(_ model: String) -> String {
+        let provider = TranslationProvider.infer(from: model)
+        if provider == .local {
+            return "no local server URL is configured"
+        }
+        return "no \(provider.label) API key is configured"
     }
 
     func translationAPIKey(for provider: TranslationProvider) -> String {
@@ -612,6 +662,8 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(autoTranslateAfterTranscription, forKey: "autoTranslateAfterTranscription")
         defaults.set(generateSummary, forKey: "generateIntroSummary")
         defaults.set(summaryDetail.rawValue, forKey: "summaryDetail")
+        defaults.set(summaryModel, forKey: "summaryModel")
+        defaults.set(summaryFallbackModel, forKey: "summaryFallbackModel")
         defaults.set(autoStartAddedJobs, forKey: "autoStartAddedJobs")
         defaults.set(autoExportSidecar, forKey: "autoExportSidecar")
         defaults.set(autoArchiveDays, forKey: "autoArchiveDays")

@@ -10,6 +10,7 @@ struct CueApp: App {
     // the WhisperDesk-era data move ahead of every disk and defaults read.
     init() {
         LegacyMigration.run()
+        OrphanReaper.reap()
     }
 
     var body: some Scene {

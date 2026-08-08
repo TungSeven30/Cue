@@ -160,6 +160,11 @@ struct SidebarView: View {
                     .controlSize(.large)
                     .help("Queue every job that still needs transcription or translation")
                 }
+                if let eta = model.queueETAText {
+                    Text(eta)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Button {
                     model.selectVideo()
                 } label: {

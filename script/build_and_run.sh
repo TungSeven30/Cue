@@ -42,6 +42,12 @@ build_bundle() {
   if [[ -f "$ICON_SOURCE" ]]; then
     cp "$ICON_SOURCE" "$APP_RESOURCES/$ICON_FILE"
   fi
+  # Menu-bar template icon (18pt + @2x), loaded via Bundle.image(forResource:).
+  for menubar_icon in "MenuBarIconTemplate.png" "MenuBarIconTemplate@2x.png"; do
+    if [[ -f "$ROOT_DIR/Resources/$menubar_icon" ]]; then
+      cp "$ROOT_DIR/Resources/$menubar_icon" "$APP_RESOURCES/$menubar_icon"
+    fi
+  done
   # whisper.cpp compiles its Metal shaders at runtime from ggml-metal.metal.
   # SwiftPM ships that file in a resource bundle whose accessor looks at the
   # .app root (where codesign forbids content), and the raw file cannot

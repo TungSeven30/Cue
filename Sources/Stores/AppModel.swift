@@ -529,7 +529,79 @@ final class AppModel: ObservableObject {
            PipelineScheduler.nextTranslationJob(jobs: jobViews, translationBusy: false, queuePaused: queuePaused) == nil {
             didProcessQueuedJob = false
             notify(title: "Cue", body: "All queued jobs finished.")
+            performAfterQueueAction()
         }
+    }
+
+    /// Runs the user's configured end-of-queue action (Settings > "When the
+    /// queue finishes"). The delay lets the notification post and gives a
+    /// watching user a moment to object before the Mac sleeps.
+    private func performAfterQueueAction() {
+        guard settings.afterQueueAction == .sleep else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+            guard let self, self.gpuJobID == nil, self.translationJobID == nil, !self.hasPendingWork else { return }
+            let process = Process()
+            process.executableURL = URL(filePath: "/usr/bin/pmset", directoryHint: .notDirectory)
+            process.arguments = ["sleepnow"]
+            try? process.run()
+        }
+    }
+
+    // MARK: - Queue summary (menu bar / sidebar)
+
+    /// "~7m 12s left" for the whole queue; nil when idle or with no history
+    /// to estimate from. The two pipeline lanes run in parallel, so the
+    /// estimate is the slower lane, not the sum.
+    var queueETAText: String? {
+        let live = jobs.filter { $0.archivedAt == nil }
+        let gpuHistory = live
+            .compactMap { job -> (end: Date, duration: TimeInterval)? in
+                guard let start = job.transcriptionStartedAt, let end = job.transcriptionFinishedAt else { return nil }
+                return (end, end.timeIntervalSince(start))
+            }
+            .sorted { $0.end < $1.end }
+            .suffix(10)
+            .map(\.duration)
+        let translationHistory = live
+            .compactMap { job -> (end: Date, duration: TimeInterval)? in
+                guard let start = job.translationStartedAt, let end = job.finishedAt, end > start else { return nil }
+                return (end, end.timeIntervalSince(start))
+            }
+            .sorted { $0.end < $1.end }
+            .suffix(10)
+            .map(\.duration)
+        let gpuETA = QueueETA.estimate(
+            recentDurations: gpuHistory,
+            pendingCount: live.filter { $0.status == .queued && $0.transcriptSegments.isEmpty }.count,
+            activeFraction: gpuJobID.map { id in live.first { $0.id == id }?.progress.fraction ?? 0 }
+        )
+        let translationETA = QueueETA.estimate(
+            recentDurations: translationHistory,
+            pendingCount: live.filter { $0.status == .queued && !$0.transcriptSegments.isEmpty }.count,
+            activeFraction: translationJobID.map { id in live.first { $0.id == id }?.progress.fraction ?? 0 }
+        )
+        guard let eta = [gpuETA, translationETA].compactMap({ $0 }).max(), eta >= 1 else { return nil }
+        return "~\(JobTimingFormatter.format(eta)) left"
+    }
+
+    /// One-line queue summary for the menu bar item.
+    var menuBarStatusText: String {
+        let live = jobs.filter { $0.archivedAt == nil }
+        let queuedCount = live.filter { $0.status == .queued }.count
+        if let running = live.first(where: { $0.status.isRunning }) {
+            let percent = running.progress.fraction.map { " — \(Int(($0 * 100).rounded()))%" } ?? ""
+            let waiting = queuedCount > 0 ? " (\(queuedCount) queued)" : ""
+            return "\(running.title)\(percent)\(waiting)"
+        }
+        if queuedCount > 0 {
+            return queuePaused ? "Queue paused — \(queuedCount) waiting" : "\(queuedCount) queued"
+        }
+        return "Idle"
+    }
+
+    /// Stops taking new jobs; running jobs finish their current stage.
+    func pauseQueue() {
+        queuePaused = true
     }
 
     private var jobViews: [PipelineScheduler.JobView] {

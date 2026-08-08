@@ -5,6 +5,7 @@ import SwiftUI
 struct CueApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = AppModel()
+    @AppStorage("showMenuBarExtra") private var showMenuBarExtra = true
 
     // AppModel is created lazily on first render, so migrating here keeps
     // the WhisperDesk-era data move ahead of every disk and defaults read.
@@ -95,6 +96,12 @@ struct CueApp: App {
         Settings {
             SettingsView(settings: model.settings)
             .frame(width: 620, height: 780)
+        }
+
+        MenuBarExtra(isInserted: $showMenuBarExtra) {
+            MenuBarView(model: model)
+        } label: {
+            MenuBarLabel()
         }
     }
 }

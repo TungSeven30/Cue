@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var settings: AppSettingsStore
+    @AppStorage("showMenuBarExtra") private var showMenuBarExtra = true
     @State private var isBrowsingOpenRouter = false
 
     var body: some View {
@@ -37,6 +38,7 @@ struct SettingsView: View {
                     }
                 }
                 .help("Runs after the last queued job completes — useful for overnight batches")
+                Toggle("Show the Cue icon in the menu bar", isOn: $showMenuBarExtra)
                 Toggle("Show advanced transcription controls", isOn: $settings.showAdvancedControls)
                 if settings.showAdvancedControls {
                     backendPicker

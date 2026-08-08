@@ -32,6 +32,8 @@ final class AppModel: ObservableObject {
     }
     /// Set when the user cancels while jobs are still queued; Start All resumes.
     @Published var queuePaused = false
+    /// Guards the 30s volume-reconnect retry so timers never stack.
+    private var volumeRetryScheduled = false
     let playerController = PlayerController()
     private var didProcessQueuedJob = false
     private var dirtyJobIDs: Set<UUID> = []
@@ -521,10 +523,13 @@ final class AppModel: ObservableObject {
         defer { updateProcessingActivity() }
         pumpTranslation()
         pumpGPU()
+        updateVolumeWaitingJobs()
         // A paused queue is not a finished queue: the old processQueue bailed
         // before the notification whenever queuePaused was set, and jobs are
-        // usually still waiting.
+        // usually still waiting. Jobs waiting on an offline volume also keep
+        // the queue "unfinished" — no notification, no after-queue action.
         if !queuePaused, gpuJobID == nil, translationJobID == nil, translationWorkQueue.isEmpty, didProcessQueuedJob,
+           jobsWaitingOnVolumes.isEmpty,
            PipelineScheduler.nextGPUJob(jobs: jobViews, gpuBusy: false, queuePaused: queuePaused) == nil,
            PipelineScheduler.nextTranslationJob(jobs: jobViews, translationBusy: false, queuePaused: queuePaused) == nil {
             didProcessQueuedJob = false
@@ -605,13 +610,48 @@ final class AppModel: ObservableObject {
     }
 
     private var jobViews: [PipelineScheduler.JobView] {
-        jobs.filter { $0.archivedAt == nil }.map {
+        let mounted = SourceVolume.mountedVolumeNames()
+        return jobs.filter { $0.archivedAt == nil }.map {
             PipelineScheduler.JobView(
                 id: $0.id,
                 orderIndex: $0.orderIndex,
                 status: $0.status,
-                hasTranscript: !$0.transcriptSegments.isEmpty
+                hasTranscript: !$0.transcriptSegments.isEmpty,
+                sourceAvailable: SourceVolume.isAvailable(path: $0.sourcePath, mountedVolumeNames: mounted)
             )
+        }
+    }
+
+    /// Queued jobs whose source volume is currently unmounted. They keep
+    /// their queue position but are skipped until the volume returns.
+    private var jobsWaitingOnVolumes: [UUID] {
+        let mounted = SourceVolume.mountedVolumeNames()
+        return jobs
+            .filter {
+                $0.archivedAt == nil && $0.status == .queued
+                    && !SourceVolume.isAvailable(path: $0.sourcePath, mountedVolumeNames: mounted)
+            }
+            .map(\.id)
+    }
+
+    private func updateVolumeWaitingJobs() {
+        let waiting = jobsWaitingOnVolumes
+        for id in waiting {
+            guard let job = jobs.first(where: { $0.id == id }) else { continue }
+            let volume = SourceVolume.volumeName(forPath: job.sourcePath) ?? "volume"
+            let detail = "Waiting for “\(volume)” to reconnect."
+            if job.progress.detail != detail {
+                updateJob(id, debouncePersist: true) {
+                    $0.progress = JobProgress(stage: .queued, detail: detail, fraction: nil)
+                }
+            }
+        }
+        guard !waiting.isEmpty, !volumeRetryScheduled else { return }
+        volumeRetryScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            guard let self else { return }
+            self.volumeRetryScheduled = false
+            self.processQueue()
         }
     }
 

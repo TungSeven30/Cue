@@ -39,3 +39,21 @@ import Testing
         #expect(PipelineScheduler.nextTranslationJob(jobs: [running, done], translationBusy: false, queuePaused: false) == nil)
     }
 }
+
+@Suite struct PipelineSchedulerVolumeTests {
+    private func job(_ order: Double, hasTranscript: Bool = false, available: Bool) -> PipelineScheduler.JobView {
+        PipelineScheduler.JobView(id: UUID(), orderIndex: order, status: .queued, hasTranscript: hasTranscript, sourceAvailable: available)
+    }
+
+    @Test func unavailableSourceIsSkippedForTheNextRunnableJob() {
+        let offline = job(1, available: false)
+        let online = job(2, available: true)
+        #expect(PipelineScheduler.nextGPUJob(jobs: [offline, online], gpuBusy: false, queuePaused: false) == online.id)
+    }
+
+    @Test func nothingRunsWhenEveryQueuedSourceIsOffline() {
+        let jobs = [job(1, available: false), job(2, hasTranscript: true, available: false)]
+        #expect(PipelineScheduler.nextGPUJob(jobs: jobs, gpuBusy: false, queuePaused: false) == nil)
+        #expect(PipelineScheduler.nextTranslationJob(jobs: jobs, translationBusy: false, queuePaused: false) == nil)
+    }
+}

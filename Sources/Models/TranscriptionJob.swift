@@ -11,6 +11,11 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
     var transcriptSegments: [TranscriptionSegment]
     var translatedSegments: [TranscriptionSegment]
     var partialTranslatedSegments: [TranscriptionSegment]
+    var partialTranscriptSegments: [TranscriptionSegment]
+    var transcriptionStartedAt: Date?
+    var transcriptionFinishedAt: Date?
+    var translationStartedAt: Date?
+    var finishedAt: Date?
     var sourceFingerprint: String
     var log: String
     /// Spoiler-free intro generated from the subtitles; prepended as the
@@ -47,6 +52,11 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         self.transcriptSegments = []
         self.translatedSegments = []
         self.partialTranslatedSegments = []
+        self.partialTranscriptSegments = []
+        self.transcriptionStartedAt = nil
+        self.transcriptionFinishedAt = nil
+        self.translationStartedAt = nil
+        self.finishedAt = nil
         self.sourceFingerprint = Self.fingerprint(for: sourceURL)
         self.log = "Choose a video to begin.\n"
         self.summary = nil
@@ -67,6 +77,11 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         transcriptSegments = try container.decode([TranscriptionSegment].self, forKey: .transcriptSegments)
         translatedSegments = try container.decode([TranscriptionSegment].self, forKey: .translatedSegments)
         partialTranslatedSegments = try container.decodeIfPresent([TranscriptionSegment].self, forKey: .partialTranslatedSegments) ?? []
+        partialTranscriptSegments = try container.decodeIfPresent([TranscriptionSegment].self, forKey: .partialTranscriptSegments) ?? []
+        transcriptionStartedAt = try container.decodeIfPresent(Date.self, forKey: .transcriptionStartedAt)
+        transcriptionFinishedAt = try container.decodeIfPresent(Date.self, forKey: .transcriptionFinishedAt)
+        translationStartedAt = try container.decodeIfPresent(Date.self, forKey: .translationStartedAt)
+        finishedAt = try container.decodeIfPresent(Date.self, forKey: .finishedAt)
         sourceFingerprint = try container.decodeIfPresent(String.self, forKey: .sourceFingerprint) ?? Self.fingerprint(for: URL(fileURLWithPath: sourcePath))
         log = try container.decode(String.self, forKey: .log)
         summary = try container.decodeIfPresent(String.self, forKey: .summary)

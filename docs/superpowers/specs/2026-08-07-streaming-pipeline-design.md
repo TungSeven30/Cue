@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-07
 **Branch:** to be cut from master
-**Status:** Approved, not yet implemented
+**Status:** Implemented
 
 ## Goal
 
@@ -102,8 +102,15 @@ chunks, call the existing `TranslationService`, emit partials.
 - **Input:** segment batches (post window-local cleanup), the job's resolved
   `JobSettingsSnapshot`, `TranslationCredentials`.
 - **Chunk cutting:** pure, unit-testable math using the job's existing
-  `translationChunkMode` sizing. Chunks are cut **only at streamed-batch
-  boundaries** — the places where per-batch cleanup is deterministic.
+  `translationChunkMode` sizing. *Shipped deviation:* chunks are **not** cut at
+  streamed-batch boundaries. The driver only decides *when* to translate —
+  it signals once the streamed backlog reaches the chunk-size threshold — and
+  `TranslationService` then re-cuts fixed-size chunks over the whole streamed
+  snapshot, exactly as it does for a non-streaming run. This is still correct
+  because window-local cleanup (`cleanWindow`) is per-segment deterministic, so
+  a segment's text and timing do not depend on which chunk it lands in; the
+  side effect is that the previous pass's trailing partial chunk can be cut
+  differently and re-translated on the next pass, costing some extra tokens.
 - **Output:** partial translated segments through a callback, feeding the
   existing `partialTranslatedSegments` field and its persistence path.
   Carried-forward context pairs work exactly as in a normal chunked

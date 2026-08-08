@@ -6,6 +6,40 @@ struct TranscriptionResult {
     let segments: [TranscriptionSegment]
 }
 
+struct TranscriptionMetrics: Codable, Equatable, Sendable {
+    let backend: String
+    let audioDurationSeconds: Double
+    let audioLoadSeconds: Double
+    let chunkPlanningSeconds: Double
+    let modelLoadSeconds: Double
+    let inferenceSeconds: Double
+    let normalizationSeconds: Double
+    let pipelineSeconds: Double
+    let audioPreparationSeconds: Double
+    let totalSeconds: Double
+    let chunkCount: Int
+    let inferenceRTF: Double
+    let totalRTF: Double
+
+    var logSummary: String {
+        String(
+            format:
+                "Qwen metrics — audio %.1fs, prepare %.2fs, load WAV %.2fs, plan %.2fs, model %.2fs, inference+alignment %.2fs, normalize %.2fs, total %.2fs, chunks %d, inference RTF %.3fx, total RTF %.3fx.",
+            audioDurationSeconds,
+            audioPreparationSeconds,
+            audioLoadSeconds,
+            chunkPlanningSeconds,
+            modelLoadSeconds,
+            inferenceSeconds,
+            normalizationSeconds,
+            totalSeconds,
+            chunkCount,
+            inferenceRTF,
+            totalRTF
+        )
+    }
+}
+
 enum TranscriptionServiceError: LocalizedError {
     case pythonFailed(String)
     case malformedResponse
@@ -46,11 +80,13 @@ struct TranscriptionService {
         videoURL: URL,
         settings: JobSettingsSnapshot,
         progress: @escaping @MainActor (JobProgress) -> Void,
-        onSegments: (@MainActor ([TranscriptionSegment]) -> Void)? = nil
+        onSegments: (@MainActor ([TranscriptionSegment]) -> Void)? = nil,
+        onMetrics: (@MainActor (TranscriptionMetrics) -> Void)? = nil
     ) async throws -> TranscriptionResult {
         let resolved = Self.resolveDispatch(backend: settings.whisperBackend, model: settings.whisperModel)
         let snapshot = TranscriptionSettingsSnapshot(
             sourceLanguage: settings.sourceLanguage,
+            qwenContext: settings.qwenContext,
             whisperModel: resolved.model,
             whisperBackendRawValue: resolved.backend.rawValue,
             preprocessAudio: settings.preprocessAudio,
@@ -126,6 +162,8 @@ struct TranscriptionService {
                     "--json",
                     "--language",
                     snapshot.sourceLanguage,
+                    "--qwen-context",
+                    snapshot.qwenContext,
                     "--model",
                     snapshot.whisperModel,
                     "--backend",
@@ -160,6 +198,8 @@ struct TranscriptionService {
                         case .segments(let batch):
                             let cleaned = TranscriptionPostProcessor.cleanWindow(batch, settings: snapshot)
                             if !cleaned.isEmpty { onSegments?(cleaned) }
+                        case .metrics(let metrics):
+                            onMetrics?(metrics)
                         }
                     }
                 }
@@ -336,6 +376,7 @@ struct TranscriptionService {
 
 struct TranscriptionSettingsSnapshot: Sendable {
     let sourceLanguage: String
+    let qwenContext: String
     let whisperModel: String
     let whisperBackendRawValue: String
     let preprocessAudio: Bool
@@ -663,6 +704,7 @@ enum TranscriptionPostProcessor {
 enum TranscriptionStreamEvent: Equatable {
     case progress(JobProgress)
     case segments([TranscriptionSegment])
+    case metrics(TranscriptionMetrics)
 
     private struct SegmentsEnvelope: Decodable {
         let event: String
@@ -675,10 +717,18 @@ enum TranscriptionStreamEvent: Equatable {
         let fraction: Double?
     }
 
+    private struct MetricsEnvelope: Decodable {
+        let event: String
+        let metrics: TranscriptionMetrics
+    }
+
     static func decode(_ line: String) -> TranscriptionStreamEvent? {
         guard line.hasPrefix("{"), let data = line.data(using: .utf8) else { return nil }
         if let envelope = try? JSONDecoder().decode(SegmentsEnvelope.self, from: data), envelope.event == "segments" {
             return .segments(envelope.segments)
+        }
+        if let envelope = try? JSONDecoder().decode(MetricsEnvelope.self, from: data), envelope.event == "metrics" {
+            return .metrics(envelope.metrics)
         }
         if let envelope = try? JSONDecoder().decode(ProgressEnvelope.self, from: data) {
             return .progress(JobProgress(stage: envelope.stage, detail: envelope.detail, fraction: envelope.fraction))

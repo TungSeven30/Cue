@@ -32,6 +32,21 @@ struct AppSettingsStoreTests {
         #expect(defaults.string(forKey: "whisperModel") == ModelDownloader.defaultModel)
     }
 
+    @Test func qwenBackendSelectsQwenProfileAndPersistsContext() {
+        let (defaults, name) = makeSuite()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = makeStore(defaults: defaults)
+
+        store.transcriptionPreset = .bestAccuracy
+        store.qwenContext = "Chihiro Haku Yubaba"
+
+        #expect(store.whisperBackend == .qwen3ASR)
+        #expect(store.transcriptionQualityPreset == .qwenMovie)
+        #expect(!store.preprocessAudio)
+        #expect(!store.removeRepeatedText)
+        #expect(makeStore(defaults: defaults).qwenContext == "Chihiro Haku Yubaba")
+    }
+
     @Test func existingMLXInstallKeepsStoredSettings() {
         let (defaults, name) = makeSuite()
         defer { defaults.removePersistentDomain(forName: name) }

@@ -37,6 +37,7 @@ struct TranscriptionPostProcessorTests {
         ]
         let snapshot = TranscriptionSettingsSnapshot(
             sourceLanguage: "auto",
+            qwenContext: "",
             whisperModel: ModelDownloader.defaultModel,
             whisperBackendRawValue: WhisperBackend.native.rawValue,
             preprocessAudio: false,

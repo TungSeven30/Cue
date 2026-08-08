@@ -12,7 +12,8 @@ final class ProgressiveTranslationDriver {
         _ onPartial: @escaping @MainActor ([TranscriptionSegment]) -> Void
     ) async throws -> [TranscriptionSegment]
 
-    private let chunkSize: Int
+    private let initialSegmentThreshold: Int
+    private let targetInputTokens: Int
     private let overlapAllowed: Bool
     private let translate: TranslateCall
     private let onPartial: ([TranscriptionSegment]) -> Void
@@ -24,12 +25,16 @@ final class ProgressiveTranslationDriver {
     private var failedMidStream = false
 
     init(
-        chunkSize: Int, overlapAllowed: Bool,
+        chunkSize: Int,
+        initialSegmentThreshold: Int? = nil,
+        targetInputTokens: Int? = nil,
+        overlapAllowed: Bool,
         translate: @escaping TranslateCall,
         onPartial: @escaping ([TranscriptionSegment]) -> Void,
         onNeedsTranslation: @escaping () -> Void
     ) {
-        self.chunkSize = max(1, chunkSize)
+        self.initialSegmentThreshold = max(1, initialSegmentThreshold ?? chunkSize)
+        self.targetInputTokens = max(1, targetInputTokens ?? Int.max)
         self.overlapAllowed = overlapAllowed
         self.translate = translate
         self.onPartial = onPartial
@@ -69,7 +74,18 @@ final class ProgressiveTranslationDriver {
     }
 
     private func maybeRequest() {
-        guard overlapAllowed, !failedMidStream, streamed.count - requestedThrough >= chunkSize else { return }
+        guard overlapAllowed, !failedMidStream, streamed.count > requestedThrough else { return }
+        let pending = streamed[requestedThrough...]
+        let pendingTokens = TranslationBatchPlanner.estimatedTokens(in: pending)
+        let firstTokenThreshold = min(targetInputTokens, max(300, targetInputTokens / 4))
+        let tokenThreshold = requestedThrough == 0 ? firstTokenThreshold : targetInputTokens
+        let duration = max(0, (pending.last?.end ?? 0) - (pending.first?.start ?? 0))
+        let isUsefulSparseBatch = pending.count >= 4 && duration >= 45
+        guard
+            pending.count >= initialSegmentThreshold
+                || pendingTokens >= tokenThreshold
+                || isUsefulSparseBatch
+        else { return }
         requestedThrough = streamed.count
         onNeedsTranslation()
     }

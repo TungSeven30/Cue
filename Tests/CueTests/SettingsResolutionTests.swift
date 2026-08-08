@@ -36,6 +36,15 @@ struct QualityPresetParameterTests {
         #expect(p.mergeShortSegments == false)
         #expect(p.beamSize == 3)
     }
+
+    @Test func qwenMoviePreservesCleanAudioAndSpokenRepetition() throws {
+        let p = try #require(TranscriptionQualityPreset.qwenMovie.parameters)
+        #expect(!p.preprocessAudio)
+        #expect(!p.removeRepeatedText)
+        #expect(p.mergeShortSegments)
+        #expect(p.beamSize == 1)
+        #expect(TranscriptionQualityPreset.available(for: .qwen3ASR) == [.qwenMovie, .custom])
+    }
 }
 
 struct JobSettingsOverridesTests {
@@ -66,6 +75,7 @@ struct JobSettingsOverridesTests {
     @Test func roundTrips() throws {
         var o = JobSettingsOverrides()
         o.sourceLanguage = "ja"
+        o.qwenContext = "Totoro Satsuki"
         o.transcriptionPreset = .bestAccuracy
         o.transcriptionQualityPreset = .movieDialogue
         o.translationTargetLanguage = "Vietnamese"
@@ -155,6 +165,7 @@ struct SnapshotResolutionTests {
         o.translationTargetLanguage = "Vietnamese"
         let resolved = try makeSnapshot().applying(o)
         #expect(resolved.sourceLanguage == "ja")
+        #expect(resolved.qwenContext == "")
         #expect(resolved.translationTargetLanguage == "Vietnamese")
         // Untouched fields inherit.
         #expect(resolved.whisperModel == "mlx-community/whisper-large-v3-turbo")
@@ -191,6 +202,15 @@ struct SnapshotResolutionTests {
         var o = JobSettingsOverrides()
         o.sourceLanguage = "ja"
         #expect(base.applying(o).transcriptionIdentity != base.transcriptionIdentity)
+
+        var contextOverride = JobSettingsOverrides()
+        contextOverride.qwenContext = "Arrakis Chani"
+        #expect(base.applying(contextOverride).transcriptionIdentity == base.transcriptionIdentity)
+
+        var qwenOverride = JobSettingsOverrides()
+        qwenOverride.transcriptionPreset = .bestAccuracy
+        let qwen = base.applying(qwenOverride)
+        #expect(qwen.applying(contextOverride).transcriptionIdentity != qwen.transcriptionIdentity)
     }
 
     // A translation run must not rewrite the record of which settings

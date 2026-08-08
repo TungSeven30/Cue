@@ -132,7 +132,6 @@ struct TranslationService: Sendable {
         let provider = credentials.provider
         let apiKey = credentials.apiKey
         let localEndpoint = credentials.localEndpoint
-        let chunkSize = settings.translationChunkMode.chunkSize
         let parallelism = max(1, min(4, settings.translationParallelism))
         let translationSourceLanguage = Self.translationSourceLanguage(
             translationSetting: settings.translationSourceLanguage,
@@ -149,10 +148,14 @@ struct TranslationService: Sendable {
             throw TranslationServiceError.missingAPIKey(provider.label)
         }
 
-        let chunks = segments.chunked(into: chunkSize)
         var translatedByID = Dictionary(uniqueKeysWithValues: existingTranslations.map { ($0.id, $0.text) })
         let targetIDs = Set(segments.map(\.id))
         translatedByID = translatedByID.filter { targetIDs.contains($0.key) }
+        let chunks = TranslationBatchPlanner.pendingChunks(
+            segments,
+            translatedIDs: Set(translatedByID.keys),
+            mode: settings.translationChunkMode
+        )
 
         if !translatedByID.isEmpty {
             onPartialResult(translatedByID: translatedByID, source: segments, progress: progress, onPartial: onPartial)
@@ -1226,16 +1229,5 @@ struct TranslatedSegment: Decodable {
     init(id: Int, text: String) {
         self.id = id
         self.text = text
-    }
-}
-
-private extension Array {
-    func chunked(into size: Int) -> [[Element]] {
-        guard size > 0 else {
-            return [self]
-        }
-        return stride(from: 0, to: count, by: size).map {
-            Array(self[$0..<Swift.min($0 + size, count)])
-        }
     }
 }

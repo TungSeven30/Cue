@@ -350,6 +350,44 @@ struct TranslationServiceParsingTests {
         #expect(decoded["model"] as? String == "gpt-5.5")
     }
 
+    @Test @MainActor func progressivePassSubmitsOnlyMissingSegments() async throws {
+        let suiteName = "translation-pending-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = AppSettingsStore(defaults: defaults, readSecret: { _ in nil }, writeSecret: { _, _ in true })
+        settings.openAIModel = "local/qwen"
+        settings.translationParallelism = 1
+
+        let response = Data(
+            #"{"choices":[{"message":{"content":"{\"segments\":[{\"id\":2,\"text\":\"Dos\"}]}"},"finish_reason":"stop"}]}"#.utf8
+        )
+        let client = RecordingHTTPClient(responses: [.init(data: response, statusCode: 200)])
+        let source = [
+            TranscriptionSegment(id: 1, start: 0, end: 1, text: "One"),
+            TranscriptionSegment(id: 2, start: 1, end: 2, text: "Two"),
+        ]
+        let result = try await TranslationService(httpClient: client).translate(
+            segments: source,
+            sourceLanguage: "English",
+            settings: JobSettingsSnapshot(settings: settings),
+            credentials: TranslationCredentials(
+                apiKey: "", prompt: AppSettingsStore.defaultTranslationPrompt,
+                provider: .local, localEndpoint: "http://127.0.0.1:1234/v1"),
+            existingTranslations: [TranscriptionSegment(id: 1, start: 0, end: 1, text: "Uno")],
+            progress: { _ in },
+            onPartial: { _ in }
+        )
+
+        #expect(result.map(\.text) == ["Uno", "Dos"])
+        let request = try #require((await client.capturedRequests()).first)
+        let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any])
+        let messages = try #require(body["messages"] as? [[String: Any]])
+        let userText = try #require(messages.last?["content"] as? String)
+        let encodedSegments = try #require(userText.components(separatedBy: "Segments:\n").last)
+        let submitted = try #require(try JSONSerialization.jsonObject(with: Data(encodedSegments.utf8)) as? [[String: Any]])
+        #expect(submitted.compactMap { $0["id"] as? Int } == [2])
+    }
+
     @Test @MainActor func summaryRetriesExplicitFallbackAfterPolicyRefusal() async throws {
         let refusal = Data("{\"content\":[],\"stop_reason\":\"refusal\"}".utf8)
         let success = Data(

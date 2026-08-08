@@ -12,6 +12,7 @@ enum JobOrigin: String, Codable, Hashable {
 /// snapshot remains the record of what a run actually used.
 struct JobSettingsOverrides: Codable, Hashable {
     var sourceLanguage: String?
+    var qwenContext: String?
     var transcriptionPreset: TranscriptionPreset?
     var transcriptionQualityPreset: TranscriptionQualityPreset?
     var translationTargetLanguage: String?
@@ -19,6 +20,7 @@ struct JobSettingsOverrides: Codable, Hashable {
 
     var isEmpty: Bool {
         sourceLanguage == nil
+            && qwenContext == nil
             && transcriptionPreset == nil
             && transcriptionQualityPreset == nil
             && translationTargetLanguage == nil
@@ -32,6 +34,7 @@ struct JobSettingsOverrides: Codable, Hashable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         sourceLanguage = try container.decodeIfPresent(String.self, forKey: .sourceLanguage)
+        qwenContext = try container.decodeIfPresent(String.self, forKey: .qwenContext)
         transcriptionPreset = (try? container.decodeIfPresent(TranscriptionPreset.self, forKey: .transcriptionPreset)) ?? nil
         transcriptionQualityPreset = (try? container.decodeIfPresent(TranscriptionQualityPreset.self, forKey: .transcriptionQualityPreset)) ?? nil
         translationTargetLanguage = try container.decodeIfPresent(String.self, forKey: .translationTargetLanguage)

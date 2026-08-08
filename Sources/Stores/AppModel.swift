@@ -9,7 +9,10 @@ import UserNotifications
 final class AppModel: ObservableObject {
     @Published var settings: AppSettingsStore
     @Published var jobs: [TranscriptionJob] = []
-    @Published var selectedJobID: UUID?
+    /// Every highlighted sidebar job. The detail pane continues to use
+    /// `selectedJobID` as the primary member of this selection.
+    @Published private(set) var selectedJobIDs: Set<UUID> = []
+    @Published private(set) var selectedJobID: UUID?
     @Published var diagnostics: [EnvironmentDiagnostic] = []
     @Published var isRunningDiagnostics = false
     @Published var persistenceError: String?
@@ -117,7 +120,7 @@ final class AppModel: ObservableObject {
         jobs = jobRepository.loadJobs().sorted { $0.orderIndex < $1.orderIndex }
         persistenceError = jobRepository.startupError ?? watchLedger.startupError
         autoArchiveOldJobs()
-        selectedJobID = jobs.first(where: { $0.archivedAt == nil })?.id ?? jobs.first?.id
+        selectJob(jobs.first(where: { $0.archivedAt == nil })?.id ?? jobs.first?.id)
         // `settings` is a nested ObservableObject; changes to its fields do not
         // fire AppModel's objectWillChange on their own, so forward them.
         self.settings.objectWillChange
@@ -358,6 +361,26 @@ final class AppModel: ObservableObject {
 
     func selectJob(_ id: UUID?) {
         selectedJobID = id
+        selectedJobIDs = id.map { [$0] } ?? []
+    }
+
+    /// Updates the native macOS multi-selection while keeping a deterministic
+    /// primary job in the detail pane. Newly selected rows take precedence;
+    /// removing a primary row falls back to the first selected job in queue
+    /// order rather than leaving stale detail visible.
+    func selectJobs(_ ids: Set<UUID>) {
+        let validIDs = ids.intersection(jobs.lazy.map(\.id))
+        let newlySelected = validIDs.subtracting(selectedJobIDs)
+        selectedJobIDs = validIDs
+
+        if let newPrimary = jobs.first(where: { newlySelected.contains($0.id) })?.id {
+            selectedJobID = newPrimary
+        } else if let selectedJobID, validIDs.contains(selectedJobID) {
+            // Preserve the current detail when Command-click changes another
+            // row in the selection.
+        } else {
+            selectedJobID = jobs.first(where: { validIDs.contains($0.id) })?.id
+        }
     }
 
     func selectVideo() {
@@ -429,7 +452,7 @@ final class AppModel: ObservableObject {
         }
         guard !newJobs.isEmpty else { return }
         jobs.insert(contentsOf: newJobs, at: 0)
-        selectedJobID = newJobs.first?.id
+        selectJob(newJobs.first?.id)
         for job in newJobs {
             persistJob(job.id)
         }
@@ -452,15 +475,39 @@ final class AppModel: ObservableObject {
     }
 
     func deleteJob(_ id: UUID) {
+        deleteJobs([id])
+    }
+
+    func canDeleteJobs(_ ids: Set<UUID>) -> Bool {
+        !ids.isEmpty
+            && ids.allSatisfy { id in
+                jobs.contains(where: { $0.id == id })
+                    && !isJobActive(id)
+                    && !pipeline.containsQueuedTranslationWork(for: id)
+            }
+    }
+
+    /// Deletes a sidebar selection as one UI operation. Source media and
+    /// exported files are deliberately untouched; only Cue's job records are
+    /// removed. If any selected job is active, nothing is partially deleted.
+    func deleteJobs(_ ids: Set<UUID>) {
         // The running job cannot be deleted; cancel it first. A streaming job
         // between the GPU handoff and its finish pass owns neither slot but
         // still has work queued, so check the translation queue too.
-        guard !isJobActive(id), !pipeline.containsQueuedTranslationWork(for: id) else { return }
-        jobs.removeAll { $0.id == id }
-        if selectedJobID == id {
-            selectedJobID = jobs.first?.id
+        guard canDeleteJobs(ids) else { return }
+
+        jobs.removeAll { ids.contains($0.id) }
+        selectedJobIDs.subtract(ids)
+        if let selectedJobID, jobs.contains(where: { $0.id == selectedJobID }) {
+            selectedJobIDs.insert(selectedJobID)
+        } else if let nextSelectedID = jobs.first(where: { selectedJobIDs.contains($0.id) })?.id {
+            selectedJobID = nextSelectedID
+        } else {
+            selectJob(jobs.first?.id)
         }
-        jobRepository.delete(id)
+        for id in ids {
+            jobRepository.delete(id)
+        }
     }
 
     func runDiagnostics() {
@@ -545,7 +592,7 @@ final class AppModel: ObservableObject {
             job.archivedAt = archived ? Date() : nil
         }
         if archived, selectedJobID == id {
-            selectedJobID = jobs.first(where: { $0.archivedAt == nil })?.id
+            selectJob(jobs.first(where: { $0.archivedAt == nil })?.id)
         }
     }
 
@@ -1001,6 +1048,8 @@ final class AppModel: ObservableObject {
             let overlapAllowed = credentials.provider != .local
             drivers[jobID] = ProgressiveTranslationDriver(
                 chunkSize: resolved.translationChunkMode.chunkSize,
+                initialSegmentThreshold: resolved.translationChunkMode.initialStreamingSegments,
+                targetInputTokens: resolved.translationChunkMode.targetInputTokens,
                 overlapAllowed: overlapAllowed,
                 translate: { [weak self] segments, existing, onPartial in
                     guard let self else { throw CancellationError() }
@@ -1066,6 +1115,9 @@ final class AppModel: ObservableObject {
                             job.partialTranscriptSegments += batch
                         }
                         self.drivers[jobID]?.ingest(batch)
+                    },
+                    onMetrics: { [weak self] metrics in
+                        self?.appendLog(metrics.logSummary, to: jobID)
                     })
                 updateJob(jobID) { $0.transcriptionFinishedAt = Date() }
                 // When a translation follows, the summary is generated from

@@ -522,7 +522,7 @@ private struct RunOptionsRow: View {
 
                 field(title: "Quality") {
                     Picker("Quality", selection: $model.settings.transcriptionQualityPreset) {
-                        ForEach(TranscriptionQualityPreset.allCases) { preset in
+                        ForEach(TranscriptionQualityPreset.available(for: model.settings.whisperBackend)) { preset in
                             Text(preset.label).tag(preset)
                         }
                     }
@@ -541,6 +541,14 @@ private struct RunOptionsRow: View {
                 }
             }
 
+            if model.settings.whisperBackend == .qwen3ASR {
+                field(title: "Qwen names & terms") {
+                    TextField("Character names, places, vocabulary", text: $model.settings.qwenContext)
+                        .textFieldStyle(.roundedBorder)
+                        .help("Space-separated terms supplied to Qwen's context prompt")
+                }
+            }
+
             if model.settings.showAdvancedControls {
                 HStack(alignment: .bottom, spacing: 20) {
                     field(title: "Backend") {
@@ -554,9 +562,9 @@ private struct RunOptionsRow: View {
                         .frame(width: 150)
                     }
 
-                    field(title: "Whisper model") {
+                    field(title: model.settings.whisperBackend == .qwen3ASR ? "Qwen model" : "Whisper model") {
                         presetMenu(
-                            "Whisper model",
+                            model.settings.whisperBackend == .qwen3ASR ? "Qwen model" : "Whisper model",
                             presets: AppSettingPresets.whisperModels(for: model.settings.whisperBackend),
                             selection: $model.settings.whisperModel
                         )

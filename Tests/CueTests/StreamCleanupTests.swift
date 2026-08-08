@@ -6,7 +6,7 @@ import Testing
         // Build the same way TranscriptionService does; copy the field list
         // from the snapshot construction in TranscriptionService.transcribe.
         TranscriptionSettingsSnapshot(
-            sourceLanguage: "auto", whisperModel: "ggml-large-v3-turbo-q5_0.bin",
+            sourceLanguage: "auto", qwenContext: "", whisperModel: "ggml-large-v3-turbo-q5_0.bin",
             whisperBackendRawValue: "whisper-cpp", preprocessAudio: false,
             vadFilter: false, removeEmptySegments: true, removeRepeatedText: true,
             mergeShortSegments: true, minSegmentDuration: 1.0, maxMergeGap: 0.4,

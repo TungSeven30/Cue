@@ -24,4 +24,15 @@ import Testing
         #expect(TranscriptionStreamEvent.decode("plain stderr noise") == nil)
         #expect(TranscriptionStreamEvent.decode("") == nil)
     }
+
+    @Test func decodesQwenMetricsEvent() {
+        let line =
+            #"{"event":"metrics","metrics":{"backend":"qwen3-asr","audioDurationSeconds":100,"audioLoadSeconds":0.1,"chunkPlanningSeconds":0.2,"modelLoadSeconds":1.0,"inferenceSeconds":20,"normalizationSeconds":0.3,"pipelineSeconds":21.6,"audioPreparationSeconds":2,"totalSeconds":23.6,"chunkCount":2,"inferenceRTF":0.2,"totalRTF":0.236}}"#
+        guard case .metrics(let metrics)? = TranscriptionStreamEvent.decode(line) else {
+            Issue.record("expected metrics event"); return
+        }
+        #expect(metrics.chunkCount == 2)
+        #expect(metrics.inferenceRTF == 0.2)
+        #expect(metrics.logSummary.contains("inference RTF 0.200x"))
+    }
 }

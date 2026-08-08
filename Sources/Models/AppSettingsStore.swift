@@ -109,9 +109,31 @@ enum TranslationChunkMode: String, CaseIterable, Identifiable, Codable, Hashable
         case .faster: return 120
         }
     }
+
+    /// Approximate input budget for one LLM request. Segment counts remain a
+    /// hard safety cap, but text size is the better predictor of provider
+    /// latency and output-limit failures (especially for CJK subtitles).
+    var targetInputTokens: Int {
+        switch self {
+        case .safer: return 1_800
+        case .balanced: return 3_200
+        case .faster: return 5_000
+        }
+    }
+
+    /// Start cloud translation after the first useful streamed Qwen batch
+    /// instead of waiting for a full offline-sized translation chunk.
+    var initialStreamingSegments: Int {
+        switch self {
+        case .safer: return 12
+        case .balanced: return 16
+        case .faster: return 20
+        }
+    }
 }
 
 enum TranscriptionQualityPreset: String, CaseIterable, Identifiable, Codable, Hashable {
+    case qwenMovie
     case fast
     case balanced
     case movieDialogue
@@ -123,6 +145,7 @@ enum TranscriptionQualityPreset: String, CaseIterable, Identifiable, Codable, Ha
 
     var label: String {
         switch self {
+        case .qwenMovie: return "Qwen Movie"
         case .fast: return "Fast"
         case .balanced: return "Balanced"
         case .movieDialogue: return "Movie Dialogue"
@@ -150,9 +173,26 @@ struct TranscriptionQualityParameters: Hashable {
 }
 
 extension TranscriptionQualityPreset {
+    static func available(for backend: WhisperBackend) -> [TranscriptionQualityPreset] {
+        if backend == .qwen3ASR {
+            return [.qwenMovie, .custom]
+        }
+        return allCases.filter { $0 != .qwenMovie }
+    }
+
     /// `nil` for `.custom`, which means "whatever the individual fields say".
     var parameters: TranscriptionQualityParameters? {
         switch self {
+        case .qwenMovie:
+            // Qwen uses greedy decoding and its own long-audio handling, so
+            // Whisper beam/VAD/no-speech knobs are deliberately neutral here.
+            // Clean digital movie audio stays untouched and legitimate spoken
+            // repetition is preserved.
+            return TranscriptionQualityParameters(
+                preprocessAudio: false, vadFilter: false, removeEmptySegments: true,
+                removeRepeatedText: false, mergeShortSegments: true,
+                minSegmentDuration: 0.9, maxMergeGap: 0.65,
+                beamSize: 1, bestOf: 1, temperature: 0, noSpeechThreshold: 0.5)
         case .fast:
             return TranscriptionQualityParameters(
                 preprocessAudio: false, vadFilter: true, removeEmptySegments: true,
@@ -349,6 +389,8 @@ final class AppSettingsStore: ObservableObject {
         }
     }
     @Published var sourceLanguage: String { didSet { save() } }
+    /// Space-separated names and terms supplied to Qwen's context prompt.
+    @Published var qwenContext: String { didSet { save() } }
     @Published var whisperModel: String { didSet { save() } }
     @Published var whisperBackend: WhisperBackend {
         didSet {
@@ -356,6 +398,7 @@ final class AppSettingsStore: ObservableObject {
                 transcriptionPreset = .custom
             }
             normalizeModelForSelectedBackend()
+            normalizeQualityPresetForSelectedBackend()
             save()
         }
     }
@@ -491,6 +534,7 @@ final class AppSettingsStore: ObservableObject {
         }
         transcriptionQualityPreset = TranscriptionQualityPreset(rawValue: defaults.string(forKey: "transcriptionQualityPreset") ?? "") ?? .balanced
         sourceLanguage = defaults.string(forKey: "sourceLanguage") ?? "auto"
+        qwenContext = defaults.string(forKey: "qwenContext") ?? ""
         openAIModel = defaults.string(forKey: "openAIModel") ?? "gpt-5.5"
         localTranslationEndpoint = defaults.string(forKey: "localTranslationEndpoint") ?? Self.defaultLocalTranslationEndpoint
         translationSourceLanguage = defaults.string(forKey: "translationSourceLanguage") ?? "auto"
@@ -572,6 +616,7 @@ final class AppSettingsStore: ObservableObject {
         persistedOpenRouterKey = resolvedOpenRouterKey
 
         normalizeModelForSelectedBackend()
+        normalizeQualityPresetForSelectedBackend()
         save()
     }
 
@@ -652,6 +697,7 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(transcriptionPreset.rawValue, forKey: "transcriptionPreset")
         defaults.set(transcriptionQualityPreset.rawValue, forKey: "transcriptionQualityPreset")
         defaults.set(sourceLanguage, forKey: "sourceLanguage")
+        defaults.set(qwenContext, forKey: "qwenContext")
         defaults.set(whisperModel, forKey: "whisperModel")
         defaults.set(whisperBackend.rawValue, forKey: "whisperBackend")
         defaults.set(openAIModel, forKey: "openAIModel")
@@ -808,6 +854,16 @@ final class AppSettingsStore: ObservableObject {
             if force || !trimmedModel.hasPrefix("ggml-") {
                 whisperModel = ModelDownloader.defaultModel
             }
+        }
+    }
+
+    private func normalizeQualityPresetForSelectedBackend() {
+        if whisperBackend == .qwen3ASR {
+            if transcriptionQualityPreset != .qwenMovie, transcriptionQualityPreset != .custom {
+                transcriptionQualityPreset = .qwenMovie
+            }
+        } else if transcriptionQualityPreset == .qwenMovie {
+            transcriptionQualityPreset = .balanced
         }
     }
 }

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Editor for the five-field override set (spec §1.2). Every control's first
+/// Editor for the per-job override set (spec §1.2). Every control's first
 /// choice is "Inherit (<current global value>)" so the effective value is
 /// always visible. Used for per-job overrides and the watch-folder profile.
 struct JobSettingsOverridesView: View {
@@ -23,6 +23,13 @@ struct JobSettingsOverridesView: View {
                         Text(preset.label).tag(String?.some(preset.value))
                     }
                 }
+                TextField(
+                    "Qwen names & terms (blank inherits)",
+                    text: Binding(
+                        get: { overrides.qwenContext ?? "" },
+                        set: { overrides.qwenContext = $0.isEmpty ? nil : $0 }
+                    )
+                )
                 Picker("Transcription preset", selection: $overrides.transcriptionPreset) {
                     Text("Inherit (\(settings.transcriptionPreset.label))").tag(TranscriptionPreset?.none)
                     ForEach(TranscriptionPreset.allCases.filter { $0 != .custom }) { preset in

@@ -84,6 +84,7 @@ struct SidebarView: View {
     @ObservedObject var model: AppModel
     @State private var searchText = ""
     @State private var editingWatchFolderID: UUID?
+    @State private var pendingDeletionIDs: Set<UUID> = []
     @AppStorage("sidebarGroupByStatus") private var groupByStatus = false
     @AppStorage("sidebarStatusFilter") private var statusFilterRaw = JobStatusFilter.all.rawValue
     @AppStorage("sidebarSortOrder") private var sortOrderRaw = JobSortOrder.queueOrder.rawValue
@@ -91,8 +92,8 @@ struct SidebarView: View {
     var body: some View {
         List(
             selection: Binding(
-                get: { model.selectedJobID },
-                set: { model.selectJob($0) }
+                get: { model.selectedJobIDs },
+                set: { model.selectJobs($0) }
             )
         ) {
             watchFoldersSection
@@ -103,6 +104,9 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .onDeleteCommand {
+            requestDeletion(of: model.selectedJobIDs)
+        }
         // Dropping folders from Finder starts watching them; dropped files
         // become jobs, same as dropping on the main workspace.
         .dropDestination(for: URL.self) { urls, _ in
@@ -134,6 +138,17 @@ struct SidebarView: View {
             ) { model.setWatchFolderProfile(folder.id, $0) }
         }
         .toolbar {
+            if !model.selectedJobIDs.isEmpty {
+                ToolbarItem {
+                    Button(role: .destructive) {
+                        requestDeletion(of: model.selectedJobIDs)
+                    } label: {
+                        Label(deleteSelectionLabel, systemImage: "trash")
+                            .help(deleteSelectionHelp)
+                    }
+                    .disabled(!model.canDeleteJobs(model.selectedJobIDs))
+                }
+            }
             ToolbarItem {
                 Menu {
                     Toggle(isOn: $groupByStatus) {
@@ -154,6 +169,24 @@ struct SidebarView: View {
                         .help("Filter, sort, or group the job list")
                 }
             }
+        }
+        .alert(
+            deletionAlertTitle,
+            isPresented: Binding(
+                get: { !pendingDeletionIDs.isEmpty },
+                set: { if !$0 { pendingDeletionIDs = [] } }
+            )
+        ) {
+            Button("Cancel", role: .cancel) {
+                pendingDeletionIDs = []
+            }
+            Button(deletionButtonTitle, role: .destructive) {
+                let ids = pendingDeletionIDs
+                pendingDeletionIDs = []
+                model.deleteJobs(ids)
+            }
+        } message: {
+            Text(deletionAlertMessage)
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 8) {
@@ -313,6 +346,48 @@ struct SidebarView: View {
         JobSortOrder(rawValue: sortOrderRaw) ?? .queueOrder
     }
 
+    private var deleteSelectionLabel: String {
+        model.selectedJobIDs.count == 1
+            ? "Delete Job"
+            : "Delete \(model.selectedJobIDs.count) Jobs"
+    }
+
+    private var deleteSelectionHelp: String {
+        if model.canDeleteJobs(model.selectedJobIDs) {
+            return "Remove the selected jobs from Cue"
+        }
+        return "Cancel active selected jobs before deleting them"
+    }
+
+    private var deletionAlertTitle: String {
+        pendingDeletionIDs.count == 1
+            ? "Delete Job?"
+            : "Delete \(pendingDeletionIDs.count) Jobs?"
+    }
+
+    private var deletionButtonTitle: String {
+        pendingDeletionIDs.count == 1
+            ? "Delete Job"
+            : "Delete Jobs"
+    }
+
+    private var deletionAlertMessage: String {
+        let subject = pendingDeletionIDs.count == 1 ? "This job" : "These jobs"
+        return "\(subject) will be removed from Cue. Source media and exported files will not be deleted."
+    }
+
+    private func requestDeletion(of ids: Set<UUID>) {
+        guard model.canDeleteJobs(ids) else { return }
+        pendingDeletionIDs = ids
+    }
+
+    private func deletionTargets(for job: TranscriptionJob) -> Set<UUID> {
+        if model.selectedJobIDs.count > 1, model.selectedJobIDs.contains(job.id) {
+            return model.selectedJobIDs
+        }
+        return [job.id]
+    }
+
     private var visibleJobs: [TranscriptionJob] {
         let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let filtered = model.jobs.filter { job in
@@ -386,6 +461,7 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func contextMenu(for job: TranscriptionJob) -> some View {
+        let deletionIDs = deletionTargets(for: job)
         if model.jobNeedsWork(job) && job.status != .queued {
             Button {
                 model.enqueueJob(job.id)
@@ -443,11 +519,14 @@ struct SidebarView: View {
         }
         .disabled(job.status.isRunning || job.status == .queued)
         Button(role: .destructive) {
-            model.deleteJob(job.id)
+            requestDeletion(of: deletionIDs)
         } label: {
-            Label("Delete", systemImage: "trash")
+            Label(
+                deletionIDs.count == 1 ? "Delete" : "Delete \(deletionIDs.count) Jobs",
+                systemImage: "trash"
+            )
         }
-        .disabled(model.isJobActive(job.id))
+        .disabled(!model.canDeleteJobs(deletionIDs))
     }
 }
 

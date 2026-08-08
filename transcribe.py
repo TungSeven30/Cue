@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 ACTIVE_CHILDREN = set()
@@ -33,6 +34,10 @@ BACKEND_MODULES = {
 def emit(stage: str, detail: str, fraction=None) -> None:
     payload = {"stage": stage, "detail": detail, "fraction": fraction}
     print(json.dumps(payload), file=sys.stderr, flush=True)
+
+
+def emit_metrics(metrics: dict) -> None:
+    print(json.dumps({"event": "metrics", "metrics": metrics}), file=sys.stderr, flush=True)
 
 
 def terminate_children(signum=None, frame=None) -> None:
@@ -266,30 +271,48 @@ def group_timed_tokens(tokens, max_chars=42, max_duration=6.0, max_gap=0.8):
     return groups
 
 
-def plan_speech_chunks(samples, sample_rate, min_silence=0.5, target_chunk=150.0, max_chunk=300.0):
+def plan_speech_chunks(
+    samples,
+    sample_rate,
+    min_silence=0.5,
+    target_chunk=300.0,
+    max_chunk=600.0,
+    first_target=90.0,
+):
     """Cut points for chunked ASR, placed only inside detected silences.
 
-    samples: array('h') of 16-bit mono PCM. Returns [(start_s, end_s), ...]
+    samples: one-dimensional PCM array. Returns [(start_s, end_s), ...]
     covering the whole file. A file with no usable silences returns a single
-    chunk — never a mid-speech cut.
+    chunk — never a mid-speech cut. RMS analysis is vectorized because a
+    feature-length movie otherwise spends seconds in Python sample loops.
     """
-    import math
+    import numpy as np
+
     total_seconds = len(samples) / float(sample_rate)
     if total_seconds <= max_chunk:
         return [(0.0, total_seconds)]
     frame = max(1, int(sample_rate * 0.05))  # 50 ms frames
-    rms = []
-    for i in range(0, len(samples) - frame + 1, frame):
-        window = samples[i:i + frame]
-        rms.append(math.sqrt(sum(s * s for s in window) / len(window)))
-    if not rms:
+    values = np.asarray(samples)
+    usable = (len(values) // frame) * frame
+    if usable == 0:
         return [(0.0, total_seconds)]
-    threshold = max(1.0, 0.1 * sorted(rms)[int(len(rms) * 0.95)])
+    framed = values[:usable].reshape(-1, frame)
+    # Vectorized in bounded blocks: a two-hour PCM file is hundreds of MB,
+    # so converting the entire matrix to float would erase the memory win.
+    rms = np.empty(framed.shape[0], dtype=np.float32)
+    block_frames = 4096
+    for block_start in range(0, framed.shape[0], block_frames):
+        block_end = min(block_start + block_frames, framed.shape[0])
+        block = framed[block_start:block_end].astype(np.float32)
+        rms[block_start:block_end] = np.sqrt(np.mean(block * block, axis=1))
+    if rms.size == 0:
+        return [(0.0, total_seconds)]
+    threshold = max(1.0, 0.1 * float(np.quantile(rms, 0.95)))
     frame_seconds = frame / float(sample_rate)
     # Candidate cut points: centers of silent runs >= min_silence.
     candidates = []
     run_start = None
-    for index, value in enumerate(rms):
+    for index, value in enumerate(rms.tolist()):
         if value < threshold:
             if run_start is None:
                 run_start = index
@@ -299,8 +322,8 @@ def plan_speech_chunks(samples, sample_rate, min_silence=0.5, target_chunk=150.0
                 if run_len >= min_silence:
                     candidates.append((run_start + (index - run_start) / 2.0) * frame_seconds)
                 run_start = None
-    if run_start is not None and (len(rms) - run_start) * frame_seconds >= min_silence:
-        candidates.append((run_start + (len(rms) - run_start) / 2.0) * frame_seconds)
+    if run_start is not None and (rms.size - run_start) * frame_seconds >= min_silence:
+        candidates.append((run_start + (rms.size - run_start) / 2.0) * frame_seconds)
     if not candidates:
         return [(0.0, total_seconds)]
     chunks = []
@@ -311,8 +334,9 @@ def plan_speech_chunks(samples, sample_rate, min_silence=0.5, target_chunk=150.0
             chunks.append((start, total_seconds))
             break
         in_window = [c for c in candidates if start + min_silence < c <= start + max_chunk]
+        desired = first_target if not chunks else target_chunk
         if in_window:
-            cut = min(in_window, key=lambda c: abs(c - (start + target_chunk)))
+            cut = min(in_window, key=lambda c: abs(c - (start + desired)))
         else:
             later = [c for c in candidates if c > start + max_chunk]
             if not later:
@@ -324,56 +348,83 @@ def plan_speech_chunks(samples, sample_rate, min_silence=0.5, target_chunk=150.0
     return chunks
 
 
-def load_with_qwen3(audio_path: Path, model: str, language: str, stream_segments: bool = False):
-    from mlx_qwen3_asr import transcribe as qwen3_transcribe
-    import array as _array
+def load_with_qwen3(
+    audio_path: Path,
+    model: str,
+    language: str,
+    stream_segments: bool = False,
+    context: str = "",
+):
+    import mlx_qwen3_asr as qwen3
+    import numpy as np
     import wave
 
+    pipeline_started = time.perf_counter()
     emit("loadingModel", f"Loading {model} with Qwen3 ASR. First run may download the model.", 0.18)
 
     chunks = [(0.0, None)]
     samples = None
     sample_rate = 16000
-    if stream_segments:
-        try:
-            with wave.open(str(audio_path), "rb") as handle:
-                sample_rate = handle.getframerate()
-                raw = handle.readframes(handle.getnframes())
-            samples = _array.array("h")
-            samples.frombytes(raw)
+    audio_load_started = time.perf_counter()
+    try:
+        with wave.open(str(audio_path), "rb") as handle:
+            if handle.getnchannels() != 1 or handle.getsampwidth() != 2:
+                raise ValueError("Qwen fast path requires 16-bit mono PCM WAV")
+            sample_rate = handle.getframerate()
+            raw = handle.readframes(handle.getnframes())
+        samples = np.frombuffer(raw, dtype="<i2")
+    except Exception:
+        samples = None  # Let mlx-qwen3-asr's loader handle unusual WAVs.
+    audio_load_seconds = time.perf_counter() - audio_load_started
+
+    planning_started = time.perf_counter()
+    if samples is not None:
+        chunks = [(0.0, len(samples) / float(sample_rate))]
+        if stream_segments:
             planned = plan_speech_chunks(samples, sample_rate)
             if len(planned) > 1:
                 chunks = planned
-        except Exception:
-            chunks = [(0.0, None)]  # unreadable as plain WAV: fall back to one call
+    planning_seconds = time.perf_counter() - planning_started
+
+    model_started = time.perf_counter()
+    session_type = getattr(qwen3, "Session", None)
+    if session_type is not None:
+        session = session_type(model=model)
+        transcribe_call = session.transcribe
+        model_kwargs = {}
+    else:  # Compatibility with older mlx-qwen3-asr releases.
+        transcribe_call = qwen3.transcribe
+        model_kwargs = {"model": model}
+    aligner_type = getattr(qwen3, "ForcedAligner", None)
+    aligner = aligner_type() if aligner_type is not None else None
+    model_load_seconds = time.perf_counter() - model_started
 
     all_segments = []
     next_id = 1
+    inference_seconds = 0.0
+    normalization_seconds = 0.0
     for chunk_index, (chunk_start, chunk_end) in enumerate(chunks):
-        if chunk_end is None or len(chunks) == 1:
-            chunk_path = audio_path
+        if samples is None:
+            audio_input = str(audio_path)
         else:
-            chunk_path = audio_path.with_name(f"{audio_path.stem}.chunk{chunk_index}.wav")
             first = int(chunk_start * sample_rate)
-            last = int(chunk_end * sample_rate)
-            with wave.open(str(chunk_path), "wb") as out:
-                out.setnchannels(1)
-                out.setsampwidth(2)
-                out.setframerate(sample_rate)
-                out.writeframes(samples[first:last].tobytes())
+            last = int((chunk_end if chunk_end is not None else len(samples) / sample_rate) * sample_rate)
+            chunk_samples = samples[first:last].astype(np.float32) / 32768.0
+            audio_input = chunk_samples if sample_rate == 16000 else (chunk_samples, sample_rate)
         fraction = 0.2 + 0.7 * (chunk_index / max(1, len(chunks)))
         emit("transcribing", f"Transcribing chunk {chunk_index + 1} of {len(chunks)}.", fraction)
-        # mlx_qwen3_asr.transcribe may reload the model per call if it does
-        # not cache internally; acceptable in v1.
+        inference_started = time.perf_counter()
         result = call_with_supported_kwargs(
-            qwen3_transcribe,
-            str(chunk_path),
-            model=model,
+            transcribe_call,
+            audio_input,
+            **model_kwargs,
             language=None if language == "auto" else language,
+            context=context.strip(),
             return_timestamps=True,
+            forced_aligner=aligner,
         )
-        if chunk_path != audio_path:
-            chunk_path.unlink(missing_ok=True)
+        inference_seconds += time.perf_counter() - inference_started
+        normalization_started = time.perf_counter()
         raw_segments = getattr(result, "segments", None) or []
         tokens = []
         for segment in raw_segments:
@@ -393,6 +444,7 @@ def load_with_qwen3(audio_path: Path, model: str, language: str, stream_segments
             batch.append({"id": next_id, "start": group["start"], "end": group["end"], "text": group["text"].strip()})
             next_id += 1
         all_segments.extend(batch)
+        normalization_seconds += time.perf_counter() - normalization_started
         if stream_segments and batch:
             print(json.dumps({"event": "segments", "segments": batch}), file=sys.stderr, flush=True)
 
@@ -405,7 +457,25 @@ def load_with_qwen3(audio_path: Path, model: str, language: str, stream_segments
                 "Qwen3 ASR produced text but no timestamps. Install the aligner extra: pip install 'mlx-qwen3-asr[aligner]'"
             )
         raise RuntimeError("Qwen3 ASR returned no transcript.")
-    return "qwen3-asr", segments
+    audio_duration_seconds = (
+        len(samples) / float(sample_rate)
+        if samples is not None
+        else max((segment["end"] for segment in segments), default=0.0)
+    )
+    pipeline_seconds = time.perf_counter() - pipeline_started
+    metrics = {
+        "backend": "qwen3-asr",
+        "audioDurationSeconds": audio_duration_seconds,
+        "audioLoadSeconds": audio_load_seconds,
+        "chunkPlanningSeconds": planning_seconds,
+        "modelLoadSeconds": model_load_seconds,
+        "inferenceSeconds": inference_seconds,
+        "normalizationSeconds": normalization_seconds,
+        "pipelineSeconds": pipeline_seconds,
+        "chunkCount": len(chunks),
+        "inferenceRTF": inference_seconds / audio_duration_seconds if audio_duration_seconds > 0 else 0.0,
+    }
+    return "qwen3-asr", segments, metrics
 
 
 def faster_whisper_model(model: str) -> str:
@@ -470,6 +540,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("input_file")
     parser.add_argument("--language", default="auto")
+    parser.add_argument("--qwen-context", default="")
     parser.add_argument("--model", default="mlx-community/whisper-large-v3-turbo")
     parser.add_argument("--backend", default="auto", choices=["auto", "mlx-whisper", "faster-whisper", "qwen3-asr"])
     parser.add_argument("--preprocess-audio", default="true")
@@ -482,6 +553,7 @@ def main() -> int:
     parser.add_argument("--stream-segments", default="false")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
+    program_started = time.perf_counter()
 
     input_path = Path(args.input_file)
     if not input_path.exists():
@@ -490,6 +562,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="cue_") as temp_dir:
         emit("preflight", "Preparing transcription helper.", 0.02)
+        audio_preparation_started = time.perf_counter()
         try:
             audio_path = prepare_audio(
                 input_path,
@@ -503,12 +576,14 @@ def main() -> int:
         except Exception as exc:
             print(f"Could not extract audio with ffmpeg: {exc}", file=sys.stderr)
             return 1
+        audio_preparation_seconds = time.perf_counter() - audio_preparation_started
 
         errors = []
         ordered_backends = ["mlx-whisper", "faster-whisper"] if args.backend == "auto" else [args.backend]
 
         for backend in ordered_backends:
             try:
+                metrics = None
                 emit("transcribing", f"Trying {backend}.", 0.14)
                 if backend == "mlx-whisper":
                     used_backend, segments = load_with_mlx(
@@ -519,11 +594,12 @@ def main() -> int:
                         args.no_speech_threshold,
                     )
                 elif backend == "qwen3-asr":
-                    used_backend, segments = load_with_qwen3(
+                    used_backend, segments, metrics = load_with_qwen3(
                         audio_path,
                         args.model,
                         args.language,
                         bool_arg(args.stream_segments),
+                        args.qwen_context,
                     )
                 else:
                     used_backend, segments = load_with_faster_whisper(
@@ -536,6 +612,13 @@ def main() -> int:
                         args.temperature,
                         args.no_speech_threshold,
                     )
+                if metrics is not None:
+                    total_seconds = time.perf_counter() - program_started
+                    metrics["audioPreparationSeconds"] = audio_preparation_seconds
+                    metrics["totalSeconds"] = total_seconds
+                    duration = metrics.get("audioDurationSeconds", 0.0)
+                    metrics["totalRTF"] = total_seconds / duration if duration > 0 else 0.0
+                    emit_metrics(metrics)
                 emit("complete", f"Transcription complete with {used_backend}.", 1.0)
                 if args.json:
                     json.dump({"backend": used_backend, "segments": segments}, sys.stdout, ensure_ascii=False)

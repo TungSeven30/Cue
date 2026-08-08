@@ -15,7 +15,7 @@ struct SettingsView: View {
                     }
                 }
                 Picker("Quality", selection: $settings.transcriptionQualityPreset) {
-                    ForEach(TranscriptionQualityPreset.allCases) { preset in
+                    ForEach(TranscriptionQualityPreset.available(for: settings.whisperBackend)) { preset in
                         Text(preset.label).tag(preset)
                     }
                 }
@@ -24,6 +24,10 @@ struct SettingsView: View {
                     presets: AppSettingPresets.transcriptionLanguages,
                     selection: $settings.sourceLanguage
                 )
+                if settings.whisperBackend == .qwen3ASR {
+                    TextField("Qwen names & terms", text: $settings.qwenContext)
+                        .help("Space-separated character names, places, and unusual terms that Qwen should prefer")
+                }
                 Toggle("Start jobs automatically when files are added", isOn: $settings.autoStartAddedJobs)
                 Picker("Auto-archive finished jobs", selection: $settings.autoArchiveDays) {
                     Text("Never").tag(0)
@@ -44,14 +48,16 @@ struct SettingsView: View {
                     backendPicker
                     TextField("Custom language code", text: $settings.sourceLanguage)
                     presetPicker(
-                        "Whisper model",
+                        settings.whisperBackend == .qwen3ASR ? "Qwen model" : "Whisper model",
                         presets: AppSettingPresets.whisperModels(for: settings.whisperBackend),
                         selection: $settings.whisperModel
                     )
-                    TextField("Custom Whisper model", text: $settings.whisperModel)
+                    TextField(settings.whisperBackend == .qwen3ASR ? "Custom Qwen model" : "Custom Whisper model", text: $settings.whisperModel)
                     Toggle("Clean audio before transcription", isOn: $settings.preprocessAudio)
                         .help("Cleans audio with an ffmpeg filter before transcription; skipped when ffmpeg is not installed")
-                    Toggle("Voice activity detection", isOn: $settings.vadFilter)
+                    if settings.whisperBackend != .qwen3ASR {
+                        Toggle("Voice activity detection", isOn: $settings.vadFilter)
+                    }
                     Toggle("Remove empty segments", isOn: $settings.removeEmptySegments)
                     Toggle("Remove repeated text", isOn: $settings.removeRepeatedText)
                     Toggle("Merge short segments", isOn: $settings.mergeShortSegments)
@@ -67,19 +73,21 @@ struct SettingsView: View {
                         Text("\(settings.maxMergeGap, specifier: "%.2f")s")
                             .monospacedDigit()
                     }
-                    Stepper("Beam size: \(settings.beamSize)", value: $settings.beamSize, in: 1...10)
-                    Stepper("Best of: \(settings.bestOf)", value: $settings.bestOf, in: 1...10)
-                    HStack {
-                        Text("Temperature")
-                        Slider(value: $settings.temperature, in: 0...1, step: 0.05)
-                        Text("\(settings.temperature, specifier: "%.2f")")
-                            .monospacedDigit()
-                    }
-                    HStack {
-                        Text("No-speech threshold")
-                        Slider(value: $settings.noSpeechThreshold, in: 0...1, step: 0.05)
-                        Text("\(settings.noSpeechThreshold, specifier: "%.2f")")
-                            .monospacedDigit()
+                    if settings.whisperBackend != .qwen3ASR {
+                        Stepper("Beam size: \(settings.beamSize)", value: $settings.beamSize, in: 1...10)
+                        Stepper("Best of: \(settings.bestOf)", value: $settings.bestOf, in: 1...10)
+                        HStack {
+                            Text("Temperature")
+                            Slider(value: $settings.temperature, in: 0...1, step: 0.05)
+                            Text("\(settings.temperature, specifier: "%.2f")")
+                                .monospacedDigit()
+                        }
+                        HStack {
+                            Text("No-speech threshold")
+                            Slider(value: $settings.noSpeechThreshold, in: 0...1, step: 0.05)
+                            Text("\(settings.noSpeechThreshold, specifier: "%.2f")")
+                                .monospacedDigit()
+                        }
                     }
                     if let message = settings.transcriptionValidationMessage {
                         HStack {

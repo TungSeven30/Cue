@@ -130,11 +130,14 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
 /// will stamp stale values for them.
 struct JobSettingsSnapshot: Codable, Hashable {
     static let currentTranscriptionProcessingVersion = 4
+    static let currentQwenProcessingVersion = 1
 
     var transcriptionProcessingVersion: Int
+    var qwenProcessingVersion: Int
     var transcriptionPreset: TranscriptionPreset
     var transcriptionQualityPreset: TranscriptionQualityPreset
     var sourceLanguage: String
+    var qwenContext: String
     var whisperModel: String
     var whisperBackend: WhisperBackend
     var openAIModel: String
@@ -157,9 +160,11 @@ struct JobSettingsSnapshot: Codable, Hashable {
     @MainActor
     init(settings: AppSettingsStore) {
         transcriptionProcessingVersion = Self.currentTranscriptionProcessingVersion
+        qwenProcessingVersion = Self.currentQwenProcessingVersion
         transcriptionPreset = settings.transcriptionPreset
         transcriptionQualityPreset = settings.transcriptionQualityPreset
         sourceLanguage = settings.sourceLanguage
+        qwenContext = settings.qwenContext
         whisperModel = settings.whisperModel
         whisperBackend = settings.whisperBackend
         openAIModel = settings.openAIModel
@@ -183,9 +188,11 @@ struct JobSettingsSnapshot: Codable, Hashable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         transcriptionProcessingVersion = try container.decodeIfPresent(Int.self, forKey: .transcriptionProcessingVersion) ?? 0
+        qwenProcessingVersion = try container.decodeIfPresent(Int.self, forKey: .qwenProcessingVersion) ?? 0
         transcriptionPreset = try container.decodeIfPresent(TranscriptionPreset.self, forKey: .transcriptionPreset) ?? .custom
         transcriptionQualityPreset = try container.decodeIfPresent(TranscriptionQualityPreset.self, forKey: .transcriptionQualityPreset) ?? .balanced
         sourceLanguage = try container.decode(String.self, forKey: .sourceLanguage)
+        qwenContext = try container.decodeIfPresent(String.self, forKey: .qwenContext) ?? ""
         whisperModel = try container.decode(String.self, forKey: .whisperModel)
         whisperBackend = try container.decode(WhisperBackend.self, forKey: .whisperBackend)
         openAIModel = try container.decode(String.self, forKey: .openAIModel)
@@ -215,6 +222,9 @@ extension JobSettingsSnapshot {
         var resolved = self
         if let language = overrides.sourceLanguage {
             resolved.sourceLanguage = language
+        }
+        if let context = overrides.qwenContext {
+            resolved.qwenContext = context
         }
         if let target = overrides.translationTargetLanguage {
             resolved.translationTargetLanguage = target
@@ -266,7 +276,9 @@ extension JobSettingsSnapshot {
     /// deliberately excluded.
     struct TranscriptionIdentity: Hashable {
         let processingVersion: Int
+        let qwenProcessingVersion: Int
         let sourceLanguage: String
+        let qwenContext: String
         let whisperModel: String
         let whisperBackend: WhisperBackend
         let preprocessAudio: Bool
@@ -285,7 +297,9 @@ extension JobSettingsSnapshot {
     var transcriptionIdentity: TranscriptionIdentity {
         TranscriptionIdentity(
             processingVersion: transcriptionProcessingVersion,
+            qwenProcessingVersion: whisperBackend == .qwen3ASR ? qwenProcessingVersion : 0,
             sourceLanguage: sourceLanguage,
+            qwenContext: whisperBackend == .qwen3ASR ? qwenContext : "",
             whisperModel: whisperModel,
             whisperBackend: whisperBackend,
             preprocessAudio: preprocessAudio,

@@ -92,4 +92,42 @@ import Testing
         _ = try await driver.finish(finalTranscript: final)
         #expect(receivedExisting == [TranscriptionSegment(id: 100, start: 1, end: 2, text: "T1")])
     }
+
+    @Test func adaptivePolicyStartsOnFirstUsefulBatch() {
+        var requests = 0
+        let driver = ProgressiveTranslationDriver(
+            chunkSize: 80,
+            initialSegmentThreshold: 12,
+            targetInputTokens: 3_200,
+            overlapAllowed: true,
+            translate: { segments, _, _ in segments },
+            onPartial: { _ in },
+            onNeedsTranslation: { requests += 1 }
+        )
+        driver.ingest((1...11).map(segment))
+        #expect(requests == 0)
+        driver.ingest([segment(12)])
+        #expect(requests == 1)
+    }
+
+    @Test func sparseDialogueStartsAfterUsefulAudioSpan() {
+        var requests = 0
+        let driver = ProgressiveTranslationDriver(
+            chunkSize: 80,
+            initialSegmentThreshold: 16,
+            targetInputTokens: 3_200,
+            overlapAllowed: true,
+            translate: { segments, _, _ in segments },
+            onPartial: { _ in },
+            onNeedsTranslation: { requests += 1 }
+        )
+        let sparse = [
+            TranscriptionSegment(id: 1, start: 0, end: 1, text: "one"),
+            TranscriptionSegment(id: 2, start: 15, end: 16, text: "two"),
+            TranscriptionSegment(id: 3, start: 30, end: 31, text: "three"),
+            TranscriptionSegment(id: 4, start: 50, end: 51, text: "four"),
+        ]
+        driver.ingest(sparse)
+        #expect(requests == 1)
+    }
 }

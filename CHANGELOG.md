@@ -3,6 +3,15 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
+## 2.3.4 — 2026-08-08
+
+- Sidebar jobs now support native Command-click and Shift-click multi-selection,
+  with confirmed bulk deletion that leaves source media and exports untouched.
+- Added a Qwen-specific movie profile, vocabulary context, an in-memory
+  NumPy chunk path with vectorized silence planning, and per-stage/RTF metrics.
+- Cloud translation now starts with the first useful transcript batch, sizes
+  requests by estimated tokens, and never resubmits already translated ranges.
+
 ## 2.3.3 — 2026-08-08
 
 - Corrected the packaged Metal shader's file permissions so a Cue app placed

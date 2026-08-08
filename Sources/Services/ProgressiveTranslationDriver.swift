@@ -23,10 +23,12 @@ final class ProgressiveTranslationDriver {
     private var requestedThrough = 0
     private var failedMidStream = false
 
-    init(chunkSize: Int, overlapAllowed: Bool,
-         translate: @escaping TranslateCall,
-         onPartial: @escaping ([TranscriptionSegment]) -> Void,
-         onNeedsTranslation: @escaping () -> Void) {
+    init(
+        chunkSize: Int, overlapAllowed: Bool,
+        translate: @escaping TranslateCall,
+        onPartial: @escaping ([TranscriptionSegment]) -> Void,
+        onNeedsTranslation: @escaping () -> Void
+    ) {
         self.chunkSize = max(1, chunkSize)
         self.overlapAllowed = overlapAllowed
         self.translate = translate

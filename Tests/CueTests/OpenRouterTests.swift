@@ -63,19 +63,20 @@ struct OpenRouterProviderTests {
 }
 
 struct OpenRouterCatalogTests {
-    private let sample = Data("""
-    {
-      "data": [
-        {"id": "qwen/qwen3.7-max", "name": "Qwen: Qwen3.7 Max",
-         "pricing": {"prompt": "0.0000012", "completion": "0.000006"}},
-        {"id": "qwen/qwen3.7-plus", "name": "Qwen: Qwen3.7 Plus",
-         "pricing": {"prompt": "0.0000004", "completion": "0.0000012"}},
-        {"id": "meta-llama/llama-5-scout:free", "name": "Meta: Llama 5 Scout (free)",
-         "pricing": {"prompt": "0", "completion": "0"}},
-        {"id": "broken-entry-without-name"}
-      ]
-    }
-    """.utf8)
+    private let sample = Data(
+        """
+        {
+          "data": [
+            {"id": "qwen/qwen3.7-max", "name": "Qwen: Qwen3.7 Max",
+             "pricing": {"prompt": "0.0000012", "completion": "0.000006"}},
+            {"id": "qwen/qwen3.7-plus", "name": "Qwen: Qwen3.7 Plus",
+             "pricing": {"prompt": "0.0000004", "completion": "0.0000012"}},
+            {"id": "meta-llama/llama-5-scout:free", "name": "Meta: Llama 5 Scout (free)",
+             "pricing": {"prompt": "0", "completion": "0"}},
+            {"id": "broken-entry-without-name"}
+          ]
+        }
+        """.utf8)
 
     @Test func parsesModelsSortedByName() throws {
         let models = try OpenRouterModelCatalog.parse(sample)
@@ -96,6 +97,21 @@ struct OpenRouterCatalogTests {
     @Test func malformedCatalogThrows() {
         #expect(throws: (any Error).self) {
             _ = try OpenRouterModelCatalog.parse(Data("not json".utf8))
+        }
+    }
+
+    @Test func fetchUsesInjectedHTTPClient() async throws {
+        let models = try await OpenRouterModelCatalog.fetch(
+            httpClient: StubHTTPClient(data: sample, statusCode: 200)
+        )
+        #expect(models.count == 3)
+    }
+
+    @Test func fetchRejectsNonSuccessStatus() async {
+        await #expect(throws: TranslationServiceError.self) {
+            try await OpenRouterModelCatalog.fetch(
+                httpClient: StubHTTPClient(data: Data(), statusCode: 503)
+            )
         }
     }
 }

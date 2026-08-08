@@ -23,8 +23,9 @@ enum LegacyMigration {
         let defaults = UserDefaults.standard
         let newDomain = Bundle.main.bundleIdentifier ?? "com.local.Cue"
         if defaults.persistentDomain(forName: newDomain)?.isEmpty ?? true,
-           let legacy = defaults.persistentDomain(forName: "com.local.WhisperDesk"),
-           !legacy.isEmpty {
+            let legacy = defaults.persistentDomain(forName: "com.local.WhisperDesk"),
+            !legacy.isEmpty
+        {
             defaults.setPersistentDomain(legacy, forName: newDomain)
         }
     }

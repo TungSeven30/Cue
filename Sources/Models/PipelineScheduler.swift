@@ -23,7 +23,8 @@ enum PipelineScheduler {
 
     static func nextGPUJob(jobs: [JobView], gpuBusy: Bool, queuePaused: Bool) -> UUID? {
         guard !gpuBusy, !queuePaused else { return nil }
-        return jobs
+        return
+            jobs
             .filter { $0.status == .queued && !$0.hasTranscript && $0.sourceAvailable }
             .min { $0.orderIndex < $1.orderIndex }?
             .id
@@ -31,7 +32,8 @@ enum PipelineScheduler {
 
     static func nextTranslationJob(jobs: [JobView], translationBusy: Bool, queuePaused: Bool) -> UUID? {
         guard !translationBusy, !queuePaused else { return nil }
-        return jobs
+        return
+            jobs
             .filter { $0.status == .queued && $0.hasTranscript && $0.sourceAvailable }
             .min { $0.orderIndex < $1.orderIndex }?
             .id

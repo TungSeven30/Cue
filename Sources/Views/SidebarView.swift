@@ -89,10 +89,12 @@ struct SidebarView: View {
     @AppStorage("sidebarSortOrder") private var sortOrderRaw = JobSortOrder.queueOrder.rawValue
 
     var body: some View {
-        List(selection: Binding(
-            get: { model.selectedJobID },
-            set: { model.selectJob($0) }
-        )) {
+        List(
+            selection: Binding(
+                get: { model.selectedJobID },
+                set: { model.selectJob($0) }
+            )
+        ) {
             watchFoldersSection
             if groupByStatus {
                 groupedSections
@@ -119,10 +121,12 @@ struct SidebarView: View {
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search jobs")
         // Sheet lives on the List, not inside a Section: section-scoped
         // sheets present unreliably on macOS.
-        .sheet(item: Binding(
-            get: { editingWatchFolderID.flatMap { id in settingsWatchFolders.first { $0.id == id } } },
-            set: { editingWatchFolderID = $0?.id }
-        )) { folder in
+        .sheet(
+            item: Binding(
+                get: { editingWatchFolderID.flatMap { id in settingsWatchFolders.first { $0.id == id } } },
+                set: { editingWatchFolderID = $0?.id }
+            )
+        ) { folder in
             JobSettingsOverridesView(
                 title: "Watch Folder Settings — \(folder.name)",
                 settings: model.settings,
@@ -207,7 +211,9 @@ struct SidebarView: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Watch a folder: files dropped into it are transcribed and translated automatically, with subtitles saved next to each video. You can also drag a folder from Finder into this sidebar.")
+            .help(
+                "Watch a folder: files dropped into it are transcribed and translated automatically, with subtitles saved next to each video. You can also drag a folder from Finder into this sidebar."
+            )
         }
     }
 
@@ -227,8 +233,9 @@ struct SidebarView: View {
         Button {
             model.setWatchFolderEnabled(folder.id, !folder.enabled)
         } label: {
-            Label(folder.enabled ? "Pause Watching" : "Resume Watching",
-                  systemImage: folder.enabled ? "pause.circle" : "play.circle")
+            Label(
+                folder.enabled ? "Pause Watching" : "Resume Watching",
+                systemImage: folder.enabled ? "pause.circle" : "play.circle")
         }
         Button {
             editingWatchFolderID = folder.id

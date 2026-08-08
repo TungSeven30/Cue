@@ -52,10 +52,10 @@ struct IntroSummaryTests {
 
     @Test func parseSummaryExtractsAndTrims() throws {
         let raw = """
-        ```json
-        {"summary": "  In 1960s Saigon, a young chef opens a noodle stall.  "}
-        ```
-        """
+            ```json
+            {"summary": "  In 1960s Saigon, a young chef opens a noodle stall.  "}
+            ```
+            """
         let summary = try TranslationService.parseSummary(from: raw)
         #expect(summary == "In 1960s Saigon, a young chef opens a noodle stall.")
     }
@@ -67,7 +67,6 @@ struct IntroSummaryTests {
         } catch {}
     }
 }
-
 
 struct IntroCueSplittingTests {
     @Test func shortSummaryStaysWhole() {

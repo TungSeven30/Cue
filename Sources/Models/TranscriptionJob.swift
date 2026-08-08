@@ -220,13 +220,15 @@ extension JobSettingsSnapshot {
             resolved.translationTargetLanguage = target
         }
         if let preset = overrides.transcriptionPreset,
-           let backend = preset.backend, let model = preset.model {
+            let backend = preset.backend, let model = preset.model
+        {
             resolved.transcriptionPreset = preset
             resolved.whisperBackend = backend
             resolved.whisperModel = model
         }
         if let quality = overrides.transcriptionQualityPreset,
-           let params = quality.parameters {
+            let params = quality.parameters
+        {
             resolved.transcriptionQualityPreset = quality
             resolved.preprocessAudio = params.preprocessAudio
             resolved.vadFilter = params.vadFilter

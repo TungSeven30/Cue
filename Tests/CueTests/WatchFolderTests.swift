@@ -27,8 +27,9 @@ struct WatchFolderScanEngineTests {
     @Test func stableFileIngestsAfterTwoChecks() {
         var engine = WatchFolderScanEngine()
         let file = [observation("/w/movie.mkv", size: 1000)]
-        #expect(engine.filesReadyToIngest(observations: file, now: base, blockedFingerprints: []).isEmpty,
-                "first sighting is never ingested")
+        #expect(
+            engine.filesReadyToIngest(observations: file, now: base, blockedFingerprints: []).isEmpty,
+            "first sighting is never ingested")
         let ready = engine.filesReadyToIngest(observations: file, now: base.addingTimeInterval(2.5), blockedFingerprints: [])
         #expect(ready.map(\.path) == ["/w/movie.mkv"])
     }
@@ -37,7 +38,8 @@ struct WatchFolderScanEngineTests {
         var engine = WatchFolderScanEngine()
         _ = engine.filesReadyToIngest(observations: [observation("/w/movie.mkv", size: 1000)], now: base, blockedFingerprints: [])
         // Size changed: the copy is still running, restart the clock.
-        let second = engine.filesReadyToIngest(observations: [observation("/w/movie.mkv", size: 2000)], now: base.addingTimeInterval(3), blockedFingerprints: [])
+        let second = engine.filesReadyToIngest(
+            observations: [observation("/w/movie.mkv", size: 2000)], now: base.addingTimeInterval(3), blockedFingerprints: [])
         #expect(second.isEmpty)
         let third = engine.filesReadyToIngest(observations: [observation("/w/movie.mkv", size: 2000)], now: base.addingTimeInterval(6), blockedFingerprints: [])
         #expect(third.map(\.path) == ["/w/movie.mkv"])
@@ -69,7 +71,8 @@ struct WatchFolderScanEngineTests {
         // File disappears from the folder entirely.
         _ = engine.filesReadyToIngest(observations: [], now: base.addingTimeInterval(1), blockedFingerprints: [])
         // Re-copied at the same size: first sighting again, never ingested.
-        let tooSoon = engine.filesReadyToIngest(observations: [observation("/w/movie.mkv", size: 1000)], now: base.addingTimeInterval(3), blockedFingerprints: [])
+        let tooSoon = engine.filesReadyToIngest(
+            observations: [observation("/w/movie.mkv", size: 1000)], now: base.addingTimeInterval(3), blockedFingerprints: [])
         #expect(tooSoon.isEmpty)
         let ready = engine.filesReadyToIngest(observations: [observation("/w/movie.mkv", size: 1000)], now: base.addingTimeInterval(6), blockedFingerprints: [])
         #expect(ready.map(\.path) == ["/w/movie.mkv"])
@@ -151,7 +154,7 @@ struct WatchFolderLedgerTests {
         let survivingFile = base.appendingPathComponent("subfolder/survives.mp4")
         try FileManager.default.createDirectory(at: survivingFile.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: survivingFile)
-        let goneFile = base.appendingPathComponent("subfolder/gone.mp4") // never created
+        let goneFile = base.appendingPathComponent("subfolder/gone.mp4")  // never created
 
         let survivingFingerprint = "\(survivingFile.path)|1|2.0"
         let goneFingerprint = "\(goneFile.path)|1|2.0"
@@ -196,8 +199,22 @@ struct WatchFolderLedgerTests {
         #expect(!ledger.contains("/w/a.mp4|1|2.0"))
         #expect(!WatchFolderLedger(baseURL: base).contains("/w/a.mp4|1|2.0"))
     }
-}
 
+    @Test func corruptLedgerIsPreservedAndReported() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("watch-ledger-corrupt-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let folder = base.appendingPathComponent("Cue", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let ledgerURL = folder.appendingPathComponent("watch-ledger.json")
+        try Data("not json".utf8).write(to: ledgerURL)
+
+        let ledger = WatchFolderLedger(baseURL: base)
+
+        #expect(ledger.startupError != nil)
+        #expect(FileManager.default.fileExists(atPath: ledgerURL.appendingPathExtension("corrupt").path))
+    }
+}
 
 @MainActor
 struct WatchFolderServiceTests {

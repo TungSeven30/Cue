@@ -84,7 +84,7 @@ Notes on reading the table:
 
 Grab `Cue.dmg` (notarized, from a release or shared directly), drag the app to Applications, and launch it. That's it — no Homebrew, no Python: transcription runs on the built-in whisper.cpp engine out of the box. The first transcription downloads the default model (~574 MB, one-time) with progress shown on the job.
 
-Updates are built in: the app offers new versions itself (Sparkle, fed from the public [cue-releases](https://github.com/TungSeven30/cue-releases) repo), or check manually via **Cue > Check for Updates…**. Publishing an update is one command on the release machine: `script/release_update.sh <version>`.
+Updates are built in: the app offers new versions itself (Sparkle, fed from the public [cue-releases](https://github.com/TungSeven30/cue-releases) repo), or check manually via **Cue > Check for Updates…**. Publishing a complete release is one command on the release machine: `script/release.sh <version>`.
 
 To translate, add an OpenAI, Anthropic, or Google API key in Settings (⌘,).
 
@@ -121,10 +121,15 @@ Other script modes:
 | Command | What it does |
 |---|---|
 | `./script/build_and_run.sh --install` | Release build installed to `/Applications` (or `~/Applications`) |
+| `./script/build_and_run.sh --bundle` | Release `.app` bundle with Sparkle/signature/Metal verification; does not launch or stop Cue |
 | `./script/build_and_run.sh --release` | Developer ID-signed, notarized, stapled `dist/Cue.dmg` |
+| `./script/rehearse_release.sh <version>` | Full notarization/Gatekeeper/Metal/Sparkle rehearsal without publishing |
 | `./script/build_and_run.sh --debug` | Debug build under `lldb` |
 | `./script/build_and_run.sh --logs` | Debug build with live log streaming |
 | `./script/run_tests.sh` | Runs the swift-testing suite |
+| `./script/run_coverage.sh` | Runs tests with enforced total/domain/critical-file coverage floors |
+| `./script/lint_swift.sh` | Enforces the repository's Swift format in strict mode |
+| `./script/format_swift.sh` | Applies the repository's Swift format |
 
 > **Testing note:** with Command Line Tools only (no Xcode), plain `swift test` builds the tests but silently runs none of them. `script/run_tests.sh` works around this by loading the test bundle directly — use it instead.
 
@@ -146,8 +151,9 @@ Other script modes:
 - **Translation/summaries**: direct HTTPS to the provider APIs with JSON-schema-constrained outputs; no SDK dependencies
 - **Persistence**: one JSON file per job under `~/Library/Application Support/Cue/jobs/`, written atomically off the main thread and flushed on quit; corrupt files are quarantined, never overwritten
 - **Layout**: `Sources/` — `App`, `Views`, `Stores`, `Services`, `Models`, `Support`; `Tests/` — swift-testing suite; `script/` — build, test, and release tooling
+- **Audit/runbooks**: [architecture review](docs/architecture-review-2026-08-08.md), [security model](docs/security-model.md), [dependency policy](docs/dependency-policy.md), [release/rollback](docs/release-runbook.md), and [data recovery](docs/data-recovery.md)
 
 ## Notes
 
 - The default transcription setup is the built-in engine with `ggml-large-v3-turbo-q5_0` (the MLX backend uses `mlx-community/whisper-large-v3-turbo`); the default translation model and languages are configurable in Settings, as are the translator prompt, chunk sizes, and parallelism.
-- `transcribe.py` at the repo root is a standalone CLI variant of the transcription helper for scripted use; the app uses its own embedded copy.
+- `transcribe.py` at the repo root is the generated standalone form of the exact helper embedded in the app. Edit `BackendScript.source`, run `python3 script/sync_backend_script.py`, and commit both; the test suite rejects any drift.

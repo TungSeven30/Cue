@@ -59,8 +59,8 @@ struct WhisperCppEngineTests {
         wav.append(contentsOf: Array("WAVE".utf8))
         wav.append(contentsOf: Array("fmt ".utf8))
         append(UInt32(16))
-        append(UInt16(1))          // PCM
-        append(UInt16(1))          // mono
+        append(UInt16(1))  // PCM
+        append(UInt16(1))  // mono
         append(UInt32(16_000))
         append(UInt32(16_000 * 2))
         append(UInt16(2))
@@ -68,7 +68,7 @@ struct WhisperCppEngineTests {
         wav.append(contentsOf: Array("LIST".utf8))
         append(UInt32(listBody.count))
         wav.append(listBody)
-        wav.append(0)              // pad byte for odd chunk size
+        wav.append(0)  // pad byte for odd chunk size
         wav.append(contentsOf: Array("data".utf8))
         append(UInt32(pcm.count))
         wav.append(pcm)

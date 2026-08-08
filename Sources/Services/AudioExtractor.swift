@@ -33,15 +33,17 @@ enum AudioExtractor {
         let durationSeconds = (try? await asset.load(.duration).seconds) ?? 0
 
         let reader = try AVAssetReader(asset: asset)
-        let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: 16_000,
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsNonInterleaved: false,
-        ])
+        let output = AVAssetReaderTrackOutput(
+            track: track,
+            outputSettings: [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: 16_000,
+                AVNumberOfChannelsKey: 1,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false,
+            ])
         reader.add(output)
         guard reader.startReading() else {
             throw AudioExtractorError.readerFailed(reader.error?.localizedDescription ?? "could not start reading")
@@ -74,10 +76,12 @@ enum AudioExtractor {
 
     /// Streams decoded PCM into `fileURL` behind a placeholder header, then
     /// patches the header with the final sizes — avoids buffering hours of audio.
-    private static func writeWAV(from output: AVAssetReaderTrackOutput,
-                                 reader: AVAssetReader, to fileURL: URL,
-                                 durationSeconds: Double = 0,
-                                 onProgress: (@Sendable (Double) -> Void)? = nil) throws {
+    private static func writeWAV(
+        from output: AVAssetReaderTrackOutput,
+        reader: AVAssetReader, to fileURL: URL,
+        durationSeconds: Double = 0,
+        onProgress: (@Sendable (Double) -> Void)? = nil
+    ) throws {
         FileManager.default.createFile(atPath: fileURL.path, contents: nil)
         let handle = try FileHandle(forWritingTo: fileURL)
         defer { try? handle.close() }
@@ -100,8 +104,9 @@ enum AudioExtractor {
             guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
             var length = 0
             var pointer: UnsafeMutablePointer<CChar>?
-            CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: nil,
-                                        totalLengthOut: &length, dataPointerOut: &pointer)
+            CMBlockBufferGetDataPointer(
+                blockBuffer, atOffset: 0, lengthAtOffsetOut: nil,
+                totalLengthOut: &length, dataPointerOut: &pointer)
             if let pointer, length > 0 {
                 guard UInt64(pcmBytes) + UInt64(length) <= UInt64(UInt32.max) - 36 else {
                     throw AudioExtractorError.readerFailed("audio exceeds the 4 GiB WAV limit")
@@ -127,13 +132,13 @@ enum AudioExtractor {
         append(UInt32(36 + dataLength))
         data.append(contentsOf: Array("WAVE".utf8))
         data.append(contentsOf: Array("fmt ".utf8))
-        append(UInt32(16))                     // fmt chunk size
-        append(UInt16(1))                      // PCM
-        append(UInt16(1))                      // mono
-        append(UInt32(16_000))                 // sample rate
-        append(UInt32(16_000 * 2))             // byte rate
-        append(UInt16(2))                      // block align
-        append(UInt16(16))                     // bits per sample
+        append(UInt32(16))  // fmt chunk size
+        append(UInt16(1))  // PCM
+        append(UInt16(1))  // mono
+        append(UInt32(16_000))  // sample rate
+        append(UInt32(16_000 * 2))  // byte rate
+        append(UInt16(2))  // block align
+        append(UInt16(16))  // bits per sample
         data.append(contentsOf: Array("data".utf8))
         append(dataLength)
         return data

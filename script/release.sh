@@ -3,11 +3,10 @@ set -euo pipefail
 
 # One-command release:
 #   guards (clean master, up to date, new version, CHANGELOG entry)
-#   -> version-stamp commit
-#   -> notarized DMG + Sparkle publish (release_update.sh)
-#   -> annotated git tag, pushed
-#   -> GitHub release on the main repo with the DMG attached,
-#      using this version's CHANGELOG section as the notes
+#   -> version-stamp commit + complete test/build gates
+#   -> notarized and verified DMG
+#   -> annotated tag + canonical GitHub release
+#   -> rolling download asset + Sparkle appcast (published last)
 #
 # Usage: script/release.sh 2.3.1
 
@@ -19,6 +18,8 @@ cd "$ROOT_DIR"
 
 fail() { echo "error: $*" >&2; exit 1; }
 
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+  || fail "version must be stable SemVer in MAJOR.MINOR.PATCH form."
 [[ -z "$(git status --porcelain)" ]] || fail "working tree not clean; commit or stash first."
 [[ "$(git rev-parse --abbrev-ref HEAD)" == "master" ]] || fail "releases are cut from master."
 git fetch origin --quiet
@@ -41,12 +42,41 @@ if ! git diff --quiet; then
   git commit -m "Stamp release builds as version $VERSION"
 fi
 
-"$ROOT_DIR/script/release_update.sh" "$VERSION"
+# Fail before notarization or publication if any behavioral, parity, or
+# compiler-warning gate regressed.
+"$ROOT_DIR/script/run_tests.sh"
+swift build -c release -Xswiftc -warnings-as-errors
+
+export APP_VERSION="$VERSION"
+"$ROOT_DIR/script/build_and_run.sh" --release
+
+mkdir -p "$ARCHIVE_DIR"
+cp "$ROOT_DIR/dist/Cue.dmg" "$ARCHIVE_DIR/Cue-$VERSION.dmg"
+hdiutil verify "$ARCHIVE_DIR/Cue-$VERSION.dmg" >/dev/null
+codesign --verify --verbose=2 "$ARCHIVE_DIR/Cue-$VERSION.dmg"
+xcrun stapler validate "$ARCHIVE_DIR/Cue-$VERSION.dmg"
+python3 "$ROOT_DIR/script/audit_dependencies.py" \
+  --output "$ARCHIVE_DIR/Cue-$VERSION-dependency-audit.json"
+python3 "$ROOT_DIR/script/generate_sbom.py" --version "$VERSION" \
+  --output "$ARCHIVE_DIR/Cue-$VERSION-sbom.cdx.json"
+(
+  cd "$ARCHIVE_DIR"
+  shasum -a 256 "Cue-$VERSION.dmg" > "Cue-$VERSION.dmg.sha256"
+)
 
 git tag -a "v$VERSION" -m "Cue $VERSION"
-git push origin master "v$VERSION"
-gh release create "v$VERSION" "$ARCHIVE_DIR/Cue-$VERSION.dmg" \
+git push --atomic origin master "v$VERSION"
+gh release create "v$VERSION" \
+  "$ARCHIVE_DIR/Cue-$VERSION.dmg" \
+  "$ARCHIVE_DIR/Cue-$VERSION.dmg.sha256" \
+  "$ARCHIVE_DIR/Cue-$VERSION-sbom.cdx.json" \
+  "$ARCHIVE_DIR/Cue-$VERSION-dependency-audit.json" \
   --repo "$MAIN_REPO" --title "Cue $VERSION" --notes "$NOTES"
 
+# The public appcast is the final publication point. If this step fails, the
+# canonical tag and release remain valid and release_update.sh can be safely
+# re-run without rebuilding by setting CUE_SKIP_RELEASE_BUILD=1.
+CUE_SKIP_RELEASE_BUILD=1 "$ROOT_DIR/script/release_update.sh" "$VERSION"
+
 echo ""
-echo "Released Cue $VERSION: tagged, on GitHub, and live in the update feed."
+echo "Released Cue $VERSION: tested, notarized, tagged, on GitHub, and live in the update feed."

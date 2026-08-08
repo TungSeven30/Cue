@@ -221,14 +221,14 @@ enum AppSettingPresets {
                 SettingsPreset(label: "Faster Large v3 Turbo", value: AppSettingsStore.fasterTurboModel),
                 SettingsPreset(label: "Faster Large v3", value: "large-v3"),
                 SettingsPreset(label: "Faster Medium", value: "medium"),
-                SettingsPreset(label: "Faster Small", value: "small")
+                SettingsPreset(label: "Faster Small", value: "small"),
             ]
         case .mlxWhisper:
             return [
                 SettingsPreset(label: "Large v3 Turbo", value: AppSettingsStore.mlxTurboModel),
                 SettingsPreset(label: "Large v3", value: "mlx-community/whisper-large-v3"),
                 SettingsPreset(label: "Medium", value: "mlx-community/whisper-medium"),
-                SettingsPreset(label: "Small", value: "mlx-community/whisper-small")
+                SettingsPreset(label: "Small", value: "mlx-community/whisper-small"),
             ]
         case .fasterWhisper:
             return [
@@ -238,12 +238,12 @@ enum AppSettingPresets {
                 SettingsPreset(label: "Medium", value: "medium"),
                 SettingsPreset(label: "Small", value: "small"),
                 SettingsPreset(label: "Base", value: "base"),
-                SettingsPreset(label: "Tiny", value: "tiny")
+                SettingsPreset(label: "Tiny", value: "tiny"),
             ]
         case .qwen3ASR:
             return [
                 SettingsPreset(label: "Qwen3 ASR 1.7B (best)", value: AppSettingsStore.qwen3DefaultModel),
-                SettingsPreset(label: "Qwen3 ASR 0.6B (fast)", value: "Qwen/Qwen3-ASR-0.6B")
+                SettingsPreset(label: "Qwen3 ASR 0.6B (fast)", value: "Qwen/Qwen3-ASR-0.6B"),
             ]
         case .native:
             return ModelDownloader.models.map { model in
@@ -275,7 +275,7 @@ enum AppSettingPresets {
         SettingsPreset(label: "German", value: "de"),
         SettingsPreset(label: "Indonesian", value: "id"),
         SettingsPreset(label: "Thai", value: "th"),
-        SettingsPreset(label: "Vietnamese", value: "vi")
+        SettingsPreset(label: "Vietnamese", value: "vi"),
     ]
 
     static let translationSourceLanguages: [SettingsPreset] = [
@@ -289,7 +289,7 @@ enum AppSettingPresets {
         SettingsPreset(label: "German", value: "German"),
         SettingsPreset(label: "Indonesian", value: "Indonesian"),
         SettingsPreset(label: "Thai", value: "Thai"),
-        SettingsPreset(label: "Vietnamese", value: "Vietnamese")
+        SettingsPreset(label: "Vietnamese", value: "Vietnamese"),
     ]
 
     static let translationTargetLanguages: [SettingsPreset] = [
@@ -302,7 +302,7 @@ enum AppSettingPresets {
         SettingsPreset(label: "German", value: "German"),
         SettingsPreset(label: "Indonesian", value: "Indonesian"),
         SettingsPreset(label: "Thai", value: "Thai"),
-        SettingsPreset(label: "Vietnamese", value: "Vietnamese")
+        SettingsPreset(label: "Vietnamese", value: "Vietnamese"),
     ]
 
     // The provider (OpenAI, Anthropic, Google) is inferred from the model
@@ -320,7 +320,7 @@ enum AppSettingPresets {
         SettingsPreset(label: "Gemini 3.5 Flash-Lite", value: "gemini-3.5-flash-lite"),
         SettingsPreset(label: "Local server (LM Studio / Ollama)", value: "local/"),
         SettingsPreset(label: "OpenRouter: Qwen 3.7 Max", value: "openrouter/qwen/qwen3.7-max"),
-        SettingsPreset(label: "OpenRouter: Qwen 3.7 Plus", value: "openrouter/qwen/qwen3.7-plus")
+        SettingsPreset(label: "OpenRouter: Qwen 3.7 Plus", value: "openrouter/qwen/qwen3.7-plus"),
     ]
 }
 
@@ -357,6 +357,7 @@ final class AppSettingsStore: ObservableObject {
     @Published var anthropicAPIKey: String { didSet { save() } }
     @Published var googleAPIKey: String { didSet { save() } }
     @Published var openRouterAPIKey: String { didSet { save() } }
+    @Published var secretPersistenceError: String? = nil
     /// Base URL of the OpenAI-compatible server used by `local/` models.
     @Published var localTranslationEndpoint: String { didSet { save() } }
     @Published var translationSourceLanguage: String { didSet { save() } }
@@ -446,15 +447,15 @@ final class AppSettingsStore: ObservableObject {
     /// LM Studio's default server address.
     nonisolated static let defaultLocalTranslationEndpoint = "http://localhost:1234/v1"
     static let defaultTranslationPrompt = """
-    You are a professional subtitle translator. Translate faithfully and naturally for the target audience.
-    Preserve meaning, tone, names, numbers, and cultural context. Keep each subtitle concise, readable, and aligned to the original timing.
-    Do not add explanations, notes, censorship, markdown, or extra segments.
-    """
+        You are a professional subtitle translator. Translate faithfully and naturally for the target audience.
+        Preserve meaning, tone, names, numbers, and cultural context. Keep each subtitle concise, readable, and aligned to the original timing.
+        Do not add explanations, notes, censorship, markdown, or extra segments.
+        """
 
     init(
         defaults: UserDefaults = .standard,
         readSecret: @escaping (String) -> String? = { KeychainStore.read(account: $0) },
-        writeSecret: @escaping (String, String) -> Void = { KeychainStore.write($0, account: $1) }
+        writeSecret: @escaping (String, String) -> Bool = { KeychainStore.write($0, account: $1) }
     ) {
         self.defaults = defaults
         self.readSecret = readSecret
@@ -487,7 +488,8 @@ final class AppSettingsStore: ObservableObject {
         autoArchiveDays = defaults.object(forKey: "autoArchiveDays") as? Int ?? 30
         afterQueueAction = AfterQueueAction(rawValue: defaults.string(forKey: "afterQueueAction") ?? "") ?? .doNothing
         if let data = defaults.data(forKey: "watchFolders"),
-           let decoded = try? JSONDecoder().decode([WatchFolder].self, from: data) {
+            let decoded = try? JSONDecoder().decode([WatchFolder].self, from: data)
+        {
             watchFolders = decoded
         } else if let legacyPath = defaults.string(forKey: "watchFolderPath"), !legacyPath.isEmpty {
             // One-time migration from the single-folder era (v2.2.x): the
@@ -496,7 +498,8 @@ final class AppSettingsStore: ObservableObject {
             var migrated = WatchFolder(path: legacyPath)
             migrated.enabled = defaults.bool(forKey: "watchFolderEnabled")
             if let profileData = defaults.data(forKey: "watchFolderProfile"),
-               let profile = try? JSONDecoder().decode(JobSettingsOverrides.self, from: profileData) {
+                let profile = try? JSONDecoder().decode(JobSettingsOverrides.self, from: profileData)
+            {
                 migrated.profile = profile
             }
             watchFolders = [migrated]
@@ -526,8 +529,13 @@ final class AppSettingsStore: ObservableObject {
             resolvedOpenAIKey = stored
         } else if let legacy = defaults.string(forKey: "openAIAPIKey"), !legacy.isEmpty {
             resolvedOpenAIKey = legacy
-            writeSecret(legacy, Self.apiKeyAccount)
-            defaults.removeObject(forKey: "openAIAPIKey")
+            // Never erase the only durable copy until Keychain confirms the
+            // replacement. A denied/locked Keychain retries next launch.
+            if writeSecret(legacy, Self.apiKeyAccount) {
+                defaults.removeObject(forKey: "openAIAPIKey")
+            } else {
+                secretPersistenceError = "The OpenAI API key could not be moved to Keychain. The existing settings copy was kept and Cue will retry."
+            }
         } else {
             resolvedOpenAIKey = ""
             defaults.removeObject(forKey: "openAIAPIKey")
@@ -550,7 +558,7 @@ final class AppSettingsStore: ObservableObject {
     }
 
     private let readSecret: (String) -> String?
-    private let writeSecret: (String, String) -> Void
+    private let writeSecret: (String, String) -> Bool
     private var isApplyingPreset = false
     private var isApplyingQualityPreset = false
     private var persistedAPIKey = ""
@@ -630,20 +638,32 @@ final class AppSettingsStore: ObservableObject {
         // when a key itself changed so typing elsewhere (e.g. the prompt
         // editor) does not trigger a Keychain write per keystroke.
         if openAIAPIKey != persistedAPIKey {
-            writeSecret(openAIAPIKey, Self.apiKeyAccount)
-            persistedAPIKey = openAIAPIKey
+            if writeSecret(openAIAPIKey, Self.apiKeyAccount) {
+                persistedAPIKey = openAIAPIKey
+            } else {
+                secretPersistenceError = "The OpenAI API key could not be saved to Keychain. Cue will retry; the key may be lost if the app quits first."
+            }
         }
         if anthropicAPIKey != persistedAnthropicKey {
-            writeSecret(anthropicAPIKey, Self.anthropicKeyAccount)
-            persistedAnthropicKey = anthropicAPIKey
+            if writeSecret(anthropicAPIKey, Self.anthropicKeyAccount) {
+                persistedAnthropicKey = anthropicAPIKey
+            } else {
+                secretPersistenceError = "The Anthropic API key could not be saved to Keychain. Cue will retry; the key may be lost if the app quits first."
+            }
         }
         if openRouterAPIKey != persistedOpenRouterKey {
-            writeSecret(openRouterAPIKey, Self.openRouterKeyAccount)
-            persistedOpenRouterKey = openRouterAPIKey
+            if writeSecret(openRouterAPIKey, Self.openRouterKeyAccount) {
+                persistedOpenRouterKey = openRouterAPIKey
+            } else {
+                secretPersistenceError = "The OpenRouter API key could not be saved to Keychain. Cue will retry; the key may be lost if the app quits first."
+            }
         }
         if googleAPIKey != persistedGoogleKey {
-            writeSecret(googleAPIKey, Self.googleKeyAccount)
-            persistedGoogleKey = googleAPIKey
+            if writeSecret(googleAPIKey, Self.googleKeyAccount) {
+                persistedGoogleKey = googleAPIKey
+            } else {
+                secretPersistenceError = "The Google API key could not be saved to Keychain. Cue will retry; the key may be lost if the app quits first."
+            }
         }
     }
 
@@ -723,7 +743,9 @@ final class AppSettingsStore: ObservableObject {
                 whisperModel = Self.mlxTurboModel
             }
         case .fasterWhisper:
-            if force || trimmedModel.isEmpty || trimmedModel.hasPrefix("mlx-community/whisper-") || trimmedModel.hasPrefix("Qwen/") || trimmedModel.hasPrefix("ggml-") {
+            if force || trimmedModel.isEmpty || trimmedModel.hasPrefix("mlx-community/whisper-") || trimmedModel.hasPrefix("Qwen/")
+                || trimmedModel.hasPrefix("ggml-")
+            {
                 whisperModel = Self.fasterTurboModel
             }
         case .qwen3ASR:

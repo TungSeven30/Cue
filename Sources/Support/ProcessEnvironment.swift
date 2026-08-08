@@ -16,7 +16,8 @@ enum ProcessEnvironment {
         let ordered = toolDirectories + existing.split(separator: ":").map(String.init)
 
         var seen = Set<String>()
-        environment["PATH"] = ordered
+        environment["PATH"] =
+            ordered
             .filter { seen.insert($0).inserted }
             .joined(separator: ":")
         return environment

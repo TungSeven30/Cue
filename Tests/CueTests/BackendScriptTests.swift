@@ -42,17 +42,17 @@ struct BackendScriptTests {
         try Data([0x01, 0x02, 0x03]).write(to: input)
 
         let driver = """
-        import importlib.util, pathlib, sys
-        spec = importlib.util.spec_from_file_location("backend", sys.argv[1])
-        m = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(m)
-        inp = pathlib.Path(sys.argv[2])
-        tmp = pathlib.Path(sys.argv[3])
-        result = m.prepare_audio(inp, tmp, True)
-        print("RESULT", result)
-        print("TRUEKEY", m.audio_cache_path(inp, True))
-        print("FALSEKEY", m.audio_cache_path(inp, False))
-        """
+            import importlib.util, pathlib, sys
+            spec = importlib.util.spec_from_file_location("backend", sys.argv[1])
+            m = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m)
+            inp = pathlib.Path(sys.argv[2])
+            tmp = pathlib.Path(sys.argv[3])
+            result = m.prepare_audio(inp, tmp, True)
+            print("RESULT", result)
+            print("TRUEKEY", m.audio_cache_path(inp, True))
+            print("FALSEKEY", m.audio_cache_path(inp, False))
+            """
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")

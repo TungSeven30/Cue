@@ -26,8 +26,6 @@ INFO_PLIST="$APP_CONTENTS/Info.plist"
 ICON_FILE="AppIcon.icns"
 ICON_SOURCE="$ROOT_DIR/Resources/$ICON_FILE"
 
-pkill -x "$APP_NAME" >/dev/null 2>&1 || true
-
 build_bundle() {
   local configuration="${1:-debug}"
   local swift_args=()
@@ -47,10 +45,14 @@ build_bundle() {
   chmod +x "$APP_BINARY"
   # Sparkle ships as a framework SwiftPM leaves next to the binary; embed it
   # and point the binary's rpath at the bundle's Frameworks directory.
-  if [[ -d "$BUILD_DIR/Sparkle.framework" ]]; then
-    mkdir -p "$APP_CONTENTS/Frameworks"
-    cp -R "$BUILD_DIR/Sparkle.framework" "$APP_CONTENTS/Frameworks/"
-    install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_BINARY" 2>/dev/null || true
+  if [[ ! -d "$BUILD_DIR/Sparkle.framework" ]]; then
+    echo "error: SwiftPM did not produce Sparkle.framework at $BUILD_DIR." >&2
+    exit 1
+  fi
+  mkdir -p "$APP_CONTENTS/Frameworks"
+  cp -R "$BUILD_DIR/Sparkle.framework" "$APP_CONTENTS/Frameworks/"
+  if ! otool -l "$APP_BINARY" | grep -Fq '@executable_path/../Frameworks'; then
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_BINARY"
   fi
   if [[ -f "$ICON_SOURCE" ]]; then
     cp "$ICON_SOURCE" "$APP_RESOURCES/$ICON_FILE"
@@ -61,29 +63,9 @@ build_bundle() {
       cp "$ROOT_DIR/Resources/$menubar_icon" "$APP_RESOURCES/$menubar_icon"
     fi
   done
-  # whisper.cpp compiles its Metal shaders at runtime from ggml-metal.metal.
-  # SwiftPM ships that file in a resource bundle whose accessor looks at the
-  # .app root (where codesign forbids content), and the raw file cannot
-  # compile anyway: Metal's runtime compiler has no include path for its
-  # `#include "ggml-common.h"`. Inline the header (upstream's embed step does
-  # the same merge) and ship the self-contained shader in Resources;
+  # Ship the same self-contained runtime shader used by integration tests.
   # WhisperCppEngine points ggml at it via GGML_METAL_PATH_RESOURCES.
-  local ggml_src="$ROOT_DIR/.build/checkouts/whisper.cpp/ggml/src"
-  if [[ ! -f "$ggml_src/ggml-common.h" || ! -f "$ggml_src/ggml-metal.metal" ]]; then
-    echo "error: whisper.cpp shader sources not found under $ggml_src;" >&2
-    echo "the checkout layout changed — update the shader-merge step." >&2
-    exit 1
-  fi
-  awk '/#include "ggml-common.h"/ {
-         while ((getline line < common) > 0) print line
-         close(common); next
-       } { print }' \
-    common="$ggml_src/ggml-common.h" \
-    "$ggml_src/ggml-metal.metal" > "$APP_RESOURCES/ggml-metal.metal"
-  grep -q 'ggml-common.h' "$APP_RESOURCES/ggml-metal.metal" && {
-    echo "error: ggml-common.h was not inlined into ggml-metal.metal" >&2
-    exit 1
-  }
+  "$ROOT_DIR/script/prepare_metal_shader.sh" "$APP_RESOURCES"
 
   cat >"$INFO_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -145,6 +127,8 @@ PLIST
       codesign --force --deep --sign - "$APP_BUNDLE"
     fi
   fi
+
+  "$ROOT_DIR/script/verify_bundle.sh" "$APP_BUNDLE" "$APP_VERSION"
 }
 
 # Builds a Developer ID-signed, notarized DMG ready to share with other Macs.
@@ -169,12 +153,14 @@ make_release_dmg() {
   local notary_profile="${NOTARY_PROFILE:-whisperdesk-notary}"
 
   build_bundle release
+  "$ROOT_DIR/script/verify_packaged_inference.sh" "$APP_BUNDLE"
   # Replace the local dev signature with the distribution one: Developer ID,
   # hardened runtime, and a secure timestamp are all required by notarization.
   # --deep so the embedded Sparkle framework gets the Developer ID
   # signature too; notarization rejects mixed-identity nesting.
   codesign --force --deep --options runtime --timestamp --sign "$identity" "$APP_BUNDLE"
   codesign --verify --strict --verbose=2 "$APP_BUNDLE"
+  "$ROOT_DIR/script/verify_bundle.sh" "$APP_BUNDLE" "$APP_VERSION"
 
   local staging
   staging="$(mktemp -d)"
@@ -203,11 +189,13 @@ make_release_dmg() {
 }
 
 open_app() {
+  pkill -x "$APP_NAME" >/dev/null 2>&1 || true
   /usr/bin/open -n "$APP_BUNDLE"
 }
 
 open_installed_app() {
   local app_path="$1"
+  pkill -x "$APP_NAME" >/dev/null 2>&1 || true
   /usr/bin/open -n "$app_path"
 }
 
@@ -220,6 +208,7 @@ register_app() {
 }
 
 install_app() {
+  pkill -x "$APP_NAME" >/dev/null 2>&1 || true
   build_bundle release
 
   local target_dir="$INSTALL_DIR"
@@ -269,11 +258,15 @@ case "$MODE" in
     sleep 1
     pgrep -x "$APP_NAME" >/dev/null
     ;;
+  --bundle|bundle|--package|package)
+    build_bundle release
+    echo "Packaged and verified: $APP_BUNDLE"
+    ;;
   --release|release)
     make_release_dmg
     ;;
   *)
-    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify|--install|--release]" >&2
+    echo "usage: $0 [run|--debug|--logs|--telemetry|--verify|--install|--bundle|--release]" >&2
     exit 2
     ;;
 esac

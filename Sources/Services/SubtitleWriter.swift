@@ -47,14 +47,15 @@ enum SubtitleWriter {
     }
 
     static func writeSRT(segments: [TranscriptionSegment], to url: URL) throws {
-        let srt = segments.map { segment in
-            """
-            \(segment.id)
-            \(formatTimestamp(segment.start)) --> \(formatTimestamp(segment.end))
-            \(sanitizedCueText(segment.text))
-            """
-        }
-        .joined(separator: "\n\n") + "\n"
+        let srt =
+            segments.map { segment in
+                """
+                \(segment.id)
+                \(formatTimestamp(segment.start)) --> \(formatTimestamp(segment.end))
+                \(sanitizedCueText(segment.text))
+                """
+            }
+            .joined(separator: "\n\n") + "\n"
 
         try srt.write(to: url, atomically: true, encoding: .utf8)
     }
@@ -73,7 +74,8 @@ enum SubtitleWriter {
     }
 
     static func writeText(segments: [TranscriptionSegment], to url: URL) throws {
-        let text = segments
+        let text =
+            segments
             .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: "\n")
@@ -82,11 +84,12 @@ enum SubtitleWriter {
     }
 
     static func writeMarkdown(segments: [TranscriptionSegment], to url: URL) throws {
-        let markdown = segments.map { segment in
-            let singleLine = sanitizedCueText(segment.text).replacingOccurrences(of: "\n", with: " / ")
-            return "- `\(formatDisplayTimestamp(segment.start)) - \(formatDisplayTimestamp(segment.end))` \(singleLine)"
-        }
-        .joined(separator: "\n") + "\n"
+        let markdown =
+            segments.map { segment in
+                let singleLine = sanitizedCueText(segment.text).replacingOccurrences(of: "\n", with: " / ")
+                return "- `\(formatDisplayTimestamp(segment.start)) - \(formatDisplayTimestamp(segment.end))` \(singleLine)"
+            }
+            .joined(separator: "\n") + "\n"
         try markdown.write(to: url, atomically: true, encoding: .utf8)
     }
 

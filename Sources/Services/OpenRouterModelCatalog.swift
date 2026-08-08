@@ -52,7 +52,7 @@ enum OpenRouterModelCatalog {
         return envelope.data
             .compactMap { entry -> OpenRouterModel? in
                 guard let id = entry.id, !id.isEmpty,
-                      let name = entry.name, !name.isEmpty
+                    let name = entry.name, !name.isEmpty
                 else { return nil }
                 return OpenRouterModel(
                     id: id,
@@ -64,10 +64,10 @@ enum OpenRouterModelCatalog {
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
-    static func fetch() async throws -> [OpenRouterModel] {
+    static func fetch(httpClient: any HTTPClient = URLSessionHTTPClient()) async throws -> [OpenRouterModel] {
         var request = URLRequest(url: listURL)
         request.timeoutInterval = 30
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await httpClient.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw TranslationServiceError.apiError("OpenRouter's model list could not be loaded. Check your connection and try again.")
         }

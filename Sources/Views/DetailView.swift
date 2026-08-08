@@ -79,7 +79,8 @@ struct DetailView: View {
         // The overlay and highlight follow whichever text the user is looking
         // at: translation on the translation tab, else the original — live
         // partials included while a job streams.
-        let segments = tab == .translation && !model.displayTranslatedSegments.isEmpty
+        let segments =
+            tab == .translation && !model.displayTranslatedSegments.isEmpty
             ? model.displayTranslatedSegments
             : model.displayTranscriptSegments
         playerController.updateSegments(segments)

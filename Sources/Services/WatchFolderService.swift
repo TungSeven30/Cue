@@ -95,7 +95,7 @@ final class WatchFolderService: ObservableObject {
         let keys: Set<URLResourceKey> = [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]
         return MediaFileTypes.collectMediaFiles(under: folderURL).compactMap { url in
             guard let values = try? url.resourceValues(forKeys: keys),
-                  values.isRegularFile == true
+                values.isRegularFile == true
             else { return nil }
             return FileObservation(
                 path: url.path,

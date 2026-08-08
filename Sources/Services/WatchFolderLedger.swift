@@ -5,6 +5,8 @@ import Foundation
 /// path|size|mtime fingerprint jobs use, so replacing a file re-runs it.
 @MainActor
 final class WatchFolderLedger {
+    nonisolated static let persistenceDidFail = Notification.Name("Cue.WatchFolderLedger.persistenceDidFail")
+
     enum Outcome: String, Codable {
         case success
         case failure
@@ -12,19 +14,29 @@ final class WatchFolderLedger {
 
     private var entries: [String: Outcome]
     private let fileURL: URL
+    private(set) var startupError: String? = nil
 
     init(baseURL: URL? = nil) {
-        let resolvedBase = baseURL
+        let resolvedBase =
+            baseURL
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         let folder = resolvedBase.appendingPathComponent("Cue", isDirectory: true)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         fileURL = folder.appendingPathComponent("watch-ledger.json")
-        if let data = try? Data(contentsOf: fileURL),
-           let decoded = try? JSONDecoder().decode([String: Outcome].self, from: data) {
-            entries = decoded
-        } else {
-            entries = [:]
+        entries = [:]
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+            let data = try Data(contentsOf: fileURL)
+            entries = try JSONDecoder().decode([String: Outcome].self, from: data)
+        } catch {
+            let backup = fileURL.appendingPathExtension("corrupt")
+            try? FileManager.default.removeItem(at: backup)
+            try? FileManager.default.copyItem(at: fileURL, to: backup)
+            let message =
+                "Could not read watch-folder history: \(error.localizedDescription). The original was preserved at \(backup.path); files may be queued again."
+            startupError = message
+            Self.reportFailure(message)
         }
     }
 
@@ -72,8 +84,18 @@ final class WatchFolderLedger {
     }
 
     private func persist() {
-        if let data = try? JSONEncoder().encode(entries) {
-            try? data.write(to: fileURL, options: .atomic)
+        do {
+            let data = try JSONEncoder().encode(entries)
+            try data.write(to: fileURL, options: .atomic)
+        } catch {
+            Self.reportFailure(
+                "Could not save watch-folder history: \(error.localizedDescription). Files may be queued again after relaunch."
+            )
         }
+    }
+
+    private nonisolated static func reportFailure(_ message: String) {
+        NSLog("Cue: %@", message)
+        NotificationCenter.default.post(name: persistenceDidFail, object: message)
     }
 }

@@ -134,13 +134,13 @@ struct SnapshotResolutionTests {
     /// (UserDefaults/Keychain). decodeIfPresent fills defaults.
     private func makeSnapshot() throws -> JobSettingsSnapshot {
         let json = """
-        {
-          "sourceLanguage": "auto",
-          "whisperModel": "mlx-community/whisper-large-v3-turbo",
-          "whisperBackend": "mlx-whisper",
-          "openAIModel": "gpt-5.5"
-        }
-        """
+            {
+              "sourceLanguage": "auto",
+              "whisperModel": "mlx-community/whisper-large-v3-turbo",
+              "whisperBackend": "mlx-whisper",
+              "openAIModel": "gpt-5.5"
+            }
+            """
         return try JSONDecoder().decode(JobSettingsSnapshot.self, from: Data(json.utf8))
     }
 

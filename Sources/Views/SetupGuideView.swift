@@ -24,10 +24,12 @@ struct SetupGuideView: View {
                 Spacer()
             }
 
-            Text("Cue works out of the box. The items below are optional engines and features. To add one, open Terminal (Applications → Utilities), paste its command, press Return, and wait for it to finish. Then come back and hit Check Again.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Text(
+                "Cue works out of the box. The items below are optional engines and features. To add one, open Terminal (Applications → Utilities), paste its command, press Return, and wait for it to finish. Then come back and hit Check Again."
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
 
             GroupBox {
                 HStack(alignment: .top, spacing: 10) {

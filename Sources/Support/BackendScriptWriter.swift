@@ -80,6 +80,26 @@ def bool_arg(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def format_timestamp(seconds: float) -> str:
+    total_millis = max(0, round(seconds * 1000))
+    millis = total_millis % 1000
+    total_seconds = total_millis // 1000
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
+def write_srt(output_path: Path, segments) -> None:
+    with output_path.open("w", encoding="utf-8") as handle:
+        for index, segment in enumerate(segments, start=1):
+            handle.write(f"{index}\n")
+            handle.write(
+                f"{format_timestamp(segment['start'])} --> {format_timestamp(segment['end'])}\n"
+            )
+            handle.write(f"{segment['text']}\n\n")
+
+
 def call_with_supported_kwargs(function, *args, **kwargs):
     try:
         signature = inspect.signature(function)
@@ -535,8 +555,13 @@ def main() -> int:
                         args.no_speech_threshold,
                     )
                 emit("complete", f"Transcription complete with {used_backend}.", 1.0)
-                json.dump({"backend": used_backend, "segments": segments}, sys.stdout, ensure_ascii=False)
-                sys.stdout.write("\n")
+                if args.json:
+                    json.dump({"backend": used_backend, "segments": segments}, sys.stdout, ensure_ascii=False)
+                    sys.stdout.write("\n")
+                else:
+                    output_path = input_path.with_suffix(".srt")
+                    write_srt(output_path, segments)
+                    print(output_path)
                 return 0
             except ModuleNotFoundError as exc:
                 if exc.name == BACKEND_MODULES.get(backend):

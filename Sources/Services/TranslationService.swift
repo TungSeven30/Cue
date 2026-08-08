@@ -91,7 +91,13 @@ struct TranslationCredentials {
     let localEndpoint: String
 }
 
-struct TranslationService {
+struct TranslationService: Sendable {
+    private let httpClient: any HTTPClient
+
+    init(httpClient: any HTTPClient = URLSessionHTTPClient()) {
+        self.httpClient = httpClient
+    }
+
     @MainActor
     func translate(
         segments: [TranscriptionSegment],
@@ -113,7 +119,8 @@ struct TranslationService {
             transcriptionSetting: sourceLanguage
         )
         let targetLanguage = settings.translationTargetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prompt = credentials.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let prompt =
+            credentials.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? AppSettingsStore.defaultTranslationPrompt
             : credentials.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -196,7 +203,8 @@ struct TranslationService {
             }
 
             var firstError: Error?
-            let results = outcomes
+            let results =
+                outcomes
                 .compactMap { try? $0.get() }
                 .sorted { $0.chunkNumber < $1.chunkNumber }
             for outcome in outcomes {
@@ -216,7 +224,8 @@ struct TranslationService {
         }
 
         let untranslated = segments.filter { translatedByID[$0.id] == nil }.count
-        let completionDetail = untranslated > 0
+        let completionDetail =
+            untranslated > 0
             ? "Translation complete. \(untranslated) segment(s) kept their original text."
             : "Translation complete."
         progress(JobProgress(stage: .complete, detail: completionDetail, fraction: 1.0))
@@ -346,8 +355,8 @@ struct TranslationService {
         }
         switch error {
         case TranslationServiceError.validationFailed,
-             TranslationServiceError.responseTooLarge,
-             TranslationServiceError.invalidResponse:
+            TranslationServiceError.responseTooLarge,
+            TranslationServiceError.invalidResponse:
             return true
         default:
             return false
@@ -389,7 +398,7 @@ struct TranslationService {
             localEndpoint: localEndpoint
         )
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await httpClient.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw TranslationServiceError.invalidResponse
         }
@@ -404,22 +413,22 @@ struct TranslationService {
         switch detail {
         case .brief:
             return """
-            You write spoiler-free introductions for films based on their subtitles.
-            Write 1-3 short sentences introducing the setting, main characters, and premise — like the blurb on the back of a DVD box.
-            Do not reveal plot developments beyond the opening act, twists, or the ending.
-            Write the introduction in \(language).
-            Keep it under 280 characters so it fits on screen as a subtitle.
-            Return JSON only in the shape {"summary":"..."}.
-            """
+                You write spoiler-free introductions for films based on their subtitles.
+                Write 1-3 short sentences introducing the setting, main characters, and premise — like the blurb on the back of a DVD box.
+                Do not reveal plot developments beyond the opening act, twists, or the ending.
+                Write the introduction in \(language).
+                Keep it under 280 characters so it fits on screen as a subtitle.
+                Return JSON only in the shape {"summary":"..."}.
+                """
         case .detailed:
             return """
-            You write spoiler-free introductions for films based on their subtitles.
-            Write a detailed introduction of 5-8 sentences: the setting and era, the main characters and how they relate to each other, the premise that sets the story in motion, and the film's tone or genre — like the opening of a thoughtful review that gives nothing away.
-            Do not reveal plot developments beyond the opening act, twists, or the ending.
-            Write the introduction in \(language). Plain sentences only — no markdown, no headings, no lists.
-            Keep it under 900 characters; it will be shown as a sequence of subtitles.
-            Return JSON only in the shape {"summary":"..."}.
-            """
+                You write spoiler-free introductions for films based on their subtitles.
+                Write a detailed introduction of 5-8 sentences: the setting and era, the main characters and how they relate to each other, the premise that sets the story in motion, and the film's tone or genre — like the opening of a thoughtful review that gives nothing away.
+                Do not reveal plot developments beyond the opening act, twists, or the ending.
+                Write the introduction in \(language). Plain sentences only — no markdown, no headings, no lists.
+                Keep it under 900 characters; it will be shown as a sequence of subtitles.
+                Return JSON only in the shape {"summary":"..."}.
+                """
         }
     }
 
@@ -443,7 +452,7 @@ struct TranslationService {
             "summary": .object(["type": .string("string")])
         ]),
         "required": .array([.string("summary")]),
-        "additionalProperties": .bool(false)
+        "additionalProperties": .bool(false),
     ])
 
     private func translateChunk(
@@ -459,33 +468,34 @@ struct TranslationService {
         context: [TranslationContextPair]
     ) async throws -> [TranslatedSegment] {
         let systemPrompt = """
-        \(prompt)
+            \(prompt)
 
-        Source language: \(sourceLanguage).
-        Target language: \(targetLanguage).
-        Preserve segment count, ordering, ids, and timing alignment.
-        Keep lines concise for subtitles.
-        When earlier translated context is provided, keep terminology, names, tone, speaker register, and pronouns consistent with it. Never re-output context lines.
-        This is chunk \(chunkNumber) of \(totalChunks); do not mention chunking.
-        Return JSON only in the shape {"segments":[{"id":1,"text":"..."}]}.
-        """
+            Source language: \(sourceLanguage).
+            Target language: \(targetLanguage).
+            Preserve segment count, ordering, ids, and timing alignment.
+            Keep lines concise for subtitles.
+            When earlier translated context is provided, keep terminology, names, tone, speaker register, and pronouns consistent with it. Never re-output context lines.
+            This is chunk \(chunkNumber) of \(totalChunks); do not mention chunking.
+            Return JSON only in the shape {"segments":[{"id":1,"text":"..."}]}.
+            """
 
         var userText = ""
         if !context.isEmpty {
-            let contextLines = context
+            let contextLines =
+                context
                 .map { "\($0.source) => \($0.translation)" }
                 .joined(separator: "\n")
             userText += """
-            Already translated context from the preceding subtitles (for consistency only; do not include in the output):
-            \(contextLines)
+                Already translated context from the preceding subtitles (for consistency only; do not include in the output):
+                \(contextLines)
 
 
-            """
+                """
         }
         userText += """
-        Segments:
-        \(String(decoding: try JSONEncoder().encode(segments), as: UTF8.self))
-        """
+            Segments:
+            \(String(decoding: try JSONEncoder().encode(segments), as: UTF8.self))
+            """
 
         let provider = TranslationProvider.infer(from: model)
         let request = try Self.makeRequest(
@@ -497,7 +507,7 @@ struct TranslationService {
             localEndpoint: localEndpoint
         )
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await httpClient.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw TranslationServiceError.invalidResponse
         }
@@ -544,7 +554,7 @@ struct TranslationService {
                     model: model,
                     input: [
                         .init(role: "system", content: [.init(type: "input_text", text: systemPrompt)]),
-                        .init(role: "user", content: [.init(type: "input_text", text: userText)])
+                        .init(role: "user", content: [.init(type: "input_text", text: userText)]),
                     ],
                     text: .init(
                         verbosity: "low",
@@ -600,7 +610,8 @@ struct TranslationService {
             }
             let joined = base + "/chat/completions"
             guard !base.isEmpty, let url = URL(string: joined), url.scheme != nil, url.host != nil else {
-                throw TranslationServiceError.fatalAPIError("The local server URL \"\(localEndpoint)\" is not a valid URL. Set it in Settings (e.g. http://localhost:1234/v1).")
+                throw TranslationServiceError.fatalAPIError(
+                    "The local server URL \"\(localEndpoint)\" is not a valid URL. Set it in Settings (e.g. http://localhost:1234/v1).")
             }
             request = URLRequest(url: url)
             // No Authorization header: local servers need no API key. The
@@ -613,7 +624,7 @@ struct TranslationService {
                     model: wireModel,
                     messages: [
                         .init(role: "system", content: systemPrompt),
-                        .init(role: "user", content: userText)
+                        .init(role: "user", content: userText),
                     ],
                     response_format: .init(
                         type: "json_schema",
@@ -633,14 +644,16 @@ struct TranslationService {
             // catalog id the gateway expects on the wire.
             let wireModel = String(model.trimmingCharacters(in: .whitespacesAndNewlines).dropFirst("openrouter/".count))
             guard !wireModel.isEmpty else {
-                throw TranslationServiceError.fatalAPIError("Set an OpenRouter model id after the openrouter/ prefix (e.g. openrouter/qwen/qwen3.7-max), or pick one via Browse OpenRouter Models in Settings.")
+                throw TranslationServiceError.fatalAPIError(
+                    "Set an OpenRouter model id after the openrouter/ prefix (e.g. openrouter/qwen/qwen3.7-max), or pick one via Browse OpenRouter Models in Settings."
+                )
             }
             request.httpBody = try JSONEncoder().encode(
                 ChatCompletionsRequest(
                     model: wireModel,
                     messages: [
                         .init(role: "system", content: systemPrompt),
-                        .init(role: "user", content: userText)
+                        .init(role: "user", content: userText),
                     ],
                     response_format: .init(
                         type: "json_schema",
@@ -692,7 +705,8 @@ struct TranslationService {
                 // a generic parse failure.
                 let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
                 if let message = body?["error"] as? String
-                    ?? (body?["error"] as? [String: Any])?["message"] as? String {
+                    ?? (body?["error"] as? [String: Any])?["message"] as? String
+                {
                     throw TranslationServiceError.apiError("Local server error: \(message)")
                 }
                 throw TranslationServiceError.invalidResponse
@@ -705,9 +719,12 @@ struct TranslationService {
             // strict downstream validation rejects anything that isn't the
             // requested subtitle JSON, so falling back is safe.
             let candidates = [choice.message?.content, choice.message?.reasoning_content]
-            guard let content = candidates
-                .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
-                .first(where: { !$0.isEmpty }) else {
+            guard
+                let content =
+                    candidates
+                    .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
+                    .first(where: { !$0.isEmpty })
+            else {
                 throw TranslationServiceError.invalidResponse
             }
             return content
@@ -754,7 +771,8 @@ struct TranslationService {
             if sizeHints.contains(where: lowered.contains) {
                 return .responseTooLarge("\(name) rejected the request as too large (400): \(message ?? "request too large").")
             }
-            return .fatalAPIError("\(name) rejected the request (400): \(message ?? "invalid request"). Check the model in Settings supports structured JSON output.")
+            return .fatalAPIError(
+                "\(name) rejected the request (400): \(message ?? "invalid request"). Check the model in Settings supports structured JSON output.")
         }
         if let message {
             return .apiError("\(name) error (\(statusCode)): \(message)")
@@ -772,7 +790,7 @@ struct TranslationService {
         limit: Int = 8
     ) -> [TranslationContextPair] {
         guard let firstID = chunk.first?.id,
-              let chunkStart = segments.firstIndex(where: { $0.id == firstID })
+            let chunkStart = segments.firstIndex(where: { $0.id == firstID })
         else {
             return []
         }
@@ -797,14 +815,16 @@ struct TranslationService {
         }
         // Set comparison alone would let a duplicated id mask a dropped one.
         guard translated.count == segments.count else {
-            throw TranslationServiceError.validationFailed("Translation returned \(translated.count) segment(s) for \(segments.count) input segment(s) (duplicate ids).")
+            throw TranslationServiceError.validationFailed(
+                "Translation returned \(translated.count) segment(s) for \(segments.count) input segment(s) (duplicate ids).")
         }
     }
 
     private static func extractJSONObject(from text: String) -> String {
         var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix("```") {
-            trimmed = trimmed
+            trimmed =
+                trimmed
                 .replacingOccurrences(of: "```json", with: "")
                 .replacingOccurrences(of: "```JSON", with: "")
                 .replacingOccurrences(of: "```", with: "")
@@ -903,15 +923,15 @@ enum TranslationSchema {
                     "type": .string("object"),
                     "properties": .object([
                         "id": .object(["type": .string("integer")]),
-                        "text": .object(["type": .string("string")])
+                        "text": .object(["type": .string("string")]),
                     ]),
                     "required": .array([.string("id"), .string("text")]),
-                    "additionalProperties": .bool(false)
-                ])
+                    "additionalProperties": .bool(false),
+                ]),
             ])
         ]),
         "required": .array([.string("segments")]),
-        "additionalProperties": .bool(false)
+        "additionalProperties": .bool(false),
     ])
 }
 

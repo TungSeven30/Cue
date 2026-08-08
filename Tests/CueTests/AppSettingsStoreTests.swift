@@ -14,7 +14,7 @@ struct AppSettingsStoreTests {
     /// real Keychain (a read of the app's items from the unsigned test
     /// runner could pop a consent dialog).
     private func makeStore(defaults: UserDefaults) -> AppSettingsStore {
-        AppSettingsStore(defaults: defaults, readSecret: { _ in nil }, writeSecret: { _, _ in })
+        AppSettingsStore(defaults: defaults, readSecret: { _ in nil }, writeSecret: { _, _ in true })
     }
 
     @Test func freshInstallDefaultsToBuiltInEngine() {
@@ -119,6 +119,44 @@ struct AppSettingsStoreTests {
 
         store.openAIAPIKey = "sk-test"
         #expect(store.isTranslationReady)
+    }
+
+    @Test func failedLegacySecretMigrationKeepsPlaintextFallback() {
+        let (defaults, name) = makeSuite()
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set("sk-legacy", forKey: "openAIAPIKey")
+
+        let store = AppSettingsStore(
+            defaults: defaults,
+            readSecret: { _ in nil },
+            writeSecret: { _, _ in false }
+        )
+
+        #expect(store.openAIAPIKey == "sk-legacy")
+        #expect(defaults.string(forKey: "openAIAPIKey") == "sk-legacy")
+        #expect(store.secretPersistenceError != nil)
+    }
+
+    @Test func failedSecretEditRetriesOnNextSave() {
+        let (defaults, name) = makeSuite()
+        defer { defaults.removePersistentDomain(forName: name) }
+        var attempts = 0
+        let store = AppSettingsStore(
+            defaults: defaults,
+            readSecret: { _ in nil },
+            writeSecret: { _, _ in
+                attempts += 1
+                return false
+            }
+        )
+
+        store.openAIAPIKey = "sk-new"
+        let afterEdit = attempts
+        store.translationTargetLanguage = "French"
+
+        #expect(afterEdit >= 1)
+        #expect(attempts > afterEdit)
+        #expect(store.secretPersistenceError != nil)
     }
 
     // MARK: - .auto dispatch resolution

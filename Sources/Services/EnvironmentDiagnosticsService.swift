@@ -1,6 +1,14 @@
 import Foundation
 
-struct EnvironmentDiagnosticsService {
+protocol EnvironmentDiagnosing: Sendable {
+    func run(
+        translationAPIKey: String,
+        translationProvider: TranslationProvider,
+        selectedBackend: WhisperBackend
+    ) async -> [EnvironmentDiagnostic]
+}
+
+struct EnvironmentDiagnosticsService: EnvironmentDiagnosing {
     /// Decides which probe genuinely blocks the user's configuration. The
     /// built-in whisper.cpp engine ships in the app, so on `.native` (and
     /// `.auto`, which resolves to native at dispatch) nothing is required.
@@ -26,7 +34,7 @@ struct EnvironmentDiagnosticsService {
         translationProvider: TranslationProvider,
         selectedBackend: WhisperBackend
     ) async -> [EnvironmentDiagnostic] {
-        func optional(_ id: String) -> Bool {
+        @Sendable func optional(_ id: String) -> Bool {
             !Self.isRequired(diagnosticID: id, selectedBackend: selectedBackend)
         }
 
@@ -103,7 +111,8 @@ struct EnvironmentDiagnosticsService {
             state = .passed
         } else {
             title = "Translation API Key (\(providerLabel))"
-            detail = translationAPIKey.isEmpty
+            detail =
+                translationAPIKey.isEmpty
                 ? "No \(providerLabel) API key configured for the selected translation model."
                 : "\(providerLabel) API key is configured."
             recovery = "Add a \(providerLabel) API key in Settings before translating."
@@ -208,11 +217,13 @@ private func runProcess(_ command: [String]) -> ProcessProbeResult {
     process.waitUntilExit()
     drainGroup.wait()
 
-    let output = String(data: outputBox.data, encoding: .utf8)?
+    let output =
+        String(data: outputBox.data, encoding: .utf8)?
         .components(separatedBy: .newlines)
         .first?
         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    let error = String(data: errorBox.data, encoding: .utf8)?
+    let error =
+        String(data: errorBox.data, encoding: .utf8)?
         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
     return ProcessProbeResult(

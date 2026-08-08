@@ -139,9 +139,11 @@ struct SettingsView: View {
             } header: {
                 Label("Translation", systemImage: "character.bubble")
             } footer: {
-                Text("Use any OpenAI (gpt-…), Anthropic (claude-…), Google (gemini-…), or OpenRouter (openrouter/…) model — the provider and API key are chosen from the model name. Keys are stored in the Keychain. A local/… model needs no key — it talks to the OpenAI-compatible server at the Local server URL (LM Studio, Ollama).")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "Use any OpenAI (gpt-…), Anthropic (claude-…), Google (gemini-…), or OpenRouter (openrouter/…) model — the provider and API key are chosen from the model name. Keys are stored in the Keychain. A local/… model needs no key — it talks to the OpenAI-compatible server at the Local server URL (LM Studio, Ollama)."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             Section {

@@ -21,10 +21,11 @@ enum SourceVolume {
 
     /// Names currently under /Volumes (external disks and network shares).
     static func mountedVolumeNames() -> Set<String> {
-        let urls = FileManager.default.mountedVolumeURLs(
-            includingResourceValuesForKeys: nil,
-            options: [.skipHiddenVolumes]
-        ) ?? []
+        let urls =
+            FileManager.default.mountedVolumeURLs(
+                includingResourceValuesForKeys: nil,
+                options: [.skipHiddenVolumes]
+            ) ?? []
         return Set(urls.compactMap { volumeName(forPath: $0.path) })
     }
 }

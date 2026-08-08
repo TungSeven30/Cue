@@ -18,6 +18,7 @@ struct CueApp: App {
     // AppModel is created lazily on first render, so migrating here keeps
     // the WhisperDesk-era data move ahead of every disk and defaults read.
     init() {
+        PackagedInferenceSelfTest.runAndExitIfRequested()
         LegacyMigration.run()
         OrphanReaper.reap()
     }
@@ -108,7 +109,7 @@ struct CueApp: App {
 
         Settings {
             SettingsView(settings: model.settings)
-            .frame(width: 620, height: 780)
+                .frame(width: 620, height: 780)
         }
 
         MenuBarExtra(isInserted: $showMenuBarExtra) {

@@ -33,9 +33,11 @@ actor WhisperCppEngine {
         let onSegments: @Sendable ([TranscriptionSegment]) -> Void
         let isCancelled: @Sendable () -> Bool
 
-        init(onProgress: @escaping @Sendable (Double) -> Void,
-             onSegments: @escaping @Sendable ([TranscriptionSegment]) -> Void,
-             isCancelled: @escaping @Sendable () -> Bool) {
+        init(
+            onProgress: @escaping @Sendable (Double) -> Void,
+            onSegments: @escaping @Sendable ([TranscriptionSegment]) -> Void,
+            isCancelled: @escaping @Sendable () -> Bool
+        ) {
             self.onProgress = onProgress
             self.onSegments = onSegments
             self.isCancelled = isCancelled
@@ -47,13 +49,14 @@ actor WhisperCppEngine {
     /// bundle accessor only looks at the .app root, where codesign forbids
     /// unsealed content — so the build script ships a self-contained copy
     /// (ggml-common.h inlined) in Contents/Resources and this points ggml at
-    /// it. Unset (tests, bare binaries), ggml tries the SwiftPM build-directory
-    /// bundle, whose un-inlined shader fails to compile, and runs on CPU.
+    /// it. The test runner points at a self-contained development copy too;
+    /// bare binaries without either resource fall back to whisper.cpp's normal
+    /// backend discovery.
     private static let metalShaderPathConfigured: Void = {
         guard getenv("GGML_METAL_PATH_RESOURCES") == nil else { return }  // a user override wins
         guard let resources = Bundle.main.resourceURL,
-              FileManager.default.fileExists(
-                  atPath: resources.appendingPathComponent("ggml-metal.metal").path)
+            FileManager.default.fileExists(
+                atPath: resources.appendingPathComponent("ggml-metal.metal").path)
         else { return }
         setenv("GGML_METAL_PATH_RESOURCES", resources.path, 0)
     }()
@@ -95,7 +98,9 @@ actor WhisperCppEngine {
         var params = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH)
         params.beam_search.beam_size = Int32(beamSize)
         params.no_speech_thold = Float(noSpeechThreshold)
-        params.n_threads = Int32(max(4, ProcessInfo.processInfo.activeProcessorCount - 2))  // reserve a couple of cores for UI/system; floor of 4 matches whisper.cpp's default
+        // Reserve a couple of cores for UI/system; a floor of four matches
+        // whisper.cpp's default.
+        params.n_threads = Int32(max(4, ProcessInfo.processInfo.activeProcessorCount - 2))
         params.print_progress = false
         params.no_context = true  // match condition_on_previous_text=False
 
@@ -114,12 +119,13 @@ actor WhisperCppEngine {
             let first = max(0, total - Int(nNew))
             var batch: [TranscriptionSegment] = []
             for index in first..<total {
-                batch.append(WhisperCppEngine.mapSegment(
-                    index: index,
-                    t0: whisper_full_get_segment_t0(ctx, Int32(index)),
-                    t1: whisper_full_get_segment_t1(ctx, Int32(index)),
-                    text: String(cString: whisper_full_get_segment_text(ctx, Int32(index)))
-                ))
+                batch.append(
+                    WhisperCppEngine.mapSegment(
+                        index: index,
+                        t0: whisper_full_get_segment_t0(ctx, Int32(index)),
+                        t1: whisper_full_get_segment_t1(ctx, Int32(index)),
+                        text: String(cString: whisper_full_get_segment_text(ctx, Int32(index)))
+                    ))
             }
             if !batch.isEmpty { box.onSegments(batch) }
         }
@@ -172,8 +178,9 @@ actor WhisperCppEngine {
         }
 
         guard data.count >= 12,
-              data[0..<4].elementsEqual("RIFF".utf8),
-              data[8..<12].elementsEqual("WAVE".utf8) else {
+            data[0..<4].elementsEqual("RIFF".utf8),
+            data[8..<12].elementsEqual("WAVE".utf8)
+        else {
             throw WhisperCppError.invalidWAV("not a RIFF/WAVE file")
         }
 

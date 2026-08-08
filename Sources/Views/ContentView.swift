@@ -20,16 +20,38 @@ struct ContentView: View {
         .sheet(isPresented: $model.isShowingBurnInSheet) {
             BurnInOptionsView(model: model)
         }
-        .sheet(item: Binding(
-            get: { model.overridesEditorJobID.flatMap { id in model.jobs.first { $0.id == id } } },
-            set: { model.overridesEditorJobID = $0?.id }
-        )) { job in
+        .sheet(
+            item: Binding(
+                get: { model.overridesEditorJobID.flatMap { id in model.jobs.first { $0.id == id } } },
+                set: { model.overridesEditorJobID = $0?.id }
+            )
+        ) { job in
             JobSettingsOverridesView(
                 title: "Job Settings — \(job.title)",
                 settings: model.settings,
                 overrides: job.overrides
             ) { model.setOverrides($0, for: job.id) }
         }
+        .alert(
+            "Could Not Save Data",
+            isPresented: Binding(
+                get: { storageError != nil },
+                set: { if !$0 { clearStorageError() } }
+            )
+        ) {
+            Button("OK") { clearStorageError() }
+        } message: {
+            Text(storageError ?? "The latest data is still in memory.")
+        }
+    }
+
+    private var storageError: String? {
+        model.persistenceError ?? model.settings.secretPersistenceError
+    }
+
+    private func clearStorageError() {
+        model.persistenceError = nil
+        model.settings.secretPersistenceError = nil
     }
 
     @ToolbarContentBuilder

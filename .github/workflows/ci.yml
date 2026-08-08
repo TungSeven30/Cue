@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Dependency policy and SBOM
+        run: |
+          python3 script/audit_dependencies.py --output .build/audit/dependency-audit.json
+          python3 script/generate_sbom.py --version 0.0.0-ci --output .build/audit/cue-sbom.cdx.json
+
+      - name: Swift and Python tests
+        run: script/run_tests.sh
+
+      - name: Coverage policy
+        run: script/run_coverage.sh
+
+      - name: Release build with warnings as errors
+        run: swift build -c release -Xswiftc -warnings-as-errors
+
+      - name: Source parity and formatting
+        run: |
+          python3 script/sync_backend_script.py --check
+          script/lint_swift.sh
+
+      - name: Shell syntax
+        run: bash -n script/*.sh
+
+      - name: Package and verify app bundle
+        run: script/build_and_run.sh --bundle
+
+      - name: Packaged Metal inference smoke test
+        if: runner.arch == 'ARM64'
+        run: script/verify_packaged_inference.sh dist/Cue.app

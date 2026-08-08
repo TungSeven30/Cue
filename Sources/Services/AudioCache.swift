@@ -26,7 +26,8 @@ enum AudioCache {
     static func cachedAudioURL(for sourceURL: URL, preprocess: Bool) throws -> URL {
         var info = stat()
         guard stat(sourceURL.path, &info) == 0,
-              let resolved = realpath(sourceURL.path, nil) else {
+            let resolved = realpath(sourceURL.path, nil)
+        else {
             throw CocoaError(.fileReadNoSuchFile, userInfo: [NSFilePathErrorKey: sourceURL.path])
         }
         defer { free(resolved) }
@@ -49,10 +50,12 @@ enum AudioCache {
     /// errors: a failed delete must never fail a transcription.
     static func prune(directory: URL, maxBytes: UInt64 = 10 * 1024 * 1024 * 1024, keeping: URL?) {
         let fileManager = FileManager.default
-        guard let entries = try? fileManager.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]
-        ) else { return }
+        guard
+            let entries = try? fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]
+            )
+        else { return }
 
         // Safe to sweep unconditionally: the app runs one extraction at a time
         // (AppModel's serial GPU slot), so no in-flight temp file can exist
@@ -63,9 +66,10 @@ enum AudioCache {
 
         let wavs: [(url: URL, size: UInt64, mtime: Date)] = entries.compactMap { url in
             guard url.pathExtension == "wav",
-                  let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
-                  let size = values.fileSize,
-                  let mtime = values.contentModificationDate else { return nil }
+                let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
+                let size = values.fileSize,
+                let mtime = values.contentModificationDate
+            else { return nil }
             return (url, UInt64(size), mtime)
         }.sorted { $0.mtime < $1.mtime }
 

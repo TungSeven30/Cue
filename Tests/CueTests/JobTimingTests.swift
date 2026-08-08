@@ -7,24 +7,24 @@ import Testing
     /// Helper to build a job via JSON decoding so we don't need AppSettingsStore.
     private func makeJob(status: JobStatus = .idle) throws -> TranscriptionJob {
         let json = """
-        {
-          "id": "\(UUID().uuidString)",
-          "sourcePath": "/tmp/example.mp4",
-          "createdAt": "2026-01-01T00:00:00Z",
-          "updatedAt": "2026-01-02T00:00:00Z",
-          "status": "\(status.rawValue)",
-          "progress": {"stage": "transcribing", "detail": "x"},
-          "settings": {
-            "sourceLanguage": "auto",
-            "whisperModel": "m",
-            "whisperBackend": "auto",
-            "openAIModel": "gpt-5.2"
-          },
-          "transcriptSegments": [],
-          "translatedSegments": [],
-          "log": "log\\n"
-        }
-        """
+            {
+              "id": "\(UUID().uuidString)",
+              "sourcePath": "/tmp/example.mp4",
+              "createdAt": "2026-01-01T00:00:00Z",
+              "updatedAt": "2026-01-02T00:00:00Z",
+              "status": "\(status.rawValue)",
+              "progress": {"stage": "transcribing", "detail": "x"},
+              "settings": {
+                "sourceLanguage": "auto",
+                "whisperModel": "m",
+                "whisperBackend": "auto",
+                "openAIModel": "gpt-5.2"
+              },
+              "transcriptSegments": [],
+              "translatedSegments": [],
+              "log": "log\\n"
+            }
+            """
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(TranscriptionJob.self, from: Data(json.utf8))

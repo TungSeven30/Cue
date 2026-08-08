@@ -1,0 +1,17 @@
+{
+  "criticalFiles": {
+    "Sources/Models/PipelineScheduler.swift": 90,
+    "Sources/Services/ExportCoordinator.swift": 50,
+    "Sources/Services/ModelDownloader.swift": 60,
+    "Sources/Stores/JobRepository.swift": 85,
+    "Sources/Stores/JobStore.swift": 80
+  },
+  "domainScope": {
+    "minimumLinesPercent": 48,
+    "prefixes": [
+      "Sources/Models/",
+      "Sources/Services/"
+    ]
+  },
+  "totalLinesPercent": 20
+}

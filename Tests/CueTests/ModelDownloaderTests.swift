@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import Cue
@@ -42,6 +43,11 @@ struct ModelDownloaderTests {
         return dir
     }
 
+    private func artifact(name: String, data: Data) -> ModelArtifact {
+        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        return ModelArtifact(name: name, byteCount: Int64(data.count), sha256: digest)
+    }
+
     @Test func derivesDestinationAndSourceForKnownModel() {
         let defaultDownloader = ModelDownloader()
         let expected = FileManager.default.homeDirectoryForCurrentUser
@@ -49,7 +55,7 @@ struct ModelDownloaderTests {
         #expect(defaultDownloader.destinationURL(for: "ggml-tiny.bin").path == expected.path)
         #expect(
             ModelDownloader.sourceURL(for: "ggml-tiny.bin").absoluteString
-                == "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"
+                == "https://huggingface.co/ggerganov/whisper.cpp/resolve/\(ModelDownloader.modelRevision)/ggml-tiny.bin"
         )
         #expect(ModelDownloader.models.contains(ModelDownloader.defaultModel))
         #expect(ModelDownloader.models.count == 6)
@@ -59,13 +65,18 @@ struct ModelDownloaderTests {
         let base = try scratchDirectory()
         defer { try? FileManager.default.removeItem(at: base) }
         let network = FakeNetwork()
-        let downloader = ModelDownloader(baseDirectory: base, network: network)
+        let installed = Data([7])
+        let downloader = ModelDownloader(
+            baseDirectory: base,
+            network: network,
+            artifactManifest: ["ggml-base.bin": artifact(name: "ggml-base.bin", data: installed)]
+        )
 
         let destination = downloader.destinationURL(for: "ggml-base.bin")
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
         )
-        try Data([7]).write(to: destination)
+        try installed.write(to: destination)
 
         let url = try await downloader.ensureInstalled(model: "ggml-base.bin") { _ in }
         #expect(url == destination)
@@ -77,12 +88,17 @@ struct ModelDownloaderTests {
         defer { try? FileManager.default.removeItem(at: base) }
         let resumeData = Data([1, 2, 3, 4])
         let network = FakeNetwork(results: [
-            .failure(URLError(
-                .networkConnectionLost,
-                userInfo: [NSURLSessionDownloadTaskResumeData: resumeData]
-            )),
+            .failure(
+                URLError(
+                    .networkConnectionLost,
+                    userInfo: [NSURLSessionDownloadTaskResumeData: resumeData]
+                ))
         ])
-        let downloader = ModelDownloader(baseDirectory: base, network: network)
+        let downloader = ModelDownloader(
+            baseDirectory: base,
+            network: network,
+            artifactManifest: ["ggml-tiny.bin": artifact(name: "ggml-tiny.bin", data: Data([1]))]
+        )
 
         await #expect(throws: ModelDownloaderError.self) {
             try await downloader.ensureInstalled(model: "ggml-tiny.bin") { _ in }
@@ -101,12 +117,17 @@ struct ModelDownloaderTests {
         defer { try? FileManager.default.removeItem(at: base) }
         let resumeData = Data([8, 8, 8])
         let network = FakeNetwork(results: [
-            .failure(URLError(
-                .cancelled,
-                userInfo: [NSURLSessionDownloadTaskResumeData: resumeData]
-            )),
+            .failure(
+                URLError(
+                    .cancelled,
+                    userInfo: [NSURLSessionDownloadTaskResumeData: resumeData]
+                ))
         ])
-        let downloader = ModelDownloader(baseDirectory: base, network: network)
+        let downloader = ModelDownloader(
+            baseDirectory: base,
+            network: network,
+            artifactManifest: ["ggml-tiny.bin": artifact(name: "ggml-tiny.bin", data: Data([1]))]
+        )
 
         await #expect(throws: CancellationError.self) {
             try await downloader.ensureInstalled(model: "ggml-tiny.bin") { _ in }
@@ -120,8 +141,13 @@ struct ModelDownloaderTests {
     @Test func retryConsumesPersistedResumeDataAndDeletesIt() async throws {
         let base = try scratchDirectory()
         defer { try? FileManager.default.removeItem(at: base) }
-        let network = FakeNetwork(results: [.success(Data([9, 9]))])
-        let downloader = ModelDownloader(baseDirectory: base, network: network)
+        let downloaded = Data([9, 9])
+        let network = FakeNetwork(results: [.success(downloaded)])
+        let downloader = ModelDownloader(
+            baseDirectory: base,
+            network: network,
+            artifactManifest: ["ggml-tiny.bin": artifact(name: "ggml-tiny.bin", data: downloaded)]
+        )
 
         let resumeData = Data([5, 6, 7])
         let destination = downloader.destinationURL(for: "ggml-tiny.bin")
@@ -148,7 +174,11 @@ struct ModelDownloaderTests {
         let base = try scratchDirectory()
         defer { try? FileManager.default.removeItem(at: base) }
         let network = FakeNetwork(results: [.failure(URLError(.timedOut))])
-        let downloader = ModelDownloader(baseDirectory: base, network: network)
+        let downloader = ModelDownloader(
+            baseDirectory: base,
+            network: network,
+            artifactManifest: ["ggml-tiny.bin": artifact(name: "ggml-tiny.bin", data: Data([1]))]
+        )
 
         let destination = downloader.destinationURL(for: "ggml-tiny.bin")
         try FileManager.default.createDirectory(
@@ -166,7 +196,7 @@ struct ModelDownloaderTests {
     @Test func installedModelsListsOnlyBinFiles() throws {
         let base = try scratchDirectory()
         defer { try? FileManager.default.removeItem(at: base) }
-        let downloader = ModelDownloader(baseDirectory: base, network: FakeNetwork())
+        let downloader = ModelDownloader(baseDirectory: base, network: FakeNetwork(), artifactManifest: [:])
 
         #expect(downloader.installedModels() == [])
 
@@ -177,5 +207,83 @@ struct ModelDownloaderTests {
         try Data([1]).write(to: models.appendingPathComponent("ggml-small.bin.resume"))
 
         #expect(downloader.installedModels() == ["ggml-base.bin", "ggml-tiny.bin"])
+    }
+
+    @Test func invalidInstalledArtifactIsReplacedWithVerifiedDownload() async throws {
+        let base = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let model = "verified-test.bin"
+        let valid = Data([1, 2, 3, 4])
+        let network = FakeNetwork(results: [.success(valid)])
+        let downloader = ModelDownloader(
+            baseDirectory: base,
+            network: network,
+            artifactManifest: [model: artifact(name: model, data: valid)]
+        )
+        let destination = downloader.destinationURL(for: model)
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try Data([9, 9, 9, 9]).write(to: destination)
+
+        let result = try await downloader.ensureInstalled(model: model) { _ in }
+
+        #expect(network.calls.count == 1)
+        #expect(try Data(contentsOf: result) == valid)
+    }
+
+    @Test func badDownloadedArtifactIsRejectedAndRemoved() async throws {
+        let base = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let model = "verified-test.bin"
+        let expected = Data([1, 2, 3, 4])
+        let downloader = ModelDownloader(
+            baseDirectory: base,
+            network: FakeNetwork(results: [.success(Data([4, 3, 2, 1]))]),
+            artifactManifest: [model: artifact(name: model, data: expected)]
+        )
+
+        await #expect(throws: ModelDownloaderError.self) {
+            try await downloader.ensureInstalled(model: model) { _ in }
+        }
+        #expect(!FileManager.default.fileExists(atPath: downloader.destinationURL(for: model).path))
+    }
+
+    @Test func unrecognizedModelIsNeverDownloadedWithoutIntegrityMetadata() async throws {
+        let base = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let network = FakeNetwork()
+        let downloader = ModelDownloader(baseDirectory: base, network: network, artifactManifest: [:])
+
+        await #expect(throws: ModelDownloaderError.self) {
+            try await downloader.ensureInstalled(model: "unknown.bin") { _ in }
+        }
+        #expect(network.calls.isEmpty)
+    }
+
+    @Test func verificationStampAvoidsRehashingUntilTheModelChanges() async throws {
+        let base = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let model = "verified-test.bin"
+        let valid = Data([1, 2, 3, 4])
+        let network = FakeNetwork(results: [.success(valid), .success(valid)])
+        let downloader = ModelDownloader(
+            baseDirectory: base,
+            network: network,
+            artifactManifest: [model: artifact(name: model, data: valid)]
+        )
+
+        let destination = try await downloader.ensureInstalled(model: model) { _ in }
+        _ = try await downloader.ensureInstalled(model: model) { _ in }
+        #expect(network.calls.count == 1)
+
+        try Data([4, 3, 2, 1]).write(to: destination)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(60)],
+            ofItemAtPath: destination.path
+        )
+        _ = try await downloader.ensureInstalled(model: model) { _ in }
+        #expect(network.calls.count == 2)
+        #expect(try Data(contentsOf: destination) == valid)
     }
 }

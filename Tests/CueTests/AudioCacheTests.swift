@@ -31,12 +31,12 @@ struct AudioCacheTests {
             .deletingPathExtension().lastPathComponent
 
         let script = """
-        import hashlib, os, sys
-        p = sys.argv[1]
-        st = os.stat(p)
-        payload = f"{os.path.realpath(p)}|{st.st_size}|{st.st_mtime_ns}|preprocess=False"
-        print(hashlib.sha256(payload.encode()).hexdigest()[:24])
-        """
+            import hashlib, os, sys
+            p = sys.argv[1]
+            st = os.stat(p)
+            payload = f"{os.path.realpath(p)}|{st.st_size}|{st.st_mtime_ns}|preprocess=False"
+            print(hashlib.sha256(payload.encode()).hexdigest()[:24])
+            """
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
         process.arguments = ["-c", script, file.path]

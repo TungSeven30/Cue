@@ -6,16 +6,35 @@ import SwiftUI
 /// observing views re-render a few times per minute, not 4x per second.
 @MainActor
 final class PlayerController: ObservableObject {
-    let player = AVPlayer()
+    private final class TimeObserverLifetime: @unchecked Sendable {
+        let player: AVPlayer
+        var token: Any?
+
+        init(player: AVPlayer) {
+            self.player = player
+        }
+
+        deinit {
+            if let token {
+                player.removeTimeObserver(token)
+            }
+        }
+    }
+
+    let player: AVPlayer
     @Published private(set) var activeSegmentID: Int?
     @Published private(set) var overlayText = ""
 
     private var segments: [TranscriptionSegment] = []
     private var currentURL: URL?
-    private var timeObserver: Any?
+    private let timeObserverLifetime: TimeObserverLifetime
 
     init() {
-        timeObserver = player.addPeriodicTimeObserver(
+        let player = AVPlayer()
+        let lifetime = TimeObserverLifetime(player: player)
+        self.player = player
+        timeObserverLifetime = lifetime
+        lifetime.token = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
@@ -23,15 +42,6 @@ final class PlayerController: ObservableObject {
             Task { @MainActor [weak self] in
                 self?.refresh(at: seconds)
             }
-        }
-    }
-
-    deinit {
-        // The controller currently lives for the app's lifetime (owned by
-        // AppModel), but AVFoundation raises if a player deallocates with a
-        // live observer, so remove it defensively.
-        if let timeObserver {
-            player.removeTimeObserver(timeObserver)
         }
     }
 

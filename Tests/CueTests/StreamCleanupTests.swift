@@ -49,7 +49,7 @@ import Testing
         // Single pass might collapse "a b", but second pass should collapse "c c".
         // After this test, both passes should be identical (fixed point).
         let batch = [
-            TranscriptionSegment(id: 1, start: 0, end: 1, text: "a b a b a b c c"),
+            TranscriptionSegment(id: 1, start: 0, end: 1, text: "a b a b a b c c")
         ]
         let once = TranscriptionPostProcessor.cleanWindow(batch, settings: settings)
         let twice = TranscriptionPostProcessor.cleanWindow(once, settings: settings)

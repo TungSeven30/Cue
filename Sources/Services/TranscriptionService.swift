@@ -95,14 +95,16 @@ struct TranscriptionService {
             } catch {
                 // Exotic container AVFoundation can't read: fall back to the
                 // Python/ffmpeg path by passing nothing. Never worse than today.
-                let fallback = ProcessEnvironment.hasFFmpeg
+                let fallback =
+                    ProcessEnvironment.hasFFmpeg
                     ? "falling back to ffmpeg."
                     : "this file may need ffmpeg installed."
-                progress(JobProgress(
-                    stage: .extractingAudio,
-                    detail: "Native extraction failed (\(error.localizedDescription)); \(fallback)",
-                    fraction: 0.08
-                ))
+                progress(
+                    JobProgress(
+                        stage: .extractingAudio,
+                        detail: "Native extraction failed (\(error.localizedDescription)); \(fallback)",
+                        fraction: 0.08
+                    ))
             }
         }
         // wantsPreprocess && no cache → pass nothing; the Python helper runs
@@ -116,32 +118,33 @@ struct TranscriptionService {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             process.environment = ProcessEnvironment.withToolPaths()
-            process.arguments = [
-                "python3",
-                scriptURL.path,
-                videoURL.path,
-                "--json",
-                "--language",
-                snapshot.sourceLanguage,
-                "--model",
-                snapshot.whisperModel,
-                "--backend",
-                snapshot.whisperBackendRawValue,
-                "--preprocess-audio",
-                snapshot.preprocessAudio ? "true" : "false",
-                "--vad-filter",
-                snapshot.vadFilter ? "true" : "false",
-                "--beam-size",
-                "\(snapshot.beamSize)",
-                "--best-of",
-                "\(snapshot.bestOf)",
-                "--temperature",
-                "\(snapshot.temperature)",
-                "--no-speech-threshold",
-                "\(snapshot.noSpeechThreshold)",
-                "--stream-segments",
-                "true",
-            ] + finalAudioArguments
+            process.arguments =
+                [
+                    "python3",
+                    scriptURL.path,
+                    videoURL.path,
+                    "--json",
+                    "--language",
+                    snapshot.sourceLanguage,
+                    "--model",
+                    snapshot.whisperModel,
+                    "--backend",
+                    snapshot.whisperBackendRawValue,
+                    "--preprocess-audio",
+                    snapshot.preprocessAudio ? "true" : "false",
+                    "--vad-filter",
+                    snapshot.vadFilter ? "true" : "false",
+                    "--beam-size",
+                    "\(snapshot.beamSize)",
+                    "--best-of",
+                    "\(snapshot.bestOf)",
+                    "--temperature",
+                    "\(snapshot.temperature)",
+                    "--no-speech-threshold",
+                    "\(snapshot.noSpeechThreshold)",
+                    "--stream-segments",
+                    "true",
+                ] + finalAudioArguments
             processBox.process = process
 
             let stdout = PipeCollector()
@@ -192,7 +195,8 @@ struct TranscriptionService {
             guard terminationStatus == 0 else {
                 // stderr carries both JSON progress events and the real error
                 // text; drop the progress lines so the message is legible.
-                let errorText = stderrText
+                let errorText =
+                    stderrText
                     .split(separator: "\n", omittingEmptySubsequences: true)
                     .map(String.init)
                     .filter { !$0.hasPrefix("{") }
@@ -235,11 +239,12 @@ struct TranscriptionService {
             try await AudioExtractor.extract(from: videoURL, to: cachedWav) { fraction in
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
-                        progress(JobProgress(
-                            stage: .extractingAudio,
-                            detail: "Extracting audio.",
-                            fraction: 0.08 + fraction * 0.04
-                        ))
+                        progress(
+                            JobProgress(
+                                stage: .extractingAudio,
+                                detail: "Extracting audio.",
+                                fraction: 0.08 + fraction * 0.04
+                            ))
                     }
                 }
             }
@@ -283,11 +288,12 @@ struct TranscriptionService {
                     let clamped = max(0, min(1, fraction))
                     DispatchQueue.main.async {
                         MainActor.assumeIsolated {
-                            progress(JobProgress(
-                                stage: .transcribing,
-                                detail: "Transcribing with the built-in engine.",
-                                fraction: 0.2 + clamped * 0.72
-                            ))
+                            progress(
+                                JobProgress(
+                                    stage: .transcribing,
+                                    detail: "Transcribing with the built-in engine.",
+                                    fraction: 0.2 + clamped * 0.72
+                                ))
                         }
                     }
                 },
@@ -631,8 +637,9 @@ enum TranscriptionPostProcessor {
         for segment in segments {
             let duration = segment.end - segment.start
             if duration < minDuration,
-               let last = result.last,
-               segment.start - last.end <= maxGap {
+                let last = result.last,
+                segment.start - last.end <= maxGap
+            {
                 result[result.count - 1] = TranscriptionSegment(
                     id: last.id,
                     start: last.start,

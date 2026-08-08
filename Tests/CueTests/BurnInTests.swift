@@ -75,10 +75,10 @@ struct BurnInProgressParsingTests {
 struct BurnInPreflightParsingTests {
     @Test func detectsSubtitlesFilter() {
         let output = """
-        Filters:
-         ... scale            V->V  Scale the input video size...
-         ... subtitles        V->V  Render text subtitles onto input video...
-        """
+            Filters:
+             ... scale            V->V  Scale the input video size...
+             ... subtitles        V->V  Render text subtitles onto input video...
+            """
         #expect(BurnInService.hasSubtitlesFilter(inFiltersOutput: output))
     }
 

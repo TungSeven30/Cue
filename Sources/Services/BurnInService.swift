@@ -79,9 +79,9 @@ struct BurnInService {
         let value = line[range].dropFirst("time=".count)
         let parts = value.split(separator: ":")
         guard parts.count == 3,
-              let hours = Double(parts[0]),
-              let minutes = Double(parts[1]),
-              let seconds = Double(parts[2])
+            let hours = Double(parts[0]),
+            let minutes = Double(parts[1]),
+            let seconds = Double(parts[2])
         else { return nil }
         return hours * 3600 + minutes * 60 + seconds
     }
@@ -171,12 +171,14 @@ struct BurnInService {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             process.environment = ProcessEnvironment.withToolPaths()
-            process.arguments = ["ffmpeg"] + Self.makeArguments(
-                source: source,
-                subtitleFile: subtitleURL,
-                forceStyle: Self.forceStyle(for: textSize),
-                output: output
-            )
+            process.arguments =
+                ["ffmpeg"]
+                + Self.makeArguments(
+                    source: source,
+                    subtitleFile: subtitleURL,
+                    forceStyle: Self.forceStyle(for: textSize),
+                    output: output
+                )
 
             let stderrPipe = Pipe()
             process.standardError = stderrPipe

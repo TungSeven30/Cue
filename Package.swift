@@ -29,7 +29,7 @@ let package = Package(
         ),
         // In-app updates. Ships as a prebuilt XCFramework, so it builds fine
         // on CLT-only machines.
-        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0")
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.5")
     ],
     targets: [
         .executableTarget(
@@ -39,14 +39,21 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "Sources",
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+                // whisper.cpp v1.7.2 exposes additional public C headers next
+                // to whisper.h without listing them from its umbrella header.
+                // Clang's diagnostic becomes fatal under Swift 6 even though
+                // the imported API is valid.
+                .unsafeFlags(["-Xcc", "-Wno-incomplete-umbrella"]),
+            ]
         ),
         .testTarget(
             name: "CueTests",
             dependencies: ["Cue"],
             path: "Tests",
             swiftSettings: [
-                .swiftLanguageMode(.v5),
+                .swiftLanguageMode(.v6),
                 .unsafeFlags(["-F", cltFrameworks])
             ],
             linkerSettings: [

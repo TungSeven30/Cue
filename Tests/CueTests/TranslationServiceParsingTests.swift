@@ -8,26 +8,26 @@ struct TranslationServiceParsingTests {
     // fail on them.
     @Test func openAIEnvelopeToleratesReasoningItems() throws {
         let json = """
-        {
-          "status": "completed",
-          "output": [
-            {"type": "reasoning", "summary": []},
-            {"type": "message", "content": [{"type": "output_text", "text": "{\\"segments\\":[]}"}]}
-          ]
-        }
-        """
+            {
+              "status": "completed",
+              "output": [
+                {"type": "reasoning", "summary": []},
+                {"type": "message", "content": [{"type": "output_text", "text": "{\\"segments\\":[]}"}]}
+              ]
+            }
+            """
         let text = try TranslationService.extractOutputText(provider: .openai, data: Data(json.utf8))
         #expect(text == "{\"segments\":[]}")
     }
 
     @Test func openAIIncompleteResponseThrowsResponseTooLarge() {
         let json = """
-        {
-          "status": "incomplete",
-          "incomplete_details": {"reason": "max_output_tokens"},
-          "output": [{"type": "message", "content": [{"type": "output_text", "text": "{\\"segments\\":["}]}]
-        }
-        """
+            {
+              "status": "incomplete",
+              "incomplete_details": {"reason": "max_output_tokens"},
+              "output": [{"type": "message", "content": [{"type": "output_text", "text": "{\\"segments\\":["}]}]
+            }
+            """
         do {
             _ = try TranslationService.extractOutputText(provider: .openai, data: Data(json.utf8))
             Issue.record("Expected responseTooLarge to be thrown")
@@ -39,8 +39,8 @@ struct TranslationServiceParsingTests {
 
     @Test func anthropicMaxTokensThrowsResponseTooLarge() {
         let json = """
-        {"content": [{"type": "text", "text": "{\\"segments\\":["}], "stop_reason": "max_tokens"}
-        """
+            {"content": [{"type": "text", "text": "{\\"segments\\":["}], "stop_reason": "max_tokens"}
+            """
         do {
             _ = try TranslationService.extractOutputText(provider: .anthropic, data: Data(json.utf8))
             Issue.record("Expected responseTooLarge to be thrown")
@@ -54,8 +54,8 @@ struct TranslationServiceParsingTests {
     // the retry loop stops immediately.
     @Test func anthropicRefusalIsFatal() {
         let json = """
-        {"content": [], "stop_reason": "refusal"}
-        """
+            {"content": [], "stop_reason": "refusal"}
+            """
         do {
             _ = try TranslationService.extractOutputText(provider: .anthropic, data: Data(json.utf8))
             Issue.record("Expected fatalAPIError to be thrown")
@@ -67,8 +67,8 @@ struct TranslationServiceParsingTests {
 
     @Test func geminiMaxTokensThrowsResponseTooLarge() {
         let json = """
-        {"candidates": [{"finishReason": "MAX_TOKENS", "content": {"parts": [{"text": "partial"}]}}]}
-        """
+            {"candidates": [{"finishReason": "MAX_TOKENS", "content": {"parts": [{"text": "partial"}]}}]}
+            """
         do {
             _ = try TranslationService.extractOutputText(provider: .google, data: Data(json.utf8))
             Issue.record("Expected responseTooLarge to be thrown")
@@ -106,9 +106,10 @@ struct TranslationServiceParsingTests {
 
     // A 400 caused by an over-long request should be splittable, not fatal.
     @Test func lengthy400ClassifiedAsResponseTooLarge() {
-        let body = Data("""
-        {"error": {"message": "prompt is too long: 250000 tokens > 200000 maximum"}}
-        """.utf8)
+        let body = Data(
+            """
+            {"error": {"message": "prompt is too long: 250000 tokens > 200000 maximum"}}
+            """.utf8)
         let error = TranslationService.classifyAPIError(provider: .anthropic, data: body, statusCode: 400, model: "claude-sonnet-5")
         guard case .responseTooLarge = error else {
             Issue.record("Expected responseTooLarge, got \(error)")
@@ -117,9 +118,10 @@ struct TranslationServiceParsingTests {
     }
 
     @Test func other400StaysFatal() {
-        let body = Data("""
-        {"error": {"message": "unknown parameter: output_config"}}
-        """.utf8)
+        let body = Data(
+            """
+            {"error": {"message": "unknown parameter: output_config"}}
+            """.utf8)
         let error = TranslationService.classifyAPIError(provider: .anthropic, data: body, statusCode: 400, model: "claude-sonnet-5")
         guard case .fatalAPIError = error else {
             Issue.record("Expected fatalAPIError, got \(error)")
@@ -139,20 +141,20 @@ struct TranslationServiceParsingTests {
 
     @Test func localEnvelopeExtractsMessageContent() throws {
         let json = """
-        {
-          "choices": [
-            {"index": 0, "message": {"role": "assistant", "content": "{\\"segments\\":[]}"}, "finish_reason": "stop"}
-          ]
-        }
-        """
+            {
+              "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "{\\"segments\\":[]}"}, "finish_reason": "stop"}
+              ]
+            }
+            """
         let text = try TranslationService.extractOutputText(provider: .local, data: Data(json.utf8))
         #expect(text == "{\"segments\":[]}")
     }
 
     @Test func localLengthFinishReasonThrowsResponseTooLarge() {
         let json = """
-        {"choices": [{"message": {"role": "assistant", "content": "{\\"segments\\":["}, "finish_reason": "length"}]}
-        """
+            {"choices": [{"message": {"role": "assistant", "content": "{\\"segments\\":["}, "finish_reason": "length"}]}
+            """
         do {
             _ = try TranslationService.extractOutputText(provider: .local, data: Data(json.utf8))
             Issue.record("Expected responseTooLarge to be thrown")
@@ -164,8 +166,8 @@ struct TranslationServiceParsingTests {
 
     @Test func localEmptyChoicesThrowsInvalidResponse() {
         let json = """
-        {"choices": []}
-        """
+            {"choices": []}
+            """
         do {
             _ = try TranslationService.extractOutputText(provider: .local, data: Data(json.utf8))
             Issue.record("Expected invalidResponse to be thrown")
@@ -241,13 +243,13 @@ struct TranslationServiceParsingTests {
     // chain-of-thought text slipping through.
     @Test func localReasoningContentRecoveredWhenContentEmpty() throws {
         let json = """
-        {"id": "chatcmpl-1", "object": "chat.completion", "model": "qwen/qwen3.6-27b",
-         "choices": [{"index": 0,
-                      "message": {"role": "assistant", "content": "",
-                                  "reasoning_content": "{\\"segments\\": [{\\"id\\": 1, \\"text\\": \\"Xin ch\\u00e0o\\"}]}",
-                                  "tool_calls": []},
-                      "logprobs": null, "finish_reason": "stop"}]}
-        """
+            {"id": "chatcmpl-1", "object": "chat.completion", "model": "qwen/qwen3.6-27b",
+             "choices": [{"index": 0,
+                          "message": {"role": "assistant", "content": "",
+                                      "reasoning_content": "{\\"segments\\": [{\\"id\\": 1, \\"text\\": \\"Xin ch\\u00e0o\\"}]}",
+                                      "tool_calls": []},
+                          "logprobs": null, "finish_reason": "stop"}]}
+            """
         let text = try TranslationService.extractOutputText(provider: .local, data: Data(json.utf8))
         #expect(text.contains("Xin chào"))
         #expect(text.contains("\"segments\""))
@@ -257,8 +259,8 @@ struct TranslationServiceParsingTests {
     // shape) must surface the server's message, not a generic parse failure.
     @Test func localErrorBodySurfacesServerMessage() {
         let json = """
-        {"error": "Unexpected endpoint or method. (POST /chat/completions)"}
-        """
+            {"error": "Unexpected endpoint or method. (POST /chat/completions)"}
+            """
         do {
             _ = try TranslationService.extractOutputText(provider: .local, data: Data(json.utf8))
             Issue.record("Expected apiError to be thrown")

@@ -10,9 +10,10 @@ import Testing
         // it to prefer the smallest (fastest) installed model — ggml-tiny.bin
         // when present.
         let downloader = ModelDownloader()
-        guard let modelURL = ModelDownloader.models.reversed().lazy
-            .map({ downloader.destinationURL(for: $0) })
-            .first(where: { FileManager.default.fileExists(atPath: $0.path) })
+        guard
+            let modelURL = ModelDownloader.models.reversed().lazy
+                .map({ downloader.destinationURL(for: $0) })
+                .first(where: { FileManager.default.fileExists(atPath: $0.path) })
         else { return }
 
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

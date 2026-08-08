@@ -43,13 +43,13 @@ enum OrphanReaper {
         output.split(separator: "\n").compactMap { line in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard let spaceIndex = trimmed.firstIndex(of: " "),
-                  let pid = pid_t(trimmed[..<spaceIndex])
+                let pid = pid_t(trimmed[..<spaceIndex])
             else { return nil }
             let command = String(trimmed[trimmed.index(after: spaceIndex)...])
             let binary = command.split(separator: " ", maxSplits: 1)[0]
             let binaryName = String(binary.split(separator: "/").last ?? binary)
             guard workerBinaries.contains(binaryName),
-                  markers.contains(where: { command.contains($0) })
+                markers.contains(where: { command.contains($0) })
             else { return nil }
             return pid
         }

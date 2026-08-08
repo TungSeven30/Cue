@@ -15,7 +15,7 @@ enum KeychainStore {
         guard let legacy = read(account: account, service: legacyService) else {
             return nil
         }
-        write(legacy, account: account)
+        _ = write(legacy, account: account)
         return legacy
     }
 
@@ -29,14 +29,15 @@ enum KeychainStore {
         ]
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data
+            let data = item as? Data
         else {
             return nil
         }
         return String(data: data, encoding: .utf8)
     }
 
-    static func write(_ value: String, account: String) {
+    @discardableResult
+    static func write(_ value: String, account: String) -> Bool {
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -44,8 +45,8 @@ enum KeychainStore {
         ]
 
         guard !value.isEmpty else {
-            SecItemDelete(baseQuery as CFDictionary)
-            return
+            let status = SecItemDelete(baseQuery as CFDictionary)
+            return status == errSecSuccess || status == errSecItemNotFound
         }
 
         let data = Data(value.utf8)
@@ -67,5 +68,6 @@ enum KeychainStore {
             // A silently failed write means the key vanishes on next launch.
             NSLog("Cue: Keychain write for %@ failed with status %d.", account, status)
         }
+        return status == errSecSuccess
     }
 }

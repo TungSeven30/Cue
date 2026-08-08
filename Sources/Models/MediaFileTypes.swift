@@ -18,11 +18,13 @@ enum MediaFileTypes {
     /// partial downloads excluded, sorted by path so episodic folders
     /// enqueue in order.
     static func collectMediaFiles(under url: URL) -> [URL] {
-        guard let enumerator = FileManager.default.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return [] }
+        guard
+            let enumerator = FileManager.default.enumerator(
+                at: url,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            )
+        else { return [] }
         var found: [URL] = []
         for case let candidate as URL in enumerator {
             guard (try? candidate.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }

@@ -23,7 +23,8 @@ struct SubtitleWriterTests {
         try SubtitleWriter.writeSRT(segments: segments, to: url)
         let contents = try String(contentsOf: url, encoding: .utf8)
 
-        let cues = contents
+        let cues =
+            contents
             .components(separatedBy: "\n\n")
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         #expect(cues.count == 2, "Blank line inside cue text split the file into extra cues:\n\(contents)")

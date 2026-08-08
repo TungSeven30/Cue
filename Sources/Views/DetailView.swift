@@ -46,8 +46,20 @@ struct DetailView: View {
         .navigationSubtitle(model.currentJob?.title ?? "")
         .dropDestination(for: URL.self) { urls, _ in
             let fileURLs = urls.filter(\.isFileURL)
-            model.addVideos(urls: fileURLs)
-            return !fileURLs.isEmpty
+            guard !fileURLs.isEmpty else { return false }
+            var isDirectory: ObjCBool = false
+            let containsFolder = fileURLs.contains { url in
+                FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+            }
+            let added = model.addMedia(urls: fileURLs)
+            if added == 0 && containsFolder {
+                let alert = NSAlert()
+                alert.messageText = "No Video or Audio Files Found"
+                alert.informativeText = "The dropped folder does not contain any video or audio files."
+                alert.alertStyle = .informational
+                alert.runModal()
+            }
+            return added > 0
         }
         .onAppear { syncPlayer() }
         .onChange(of: model.selectedJobID) { syncPlayer() }

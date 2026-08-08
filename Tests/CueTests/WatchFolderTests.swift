@@ -137,6 +137,38 @@ struct WatchFolderLedgerTests {
         #expect(ledger.contains("/w/kept.mp4|1|2.0"))
     }
 
+    // Mirrors AppModel's onScanCompleted prune predicate: a subfolder that's
+    // transiently unreadable/unmounted drops its files from existingPaths,
+    // but the file is still on disk, so its ledger entry must survive —
+    // otherwise it re-ingests as a duplicate once the subfolder is readable
+    // again. A truly deleted file (missing from existingPaths AND disk) is
+    // still pruned.
+    @Test func pruneKeepsEntriesForTransientlyUnreadableSubfolders() throws {
+        let base = try makeBase()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let ledger = WatchFolderLedger(baseURL: base)
+
+        let survivingFile = base.appendingPathComponent("subfolder/survives.mp4")
+        try FileManager.default.createDirectory(at: survivingFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: survivingFile)
+        let goneFile = base.appendingPathComponent("subfolder/gone.mp4") // never created
+
+        let survivingFingerprint = "\(survivingFile.path)|1|2.0"
+        let goneFingerprint = "\(goneFile.path)|1|2.0"
+        ledger.record(survivingFingerprint, outcome: .success)
+        ledger.record(goneFingerprint, outcome: .success)
+
+        // Scan came back empty this pass (e.g. the subfolder was unreadable).
+        let prefix = base.path.hasSuffix("/") ? base.path : base.path + "/"
+        let existingPaths: Set<String> = []
+        ledger.prune(fileExists: { path in
+            !path.hasPrefix(prefix) || existingPaths.contains(path) || FileManager.default.fileExists(atPath: path)
+        })
+
+        #expect(ledger.contains(survivingFingerprint), "still on disk, must survive a scan miss")
+        #expect(!ledger.contains(goneFingerprint), "truly deleted, must be pruned")
+    }
+
     @Test func pathExtractionSurvivesPipesInNames() {
         #expect(WatchFolderLedger.path(fromFingerprint: "/w/we|ird.mp4|1|2.0") == "/w/we|ird.mp4")
     }

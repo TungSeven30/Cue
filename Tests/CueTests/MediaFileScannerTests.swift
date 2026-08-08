@@ -3,7 +3,7 @@ import Testing
 @testable import Cue
 
 @Suite struct MediaFileScannerTests {
-    /// Builds: root/{a.mkv, notes.txt, .hidden.mp4, show/{ep2.mp4, ep1.mp4, partial.mp4.part}, show/extras/{clip.mov}, .hiddendir/{secret.mp4}}
+    /// Builds: root/{a.mkv, MOVIE.MP4, notes.txt, .hidden.mp4, show/{ep2.mp4, ep1.mp4, partial.mp4.part}, show/extras/{clip.mov}, .hiddendir/{secret.mp4}}
     private func makeFixtureTree() throws -> URL {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("scanner-\(UUID().uuidString)", isDirectory: true)
@@ -13,7 +13,7 @@ import Testing
         for dir in [root, show, extras, hiddenDir] {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
-        for name in ["a.mkv", "notes.txt", ".hidden.mp4"] {
+        for name in ["a.mkv", "MOVIE.MP4", "notes.txt", ".hidden.mp4"] {
             FileManager.default.createFile(atPath: root.appendingPathComponent(name).path, contents: Data())
         }
         for name in ["ep2.mp4", "ep1.mp4", "partial.mp4.part"] {
@@ -35,7 +35,7 @@ import Testing
             let fileComponents = url.standardizedFileURL.pathComponents
             return fileComponents.dropFirst(rootComponents.count).joined(separator: "/")
         }
-        #expect(relative == ["a.mkv", "show/ep1.mp4", "show/ep2.mp4", "show/extras/clip.mov"])
+        #expect(relative == ["a.mkv", "MOVIE.MP4", "show/ep1.mp4", "show/ep2.mp4", "show/extras/clip.mov"])
     }
 
     @Test func emptyOrNonMediaFolderYieldsNothing() throws {
@@ -45,6 +45,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         FileManager.default.createFile(atPath: root.appendingPathComponent("readme.md").path, contents: Data())
         #expect(MediaFileTypes.collectMediaFiles(under: root).isEmpty)
+        #expect(MediaFileTypes.expandForAdd(urls: [root]).count == 0)
     }
 
     @Test func expandForAddMixesFilesAndFoldersInOrder() throws {

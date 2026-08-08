@@ -611,10 +611,14 @@ final class AppModel: ObservableObject {
         }
         service.onScanCompleted = { [weak self] folderPath, existingPaths in
             // Prune only entries under the folder that was actually scanned:
-            // other folders' histories must survive untouched.
+            // other folders' histories must survive untouched. A subfolder
+            // that's transiently unreadable/unmounted drops out of
+            // existingPaths too, so also keep any entry whose file is still
+            // actually on disk — otherwise it gets pruned and re-ingested as
+            // a duplicate the moment the subfolder becomes readable again.
             let prefix = folderPath.hasSuffix("/") ? folderPath : folderPath + "/"
             self?.watchLedger.prune(fileExists: { path in
-                !path.hasPrefix(prefix) || existingPaths.contains(path)
+                !path.hasPrefix(prefix) || existingPaths.contains(path) || FileManager.default.fileExists(atPath: path)
             })
         }
         service.onFilesReady = { [weak self] urls in

@@ -17,7 +17,7 @@ workspace becomes a junk job on a directory URL.
 | Scope | Both one-time adds AND watch folders recurse | Consistent semantics everywhere; user chose "Both". |
 | Architecture | One shared recursive collector | Rejected: making WatchFolderScanEngine recursive and reusing it for one-time adds (drags stability-gate machinery into simple drops); ad-hoc recursion per call site (three copies). |
 | File-count cap | None | Media-extension filter keeps real folders sane; unattended semantics mean "add what's there". |
-| Zero-media folder | Alert on interactive adds | "No video or audio files found in <folder>." Watch folders stay silent (nothing to ingest is normal). |
+| Zero-media folder | Alert on interactive adds | "No video or audio files found." (generic, not per-folder — a drop can mix multiple folders, so naming just one would be misleading.) Watch folders stay silent (nothing to ingest is normal). |
 
 ## 1. The scanner unit
 
@@ -57,7 +57,9 @@ Pure with respect to its inputs on disk; unit-testable against a fixture tree.
   list to `addVideos` in ONE batch (one `indicesForBatchAdd` call). Returns
   the count added. Both the workspace drop and the picker call it; when the
   input contained at least one directory and the count is zero, the caller
-  alerts ("No video or audio files found."). The sidebar's folder-drop
+  alerts ("No video or audio files found." — generic rather than per-folder,
+  since a drop can mix multiple folders and naming just one would be
+  misleading). The sidebar's folder-drop
   routing is untouched (folder dropped on the sidebar still starts watching
   it).
 

@@ -3,6 +3,13 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
+## 2.3.3 — 2026-08-08
+
+- Corrected the packaged Metal shader's file permissions so a Cue app placed
+  in `/Applications` remains readable across macOS user accounts and Sparkle
+  updates no longer report an irregular-resource warning. Includes all 2.3.2
+  summary-model, provider-routing, and reliability improvements.
+
 ## 2.3.2 — 2026-08-08
 
 - Intro summaries can use the translation model, a different cloud model,

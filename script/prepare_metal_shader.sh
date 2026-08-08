@@ -30,4 +30,8 @@ if grep -q 'ggml-common.h' "$TEMP_SHADER"; then
   echo "error: ggml-common.h was not inlined into ggml-metal.metal" >&2
   exit 1
 fi
+# mktemp creates mode 0600. App resources must be readable by every local
+# account so an administrator can install Cue once in /Applications and other
+# users can still initialize Metal; Sparkle also rejects irregular modes.
+chmod 0644 "$TEMP_SHADER"
 mv "$TEMP_SHADER" "$OUTPUT_DIR/ggml-metal.metal"

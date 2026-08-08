@@ -36,6 +36,8 @@ otool -l "$APP_BINARY" | grep -Fq '@executable_path/../Frameworks' \
   || fail "Cue executable has no Frameworks rpath"
 
 [[ -s "$SHADER" ]] || fail "merged whisper.cpp Metal shader is missing"
+SHADER_MODE="$(stat -f '%Lp' "$SHADER")"
+[[ "$SHADER_MODE" == "644" ]] || fail "Metal shader permissions are $SHADER_MODE, expected 644"
 if grep -Fq '#include "ggml-common.h"' "$SHADER"; then
   fail "Metal shader still depends on the unbundled ggml-common.h"
 fi

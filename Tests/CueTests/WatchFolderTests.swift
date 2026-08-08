@@ -167,6 +167,30 @@ struct WatchFolderLedgerTests {
 }
 
 
+@MainActor
+struct WatchFolderServiceTests {
+    @Test func observesMediaFilesInSubfolders() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("watch-recursive-\(UUID().uuidString)", isDirectory: true)
+        let sub = root.appendingPathComponent("season1", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        FileManager.default.createFile(atPath: root.appendingPathComponent("top.mp4").path, contents: Data("x".utf8))
+        FileManager.default.createFile(atPath: sub.appendingPathComponent("ep1.mkv").path, contents: Data("xx".utf8))
+        FileManager.default.createFile(atPath: sub.appendingPathComponent("notes.txt").path, contents: Data())
+
+        let observations = try #require(WatchFolderService.observeMediaFiles(underPath: root.path))
+        let names = Set(observations.map { URL(fileURLWithPath: $0.path).lastPathComponent })
+        #expect(names == ["top.mp4", "ep1.mkv"])
+        let sizes = Dictionary(uniqueKeysWithValues: observations.map { (URL(fileURLWithPath: $0.path).lastPathComponent, $0.size) })
+        #expect(sizes["ep1.mkv"] == 2)
+    }
+
+    @Test func observeMediaFilesReturnsNilForMissingFolder() {
+        #expect(WatchFolderService.observeMediaFiles(underPath: "/nonexistent/\(UUID().uuidString)") == nil)
+    }
+}
+
 struct WatchFolderModelTests {
     @Test func legacySingleFolderFieldsDecodeWithDefaults() throws {
         // Only path is required; id/enabled/profile default, so a settings

@@ -49,6 +49,17 @@ final class JobRepository {
         }
     }
 
+    /// Persists a user-initiated batch as one repository operation. Calling
+    /// the single-job overload in a loop flushes the pending dictionary once
+    /// per element, which needlessly amplifies large queue operations.
+    func save(_ jobs: [TranscriptionJob]) {
+        guard !jobs.isEmpty else { return }
+        for job in jobs {
+            pendingJobs[job.id] = job
+        }
+        flushPendingSnapshots()
+    }
+
     func delete(_ id: UUID) {
         pendingJobs[id] = nil
         store.deleteJob(id)

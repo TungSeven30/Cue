@@ -369,7 +369,14 @@ final class AppModel: ObservableObject {
     /// removing a primary row falls back to the first selected job in queue
     /// order rather than leaving stale detail visible.
     func selectJobs(_ ids: Set<UUID>) {
-        let validIDs = ids.intersection(jobs.lazy.map(\.id))
+        // Walk the jobs once rather than materializing every job id and then
+        // intersecting. This stays linear when Command-A selects a large
+        // history and also discards ids that no longer exist.
+        var validIDs = Set<UUID>()
+        validIDs.reserveCapacity(min(ids.count, jobs.count))
+        for job in jobs where ids.contains(job.id) {
+            validIDs.insert(job.id)
+        }
         let newlySelected = validIDs.subtracting(selectedJobIDs)
         selectedJobIDs = validIDs
 
@@ -444,22 +451,27 @@ final class AppModel: ObservableObject {
     /// Adds videos as separate jobs. Used by the file picker and drag-and-drop.
     func addVideos(urls: [URL]) {
         let batchIndices = QueueOrdering.indicesForBatchAdd(count: urls.count, existing: jobs.map(\.orderIndex))
+        let shouldStart = settings.autoStartAddedJobs
         let newJobs = zip(urls, batchIndices).map { url, orderIndex in
             var job = TranscriptionJob(sourceURL: url, settings: settings)
             job.log = "Selected \(url.path(percentEncoded: false)).\n"
             job.orderIndex = orderIndex
+            if shouldStart {
+                job.status = .queued
+                job.progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
+            }
             return job
         }
         guard !newJobs.isEmpty else { return }
+        if shouldStart {
+            // Interactive additions intentionally resume a paused queue.
+            queuePaused = false
+        }
         jobs.insert(contentsOf: newJobs, at: 0)
         selectJob(newJobs.first?.id)
-        for job in newJobs {
-            persistJob(job.id)
-        }
-        if settings.autoStartAddedJobs {
-            for job in newJobs {
-                enqueueJob(job.id)
-            }
+        jobRepository.save(newJobs)
+        if shouldStart {
+            processQueue()
         }
     }
 
@@ -479,12 +491,19 @@ final class AppModel: ObservableObject {
     }
 
     func canDeleteJobs(_ ids: Set<UUID>) -> Bool {
-        !ids.isEmpty
-            && ids.allSatisfy { id in
-                jobs.contains(where: { $0.id == id })
-                    && !isJobActive(id)
-                    && !pipeline.containsQueuedTranslationWork(for: id)
+        guard !ids.isEmpty else { return false }
+        let queuedTranslationIDs = pipeline.queuedTranslationJobIDs
+        var remaining = ids
+        for job in jobs where remaining.remove(job.id) != nil {
+            if isJobActive(job.id) || queuedTranslationIDs.contains(job.id) {
+                return false
             }
+            if remaining.isEmpty {
+                return true
+            }
+        }
+        // At least one requested id was stale or never belonged to this model.
+        return false
     }
 
     /// Deletes a sidebar selection as one UI operation. Source media and
@@ -544,13 +563,50 @@ final class AppModel: ObservableObject {
     /// Queues every job that still needs work and starts processing.
     func startAllPendingJobs() {
         queuePaused = false
-        for job in jobs where jobNeedsWork(job) && job.status != .queued {
-            updateJob(job.id) { job in
-                job.status = .queued
-                job.progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
-            }
+        // Mutating @Published `jobs` through updateJob once per item emits a
+        // full model change each time. It also searches the array for every
+        // id, turning Start All into O(n²). Build the new array in one indexed
+        // pass, publish it once, and persist the resulting snapshots together.
+        var updatedJobs = jobs
+        var queuedSnapshots: [TranscriptionJob] = []
+        let now = Date()
+        for index in updatedJobs.indices
+        where jobNeedsWork(updatedJobs[index]) && updatedJobs[index].status != .queued {
+            updatedJobs[index].status = .queued
+            updatedJobs[index].progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
+            updatedJobs[index].updatedAt = now
+            queuedSnapshots.append(updatedJobs[index])
+        }
+        if !queuedSnapshots.isEmpty {
+            jobs = updatedJobs
+            jobRepository.save(queuedSnapshots)
         }
         processQueue()
+    }
+
+    /// Queues the useful subset of a sidebar selection as one UI and
+    /// persistence update. Finished jobs that need no further work, already
+    /// queued jobs, active jobs, and archived jobs are left untouched.
+    func enqueueJobs(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        queuePaused = false
+        updateJobs(ids, where: { jobNeedsWork($0) && $0.status != .queued }) { job in
+            job.status = .queued
+            job.progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
+        }
+        processQueue()
+    }
+
+    /// Retries only failed jobs that still have pipeline work to do. A failed
+    /// burn-in with otherwise complete subtitles is deliberately excluded —
+    /// retrying the transcription queue would be the wrong operation.
+    func retryFailedJobs(_ ids: Set<UUID>) {
+        let retryableIDs = Set(
+            jobs.lazy
+                .filter { ids.contains($0.id) && $0.status == .failed && self.jobNeedsWork($0) }
+                .map(\.id)
+        )
+        enqueueJobs(retryableIDs)
     }
 
     /// Adds one job to the queue (or starts it right away when nothing is
@@ -588,11 +644,31 @@ final class AppModel: ObservableObject {
     }
 
     func setArchived(_ id: UUID, _ archived: Bool) {
-        updateJob(id) { job in
+        setArchived([id], archived)
+    }
+
+    /// Archives or restores every eligible member of a sidebar selection.
+    /// Running and queued jobs keep their current state instead of being
+    /// silently pulled out from under the pipeline.
+    func setArchived(_ ids: Set<UUID>, _ archived: Bool) {
+        let changedIDs = updateJobs(
+            ids,
+            where: { job in
+                !job.status.isRunning && job.status != .queued
+                    && (archived ? job.archivedAt == nil : job.archivedAt != nil)
+            }
+        ) { job in
             job.archivedAt = archived ? Date() : nil
         }
-        if archived, selectedJobID == id {
-            selectJob(jobs.first(where: { $0.archivedAt == nil })?.id)
+        guard !changedIDs.isEmpty else { return }
+
+        selectedJobIDs.subtract(changedIDs)
+        if let selectedJobID, changedIDs.contains(selectedJobID) {
+            if let nextSelectedID = jobs.first(where: { selectedJobIDs.contains($0.id) })?.id {
+                self.selectedJobID = nextSelectedID
+            } else {
+                selectJob(jobs.first(where: { archived ? $0.archivedAt == nil : $0.archivedAt != nil })?.id)
+            }
         }
     }
 
@@ -645,41 +721,103 @@ final class AppModel: ObservableObject {
 
     // MARK: - Queue summary (menu bar / sidebar)
 
-    /// "~7m 12s left" for the whole queue; nil when idle or with no history
-    /// to estimate from. The two pipeline lanes run in parallel, so the
+    private struct QueueSnapshot {
+        let runningCount: Int
+        let queuedCount: Int
+        let eta: TimeInterval?
+    }
+
+    /// Computes counts and ETA together so the sidebar's richer summary is
+    /// still one linear scan. The two pipeline lanes run in parallel, so the
     /// estimate is the slower lane, not the sum.
-    var queueETAText: String? {
-        let live = jobs.filter { $0.archivedAt == nil }
-        let gpuHistory =
-            live
-            .compactMap { job -> (end: Date, duration: TimeInterval)? in
-                guard let start = job.transcriptionStartedAt, let end = job.transcriptionFinishedAt else { return nil }
-                return (end, end.timeIntervalSince(start))
+    private var queueSnapshot: QueueSnapshot {
+        var gpuHistory: [(end: Date, duration: TimeInterval)] = []
+        var translationHistory: [(end: Date, duration: TimeInterval)] = []
+        var pendingGPUCount = 0
+        var pendingTranslationCount = 0
+        var runningCount = 0
+        var queuedCount = 0
+        var gpuActiveFraction: Double?
+        var translationActiveFraction: Double?
+
+        // Keep only the ten newest samples while scanning. The old version
+        // built multiple copies of the full job list and sorted all history on
+        // every progress tick, even though QueueETA uses just ten durations.
+        func retainRecent(
+            _ sample: (end: Date, duration: TimeInterval),
+            in samples: inout [(end: Date, duration: TimeInterval)]
+        ) {
+            let insertion = samples.firstIndex { $0.end > sample.end } ?? samples.endIndex
+            samples.insert(sample, at: insertion)
+            if samples.count > 10 {
+                samples.removeFirst(samples.count - 10)
             }
-            .sorted { $0.end < $1.end }
-            .suffix(10)
-            .map(\.duration)
-        let translationHistory =
-            live
-            .compactMap { job -> (end: Date, duration: TimeInterval)? in
-                guard let start = job.translationStartedAt, let end = job.finishedAt, end > start else { return nil }
-                return (end, end.timeIntervalSince(start))
+        }
+
+        for job in jobs where job.archivedAt == nil {
+            if job.status.isRunning {
+                runningCount += 1
             }
-            .sorted { $0.end < $1.end }
-            .suffix(10)
-            .map(\.duration)
+            if let start = job.transcriptionStartedAt, let end = job.transcriptionFinishedAt {
+                retainRecent((end, end.timeIntervalSince(start)), in: &gpuHistory)
+            }
+            if let start = job.translationStartedAt, let end = job.finishedAt, end > start {
+                retainRecent((end, end.timeIntervalSince(start)), in: &translationHistory)
+            }
+            if job.status == .queued {
+                queuedCount += 1
+                if job.transcriptSegments.isEmpty {
+                    pendingGPUCount += 1
+                } else {
+                    pendingTranslationCount += 1
+                }
+            }
+            if job.id == gpuJobID {
+                gpuActiveFraction = job.progress.fraction ?? 0
+            }
+            if job.id == translationJobID {
+                translationActiveFraction = job.progress.fraction ?? 0
+            }
+        }
         let gpuETA = QueueETA.estimate(
-            recentDurations: gpuHistory,
-            pendingCount: live.filter { $0.status == .queued && $0.transcriptSegments.isEmpty }.count,
-            activeFraction: gpuJobID.map { id in live.first { $0.id == id }?.progress.fraction ?? 0 }
+            recentDurations: gpuHistory.map(\.duration),
+            pendingCount: pendingGPUCount,
+            activeFraction: gpuJobID == nil ? nil : gpuActiveFraction ?? 0
         )
         let translationETA = QueueETA.estimate(
-            recentDurations: translationHistory,
-            pendingCount: live.filter { $0.status == .queued && !$0.transcriptSegments.isEmpty }.count,
-            activeFraction: translationJobID.map { id in live.first { $0.id == id }?.progress.fraction ?? 0 }
+            recentDurations: translationHistory.map(\.duration),
+            pendingCount: pendingTranslationCount,
+            activeFraction: translationJobID == nil ? nil : translationActiveFraction ?? 0
         )
-        guard let eta = [gpuETA, translationETA].compactMap({ $0 }).max(), eta >= 1 else { return nil }
+        let eta = [gpuETA, translationETA].compactMap { $0 }.max().flatMap { $0 >= 1 ? $0 : nil }
+        return QueueSnapshot(runningCount: runningCount, queuedCount: queuedCount, eta: eta)
+    }
+
+    /// "~7m 12s left" for the menu bar; nil when idle or with no history.
+    var queueETAText: String? {
+        guard let eta = queueSnapshot.eta else { return nil }
         return "~\(JobTimingFormatter.format(eta)) left"
+    }
+
+    /// At-a-glance sidebar text such as
+    /// "1 running · 24 queued · ~38m remaining".
+    var queueSummaryText: String? {
+        let snapshot = queueSnapshot
+        guard snapshot.runningCount > 0 || snapshot.queuedCount > 0 else { return nil }
+        var parts: [String] = []
+        if queuePaused {
+            parts.append("Queue paused")
+        }
+        if snapshot.runningCount > 0 {
+            parts.append("\(snapshot.runningCount) running")
+        }
+        if snapshot.queuedCount > 0 {
+            parts.append("\(snapshot.queuedCount) queued")
+        }
+        if !queuePaused, let eta = snapshot.eta {
+            parts.append("~\(JobTimingFormatter.format(eta)) remaining")
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// One-line queue summary for the menu bar item.
@@ -922,10 +1060,29 @@ final class AppModel: ObservableObject {
     }
 
     func removeFromQueue(_ id: UUID) {
-        guard let job = jobs.first(where: { $0.id == id }), job.status == .queued else { return }
-        updateJob(id) { job in
+        removeJobsFromQueue([id])
+    }
+
+    /// Removes all queued members of a selection without repeatedly
+    /// invalidating the entire sidebar.
+    func removeJobsFromQueue(_ ids: Set<UUID>) {
+        updateJobs(ids, where: { $0.status == .queued }) { job in
             job.status = .idle
             job.progress = .idle
+        }
+    }
+
+    /// Undo support for Remove from Queue. A paused queue remains paused;
+    /// otherwise restored jobs immediately rejoin normal scheduling.
+    func restoreJobsToQueue(_ ids: Set<UUID>, queueWasPaused: Bool) {
+        let restoredIDs = updateJobs(ids, where: { $0.status == .idle && $0.archivedAt == nil }) { job in
+            job.status = .queued
+            job.progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
+        }
+        guard !restoredIDs.isEmpty else { return }
+        queuePaused = queueWasPaused
+        if !queueWasPaused {
+            processQueue()
         }
     }
 
@@ -1929,6 +2086,35 @@ final class AppModel: ObservableObject {
         } else {
             jobRepository.save(jobs[index])
         }
+    }
+
+    /// Applies the same user action to many jobs while publishing one new
+    /// array value. The returned ids are the jobs that actually changed.
+    @discardableResult
+    private func updateJobs(
+        _ ids: Set<UUID>,
+        where shouldUpdate: (TranscriptionJob) -> Bool,
+        mutate: (inout TranscriptionJob) -> Void
+    ) -> Set<UUID> {
+        guard !ids.isEmpty else { return [] }
+        var updatedJobs = jobs
+        var snapshots: [TranscriptionJob] = []
+        var changedIDs = Set<UUID>()
+        changedIDs.reserveCapacity(ids.count)
+        let now = Date()
+
+        for index in updatedJobs.indices
+        where ids.contains(updatedJobs[index].id) && shouldUpdate(updatedJobs[index]) {
+            mutate(&updatedJobs[index])
+            updatedJobs[index].updatedAt = now
+            snapshots.append(updatedJobs[index])
+            changedIDs.insert(updatedJobs[index].id)
+        }
+
+        guard !snapshots.isEmpty else { return [] }
+        jobs = updatedJobs
+        jobRepository.save(snapshots)
+        return changedIDs
     }
 
     private func updateSegment(

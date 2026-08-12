@@ -3,6 +3,15 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
+## 2.3.5 — 2026-08-12
+
+- Kept the sidebar responsive with large job histories by batching queue,
+  persistence, selection, and status calculations into single-pass updates.
+- Added live row progress, queue positions and estimates, clickable status
+  filters with counts, and smart selection commands for everyday queue work.
+- Added bulk queue/archive/retry actions, quick retry for failed jobs, and Undo
+  for archive, unarchive, and queue-removal actions.
+
 ## 2.3.4 — 2026-08-08
 
 - Sidebar jobs now support native Command-click and Shift-click multi-selection,

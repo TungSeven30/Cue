@@ -46,18 +46,26 @@ private enum JobGroup: String, CaseIterable, Identifiable {
 private enum JobStatusFilter: String, CaseIterable, Identifiable {
     case all
     case inProgress
+    case running
+    case queued
     case done
     case stopped
+    case failed
     case archived
 
     var id: String { rawValue }
+
+    static let quickCases: [JobStatusFilter] = [.all, .running, .queued, .done, .failed]
 
     var label: String {
         switch self {
         case .all: return "All"
         case .inProgress: return "In Progress"
+        case .running: return "Running"
+        case .queued: return "Queued"
         case .done: return "Done"
         case .stopped: return "Canceled & Failed"
+        case .failed: return "Failed"
         case .archived: return "Archived"
         }
     }
@@ -72,10 +80,16 @@ private enum JobStatusFilter: String, CaseIterable, Identifiable {
             return true
         case .inProgress:
             return job.status.isRunning || job.status == .queued || job.status == .idle
+        case .running:
+            return job.status.isRunning
+        case .queued:
+            return job.status == .queued
         case .done:
             return job.status == .transcriptionComplete || job.status == .translationComplete
         case .stopped:
             return job.status == .canceled || job.status == .failed
+        case .failed:
+            return job.status == .failed
         }
     }
 }
@@ -85,11 +99,15 @@ struct SidebarView: View {
     @State private var searchText = ""
     @State private var editingWatchFolderID: UUID?
     @State private var pendingDeletionIDs: Set<UUID> = []
+    @State private var undoNotice: SidebarUndoNotice?
     @AppStorage("sidebarGroupByStatus") private var groupByStatus = false
     @AppStorage("sidebarStatusFilter") private var statusFilterRaw = JobStatusFilter.all.rawValue
     @AppStorage("sidebarSortOrder") private var sortOrderRaw = JobSortOrder.queueOrder.rawValue
 
     var body: some View {
+        // Counts, queue positions, selection groups, and visible rows all come
+        // from one pass so the extra UI does not regress large-list behavior.
+        let listState = makeSidebarListState()
         List(
             selection: Binding(
                 get: { model.selectedJobIDs },
@@ -97,10 +115,11 @@ struct SidebarView: View {
             )
         ) {
             watchFoldersSection
+            jobControlsSection(listState.counts)
             if groupByStatus {
-                groupedSections
+                groupedSections(listState)
             } else {
-                flatSection
+                flatSection(listState)
             }
         }
         .listStyle(.sidebar)
@@ -123,6 +142,12 @@ struct SidebarView: View {
             return true
         }
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search jobs")
+        .task(id: undoNotice?.id) {
+            guard let noticeID = undoNotice?.id else { return }
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard !Task.isCancelled, undoNotice?.id == noticeID else { return }
+            undoNotice = nil
+        }
         // Sheet lives on the List, not inside a Section: section-scoped
         // sheets present unreliably on macOS.
         .sheet(
@@ -138,6 +163,14 @@ struct SidebarView: View {
             ) { model.setWatchFolderProfile(folder.id, $0) }
         }
         .toolbar {
+            if model.selectedJobIDs.count > 1 {
+                ToolbarItem {
+                    Text("\(model.selectedJobIDs.count) selected")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help("Actions in a selected job's shortcut menu apply to the selection")
+                }
+            }
             if !model.selectedJobIDs.isEmpty {
                 ToolbarItem {
                     Button(role: .destructive) {
@@ -151,6 +184,48 @@ struct SidebarView: View {
             }
             ToolbarItem {
                 Menu {
+                    if !listState.retryableFailedIDs.isEmpty {
+                        Button {
+                            model.retryFailedJobs(listState.retryableFailedIDs)
+                        } label: {
+                            Label(
+                                retryFailedLabel(listState.retryableFailedIDs.count),
+                                systemImage: "arrow.clockwise"
+                            )
+                        }
+                        Divider()
+                    }
+                    Menu {
+                        Button("Select All Visible") {
+                            model.selectJobs(Set(listState.displayedJobs.map(\.id)))
+                        }
+                        .disabled(listState.displayedJobs.isEmpty)
+                        Divider()
+                        Button("Select Running") {
+                            selectJobs(listState.runningIDs, showing: .running)
+                        }
+                        .disabled(listState.runningIDs.isEmpty)
+                        Button("Select Queued") {
+                            selectJobs(listState.queuedIDs, showing: .queued)
+                        }
+                        .disabled(listState.queuedIDs.isEmpty)
+                        Button("Select Completed") {
+                            selectJobs(listState.doneIDs, showing: .done)
+                        }
+                        .disabled(listState.doneIDs.isEmpty)
+                        Button("Select Failed") {
+                            selectJobs(listState.failedIDs, showing: .failed)
+                        }
+                        .disabled(listState.failedIDs.isEmpty)
+                        Divider()
+                        Button("Clear Selection") {
+                            model.selectJobs([])
+                        }
+                        .disabled(model.selectedJobIDs.isEmpty)
+                    } label: {
+                        Label("Select Jobs", systemImage: "checkmark.circle")
+                    }
+                    Divider()
                     Toggle(isOn: $groupByStatus) {
                         Label("Group by Status", systemImage: "rectangle.3.group")
                     }
@@ -190,6 +265,20 @@ struct SidebarView: View {
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 8) {
+                if let undoNotice {
+                    HStack(spacing: 8) {
+                        Text(undoNotice.message)
+                            .font(.caption)
+                            .lineLimit(2)
+                        Spacer(minLength: 4)
+                        Button("Undo") {
+                            performUndo(undoNotice)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .padding(8)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                }
                 if model.hasPendingWork || model.queuePaused {
                     Button {
                         model.startAllPendingJobs()
@@ -203,10 +292,12 @@ struct SidebarView: View {
                     .controlSize(.large)
                     .help("Queue every job that still needs transcription or translation")
                 }
-                if let eta = model.queueETAText {
-                    Text(eta)
+                if let summary = model.queueSummaryText {
+                    Text(summary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
                 }
                 Button {
                     model.selectVideo()
@@ -346,6 +437,15 @@ struct SidebarView: View {
         JobSortOrder(rawValue: sortOrderRaw) ?? .queueOrder
     }
 
+    private func retryFailedLabel(_ count: Int) -> String {
+        count == 1 ? "Retry Failed Job" : "Retry \(count) Failed Jobs"
+    }
+
+    private func selectJobs(_ ids: Set<UUID>, showing filter: JobStatusFilter) {
+        statusFilterRaw = filter.rawValue
+        model.selectJobs(ids)
+    }
+
     private var deleteSelectionLabel: String {
         model.selectedJobIDs.count == 1
             ? "Delete Job"
@@ -381,22 +481,103 @@ struct SidebarView: View {
         pendingDeletionIDs = ids
     }
 
-    private func deletionTargets(for job: TranscriptionJob) -> Set<UUID> {
+    private func selectionTargets(for job: TranscriptionJob) -> Set<UUID> {
         if model.selectedJobIDs.count > 1, model.selectedJobIDs.contains(job.id) {
             return model.selectedJobIDs
         }
         return [job.id]
     }
 
-    private var visibleJobs: [TranscriptionJob] {
-        let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filtered = model.jobs.filter { job in
-            guard statusFilter.includes(job) else { return false }
-            guard !trimmedSearch.isEmpty else { return true }
-            return job.title.localizedCaseInsensitiveContains(trimmedSearch)
+    private func actionTargets(for job: TranscriptionJob) -> JobActionTargets {
+        let ids = selectionTargets(for: job)
+        var queueableIDs = Set<UUID>()
+        var retryableFailedIDs = Set<UUID>()
+        var queuedIDs = Set<UUID>()
+        var archivableIDs = Set<UUID>()
+        var unarchivableIDs = Set<UUID>()
+        for candidate in model.jobs where ids.contains(candidate.id) {
+            if model.jobNeedsWork(candidate) && candidate.status != .queued {
+                if candidate.status == .failed {
+                    retryableFailedIDs.insert(candidate.id)
+                } else {
+                    queueableIDs.insert(candidate.id)
+                }
+            }
+            if candidate.status == .queued {
+                queuedIDs.insert(candidate.id)
+            }
+            if !candidate.status.isRunning && candidate.status != .queued {
+                if candidate.archivedAt == nil {
+                    archivableIDs.insert(candidate.id)
+                } else {
+                    unarchivableIDs.insert(candidate.id)
+                }
+            }
         }
-        guard sortOrder != .queueOrder else { return filtered }
-        return sortOrder.sortedOffsets(of: filtered.map(JobSortOrder.Key.init(job:))).map { filtered[$0] }
+        return JobActionTargets(
+            ids: ids,
+            queueableIDs: queueableIDs,
+            retryableFailedIDs: retryableFailedIDs,
+            queuedIDs: queuedIDs,
+            archivableIDs: archivableIDs,
+            unarchivableIDs: unarchivableIDs
+        )
+    }
+
+    private func makeSidebarListState() -> SidebarListState {
+        let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        var counts = SidebarJobCounts()
+        var queuePositions: [UUID: Int] = [:]
+        var displayedJobs: [TranscriptionJob] = []
+        var runningIDs = Set<UUID>()
+        var queuedIDs = Set<UUID>()
+        var doneIDs = Set<UUID>()
+        var failedIDs = Set<UUID>()
+        var retryableFailedIDs = Set<UUID>()
+        var nextQueuePosition = 1
+
+        for job in model.jobs {
+            let matchesSearch = trimmedSearch.isEmpty || job.title.localizedCaseInsensitiveContains(trimmedSearch)
+            if job.archivedAt == nil {
+                counts.record(job)
+                if job.status == .queued {
+                    queuePositions[job.id] = nextQueuePosition
+                    nextQueuePosition += 1
+                }
+                if matchesSearch {
+                    if job.status.isRunning { runningIDs.insert(job.id) }
+                    if job.status == .queued { queuedIDs.insert(job.id) }
+                    if job.status == .transcriptionComplete || job.status == .translationComplete {
+                        doneIDs.insert(job.id)
+                    }
+                    if job.status == .failed {
+                        failedIDs.insert(job.id)
+                        if model.jobNeedsWork(job) {
+                            retryableFailedIDs.insert(job.id)
+                        }
+                    }
+                }
+            }
+            if statusFilter.includes(job) && matchesSearch {
+                displayedJobs.append(job)
+            }
+        }
+
+        if sortOrder != .queueOrder {
+            displayedJobs = sortOrder.sortedOffsets(of: displayedJobs.map(JobSortOrder.Key.init(job:))).map {
+                displayedJobs[$0]
+            }
+        }
+        return SidebarListState(
+            displayedJobs: displayedJobs,
+            counts: counts,
+            queuePositions: queuePositions,
+            runningIDs: runningIDs,
+            queuedIDs: queuedIDs,
+            doneIDs: doneIDs,
+            failedIDs: failedIDs,
+            retryableFailedIDs: retryableFailedIDs
+        )
     }
 
     /// Drag-reorder only works on the full flat list: reordering a filtered
@@ -407,38 +588,60 @@ struct SidebarView: View {
     }
 
     @ViewBuilder
-    private var flatSection: some View {
+    private func jobControlsSection(_ counts: SidebarJobCounts) -> some View {
         Section("Jobs") {
-            if visibleJobs.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(JobStatusFilter.quickCases) { filter in
+                        JobFilterChip(
+                            label: filter.label,
+                            count: counts.count(for: filter),
+                            isSelected: statusFilter == filter
+                        ) {
+                            statusFilterRaw = filter.rawValue
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 4, trailing: 8))
+            .listRowSeparator(.hidden)
+        }
+    }
+
+    @ViewBuilder
+    private func flatSection(_ state: SidebarListState) -> some View {
+        Section {
+            if state.displayedJobs.isEmpty {
                 emptyPlaceholder
             } else if isReorderable {
-                ForEach(visibleJobs) { job in
-                    row(for: job)
+                ForEach(state.displayedJobs) { job in
+                    row(for: job, queuePosition: state.queuePositions[job.id])
                 }
                 .onMove { source, destination in
                     model.moveJobs(from: source, to: destination)
                 }
             } else {
-                ForEach(visibleJobs) { job in
-                    row(for: job)
+                ForEach(state.displayedJobs) { job in
+                    row(for: job, queuePosition: state.queuePositions[job.id])
                 }
             }
         }
     }
 
     @ViewBuilder
-    private var groupedSections: some View {
-        if visibleJobs.isEmpty {
-            Section("Jobs") {
+    private func groupedSections(_ state: SidebarListState) -> some View {
+        if state.displayedJobs.isEmpty {
+            Section {
                 emptyPlaceholder
             }
         } else {
             ForEach(JobGroup.allCases) { group in
-                let jobs = visibleJobs.filter { JobGroup(status: $0.status) == group }
+                let jobs = state.displayedJobs.filter { JobGroup(status: $0.status) == group }
                 if !jobs.isEmpty {
                     Section("\(group.label) (\(jobs.count))") {
                         ForEach(jobs) { job in
-                            row(for: job)
+                            row(for: job, queuePosition: state.queuePositions[job.id])
                         }
                     }
                 }
@@ -446,10 +649,32 @@ struct SidebarView: View {
         }
     }
 
-    private func row(for job: TranscriptionJob) -> some View {
-        JobRow(job: job, hasOverrides: !job.overrides.isEmpty)
-            .tag(job.id)
-            .contextMenu { contextMenu(for: job) }
+    private func row(for job: TranscriptionJob, queuePosition: Int?) -> some View {
+        let canRetry = job.status == .failed && model.jobNeedsWork(job)
+        return JobRow(
+            id: job.id,
+            title: job.title,
+            status: job.status,
+            statusText: rowStatusText(for: job, queuePosition: queuePosition),
+            progressFraction: job.status.isRunning ? job.progress.fraction : nil,
+            hasOverrides: !job.overrides.isEmpty,
+            canRetry: canRetry,
+            onRetry: { model.retryFailedJobs([job.id]) }
+        )
+        .equatable()
+        .tag(job.id)
+        .contextMenu { contextMenu(for: job) }
+    }
+
+    private func rowStatusText(for job: TranscriptionJob, queuePosition: Int?) -> String {
+        if job.status.isRunning, let fraction = job.progress.fraction {
+            let percent = Int((min(max(fraction, 0), 1) * 100).rounded())
+            return "\(job.status.label) · \(percent)%"
+        }
+        if job.status == .queued, let queuePosition {
+            return "Queued · #\(queuePosition)"
+        }
+        return job.status.label
     }
 
     @ViewBuilder
@@ -461,8 +686,81 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func contextMenu(for job: TranscriptionJob) -> some View {
-        let deletionIDs = deletionTargets(for: job)
-        if model.jobNeedsWork(job) && job.status != .queued {
+        let targets = actionTargets(for: job)
+        if targets.isBulk {
+            bulkContextMenu(targets)
+        } else {
+            singleJobContextMenu(for: job, deletionIDs: targets.ids)
+        }
+    }
+
+    @ViewBuilder
+    private func bulkContextMenu(_ targets: JobActionTargets) -> some View {
+        if !targets.retryableFailedIDs.isEmpty {
+            Button {
+                model.retryFailedJobs(targets.retryableFailedIDs)
+            } label: {
+                Label(retryFailedLabel(targets.retryableFailedIDs.count), systemImage: "arrow.clockwise")
+            }
+        }
+        if !targets.queueableIDs.isEmpty {
+            Button {
+                model.enqueueJobs(targets.queueableIDs)
+            } label: {
+                Label("Add \(targets.queueableIDs.count) to Queue", systemImage: "clock")
+            }
+        }
+        if !targets.queuedIDs.isEmpty {
+            Button {
+                removeJobsFromQueueWithUndo(targets.queuedIDs)
+            } label: {
+                Label("Remove \(targets.queuedIDs.count) from Queue", systemImage: "clock.badge.xmark")
+            }
+        }
+        if !targets.retryableFailedIDs.isEmpty || !targets.queueableIDs.isEmpty || !targets.queuedIDs.isEmpty {
+            Divider()
+        }
+        if !targets.archivableIDs.isEmpty {
+            Button {
+                setArchivedWithUndo(targets.archivableIDs, true)
+            } label: {
+                Label(
+                    targets.archivableIDs.count == 1 ? "Archive 1 Job" : "Archive \(targets.archivableIDs.count) Jobs",
+                    systemImage: "archivebox"
+                )
+            }
+        }
+        if !targets.unarchivableIDs.isEmpty {
+            Button {
+                setArchivedWithUndo(targets.unarchivableIDs, false)
+            } label: {
+                Label(
+                    targets.unarchivableIDs.count == 1
+                        ? "Unarchive 1 Job" : "Unarchive \(targets.unarchivableIDs.count) Jobs",
+                    systemImage: "tray.and.arrow.up"
+                )
+            }
+        }
+        if !targets.archivableIDs.isEmpty || !targets.unarchivableIDs.isEmpty {
+            Divider()
+        }
+        Button(role: .destructive) {
+            requestDeletion(of: targets.ids)
+        } label: {
+            Label("Delete \(targets.ids.count) Jobs", systemImage: "trash")
+        }
+        .disabled(!model.canDeleteJobs(targets.ids))
+    }
+
+    @ViewBuilder
+    private func singleJobContextMenu(for job: TranscriptionJob, deletionIDs: Set<UUID>) -> some View {
+        if job.status == .failed && model.jobNeedsWork(job) {
+            Button {
+                model.retryFailedJobs([job.id])
+            } label: {
+                Label("Retry Failed Job", systemImage: "arrow.clockwise")
+            }
+        } else if model.jobNeedsWork(job) && job.status != .queued {
             Button {
                 model.enqueueJob(job.id)
             } label: {
@@ -471,7 +769,7 @@ struct SidebarView: View {
         }
         if job.status == .queued {
             Button {
-                model.removeFromQueue(job.id)
+                removeJobsFromQueueWithUndo([job.id])
             } label: {
                 Label("Remove from Queue", systemImage: "clock.badge.xmark")
             }
@@ -510,7 +808,7 @@ struct SidebarView: View {
         }
         Divider()
         Button {
-            model.setArchived(job.id, job.archivedAt == nil)
+            setArchivedWithUndo([job.id], job.archivedAt == nil)
         } label: {
             Label(
                 job.archivedAt == nil ? "Archive" : "Unarchive",
@@ -528,6 +826,145 @@ struct SidebarView: View {
         }
         .disabled(!model.canDeleteJobs(deletionIDs))
     }
+
+    private func setArchivedWithUndo(_ ids: Set<UUID>, _ archived: Bool) {
+        guard !ids.isEmpty else { return }
+        let eligibleIDs = Set(
+            model.jobs.lazy
+                .filter {
+                    ids.contains($0.id) && !$0.status.isRunning && $0.status != .queued
+                        && (archived ? $0.archivedAt == nil : $0.archivedAt != nil)
+                }
+                .map(\.id)
+        )
+        guard !eligibleIDs.isEmpty else { return }
+        model.setArchived(ids, archived)
+        let verb = archived ? "archived" : "unarchived"
+        undoNotice = SidebarUndoNotice(
+            message: eligibleIDs.count == 1 ? "1 job \(verb)" : "\(eligibleIDs.count) jobs \(verb)",
+            action: .setArchived(ids: eligibleIDs, archived: !archived)
+        )
+    }
+
+    private func removeJobsFromQueueWithUndo(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        let queuedIDs = Set(model.jobs.lazy.filter { ids.contains($0.id) && $0.status == .queued }.map(\.id))
+        guard !queuedIDs.isEmpty else { return }
+        let wasPaused = model.queuePaused
+        model.removeJobsFromQueue(queuedIDs)
+        undoNotice = SidebarUndoNotice(
+            message: queuedIDs.count == 1 ? "1 job removed from queue" : "\(queuedIDs.count) jobs removed from queue",
+            action: .restoreQueue(ids: queuedIDs, wasPaused: wasPaused)
+        )
+    }
+
+    private func performUndo(_ notice: SidebarUndoNotice) {
+        switch notice.action {
+        case .setArchived(let ids, let archived):
+            model.setArchived(ids, archived)
+            statusFilterRaw = archived ? JobStatusFilter.archived.rawValue : JobStatusFilter.all.rawValue
+            model.selectJobs(ids)
+        case .restoreQueue(let ids, let wasPaused):
+            model.restoreJobsToQueue(ids, queueWasPaused: wasPaused)
+            let restoredIDs = Set(
+                model.jobs.lazy
+                    .filter { ids.contains($0.id) && ($0.status == .queued || $0.status.isRunning) }
+                    .map(\.id)
+            )
+            statusFilterRaw = JobStatusFilter.inProgress.rawValue
+            model.selectJobs(restoredIDs)
+        }
+        undoNotice = nil
+    }
+}
+
+private struct JobActionTargets {
+    let ids: Set<UUID>
+    let queueableIDs: Set<UUID>
+    let retryableFailedIDs: Set<UUID>
+    let queuedIDs: Set<UUID>
+    let archivableIDs: Set<UUID>
+    let unarchivableIDs: Set<UUID>
+
+    var isBulk: Bool { ids.count > 1 }
+}
+
+private struct SidebarListState {
+    let displayedJobs: [TranscriptionJob]
+    let counts: SidebarJobCounts
+    let queuePositions: [UUID: Int]
+    let runningIDs: Set<UUID>
+    let queuedIDs: Set<UUID>
+    let doneIDs: Set<UUID>
+    let failedIDs: Set<UUID>
+    let retryableFailedIDs: Set<UUID>
+}
+
+private struct SidebarJobCounts {
+    private(set) var all = 0
+    private(set) var running = 0
+    private(set) var queued = 0
+    private(set) var done = 0
+    private(set) var failed = 0
+
+    mutating func record(_ job: TranscriptionJob) {
+        all += 1
+        if job.status.isRunning { running += 1 }
+        if job.status == .queued { queued += 1 }
+        if job.status == .transcriptionComplete || job.status == .translationComplete { done += 1 }
+        if job.status == .failed { failed += 1 }
+    }
+
+    func count(for filter: JobStatusFilter) -> Int {
+        switch filter {
+        case .all: return all
+        case .running: return running
+        case .queued: return queued
+        case .done: return done
+        case .failed: return failed
+        case .inProgress, .stopped, .archived: return 0
+        }
+    }
+}
+
+private struct JobFilterChip: View {
+    let label: String
+    let count: Int
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Text(label)
+                Text("\(count)")
+                    .monospacedDigit()
+                    .opacity(0.8)
+            }
+            .font(.caption)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .foregroundStyle(isSelected ? Color.white : Color.primary)
+            .background(
+                isSelected ? Color.accentColor : Color.secondary.opacity(0.14),
+                in: Capsule()
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(label), \(count) jobs")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+private struct SidebarUndoNotice: Identifiable {
+    enum Action {
+        case setArchived(ids: Set<UUID>, archived: Bool)
+        case restoreQueue(ids: Set<UUID>, wasPaused: Bool)
+    }
+
+    let id = UUID()
+    let message: String
+    let action: Action
 }
 
 private struct WatchFolderRow: View {
@@ -577,24 +1014,58 @@ private struct WatchFolderRow: View {
     }
 }
 
-private struct JobRow: View {
-    let job: TranscriptionJob
+private struct JobRow: View, Equatable {
+    let id: UUID
+    let title: String
+    let status: JobStatus
+    let statusText: String
+    let progressFraction: Double?
     let hasOverrides: Bool
+    let canRetry: Bool
+    let onRetry: () -> Void
+
+    nonisolated static func == (lhs: JobRow, rhs: JobRow) -> Bool {
+        lhs.id == rhs.id
+            && lhs.title == rhs.title
+            && lhs.status == rhs.status
+            && lhs.statusText == rhs.statusText
+            && lhs.progressFraction == rhs.progressFraction
+            && lhs.hasOverrides == rhs.hasOverrides
+            && lhs.canRetry == rhs.canRetry
+    }
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: job.status.systemImage)
-                .foregroundStyle(job.status.tint)
+            Image(systemName: status.systemImage)
+                .foregroundStyle(status.tint)
                 .frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
-                Text(job.title)
+                Text(title)
                     .lineLimit(1)
-                Text(job.status.label)
+                Text(statusText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
+            if status.isRunning {
+                if let progressFraction {
+                    ProgressView(value: min(max(progressFraction, 0), 1))
+                        .frame(width: 36)
+                        .help(statusText)
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                        .help(statusText)
+                }
+            }
+            if canRetry {
+                Button(action: onRetry) {
+                    Image(systemName: "arrow.clockwise")
+                        .help("Retry this failed job")
+                }
+                .buttonStyle(.plain)
+            }
             if hasOverrides {
                 Image(systemName: "slider.horizontal.3")
                     .font(.caption)

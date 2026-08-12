@@ -66,6 +66,17 @@ struct JobRepositoryTests {
         #expect(store.flushCount == 1)
     }
 
+    @Test func batchSavePersistsEverySnapshotOnce() throws {
+        let store = RecordingStore()
+        let repository = JobRepository(store: store)
+        let jobs = try (0..<20).map { _ in try makeJob() }
+
+        repository.save(jobs)
+
+        #expect(Set(store.saved.map(\.id)) == Set(jobs.map(\.id)))
+        #expect(store.saved.count == jobs.count)
+    }
+
     @Test func deleteDropsAQueuedSnapshot() throws {
         let store = RecordingStore()
         let repository = JobRepository(store: store, debounceNanoseconds: 60_000_000_000)

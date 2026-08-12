@@ -57,6 +57,84 @@ struct AppModelSelectionTests {
         #expect(JobStore(baseURL: fixture.baseURL).loadJobs().count == 1)
     }
 
+    @Test func bulkArchiveAndUnarchiveUpdatesTheSelectionAndPersists() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        model.addVideos(urls: [fixture.sourceURL(1), fixture.sourceURL(2), fixture.sourceURL(3)])
+        let archivingIDs = Set(model.jobs.prefix(2).map(\.id))
+        model.selectJobs(archivingIDs)
+
+        model.setArchived(archivingIDs, true)
+        model.flushPendingWork()
+
+        #expect(model.jobs.filter { archivingIDs.contains($0.id) }.allSatisfy { $0.archivedAt != nil })
+        #expect(model.selectedJobIDs.isDisjoint(with: archivingIDs))
+        #expect(model.currentJob?.archivedAt == nil)
+
+        model.setArchived(archivingIDs, false)
+        model.flushPendingWork()
+
+        #expect(model.jobs.filter { archivingIDs.contains($0.id) }.allSatisfy { $0.archivedAt == nil })
+        let reloaded = JobStore(baseURL: fixture.baseURL).loadJobs()
+        #expect(reloaded.filter { archivingIDs.contains($0.id) }.allSatisfy { $0.archivedAt == nil })
+    }
+
+    @Test func bulkRemoveFromQueueChangesOnlyQueuedJobs() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        model.addVideos(urls: [fixture.sourceURL(1), fixture.sourceURL(2), fixture.sourceURL(3)])
+        let queuedIDs = Set(model.jobs.prefix(2).map(\.id))
+        for index in model.jobs.indices where queuedIDs.contains(model.jobs[index].id) {
+            model.jobs[index].status = .queued
+            model.jobs[index].progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
+        }
+        let untouchedID = try #require(model.jobs.first(where: { !queuedIDs.contains($0.id) })?.id)
+        let untouchedIndex = try #require(model.jobs.firstIndex(where: { $0.id == untouchedID }))
+        model.jobs[untouchedIndex].status = .canceled
+
+        model.removeJobsFromQueue(Set(model.jobs.map(\.id)))
+
+        #expect(model.jobs.filter { queuedIDs.contains($0.id) }.allSatisfy { $0.status == .idle })
+        #expect(model.jobs.first(where: { $0.id == untouchedID })?.status == .canceled)
+    }
+
+    @Test func restoreQueueUndoRestoresEligibleJobsAndPausedState() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        model.addVideos(urls: [fixture.sourceURL(1), fixture.sourceURL(2)])
+        let ids = Set(model.jobs.map(\.id))
+        for index in model.jobs.indices {
+            model.jobs[index].status = .queued
+            model.jobs[index].progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
+        }
+
+        model.removeJobsFromQueue(ids)
+        model.restoreJobsToQueue(ids, queueWasPaused: true)
+
+        #expect(model.queuePaused)
+        #expect(model.jobs.allSatisfy { $0.status == .queued })
+    }
+
+    @Test func retryFailedJobsQueuesOnlyRetryableFailures() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        model.addVideos(urls: [fixture.sourceURL(1), fixture.sourceURL(2), fixture.sourceURL(3)])
+        let failedIDs = Set(model.jobs.prefix(2).map(\.id))
+        for index in model.jobs.indices where failedIDs.contains(model.jobs[index].id) {
+            model.jobs[index].status = .failed
+        }
+        let untouchedID = try #require(model.jobs.first(where: { !failedIDs.contains($0.id) })?.id)
+
+        model.retryFailedJobs(Set(model.jobs.map(\.id)))
+
+        #expect(model.jobs.filter { failedIDs.contains($0.id) }.allSatisfy { $0.status == .queued || $0.status.isRunning })
+        #expect(model.jobs.first(where: { $0.id == untouchedID })?.status == .idle)
+    }
+
     private func makeFixture(createSources: Bool = false) throws -> SelectionFixture {
         let suiteName = "app-model-selection-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

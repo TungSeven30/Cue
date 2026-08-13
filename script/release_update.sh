@@ -65,6 +65,10 @@ if ! gh release view stable --repo "$RELEASES_REPO" >/dev/null 2>&1; then
     --notes "Update archives served to the in-app Sparkle updater."
 fi
 gh release upload stable "$ARCHIVE_DIR/Cue-$VERSION.dmg" --repo "$RELEASES_REPO" --clobber
+# Unversioned alias so the landing-page URL
+# .../releases/latest/download/Cue.dmg never needs a bump.
+cp "$ARCHIVE_DIR/Cue-$VERSION.dmg" "$ARCHIVE_DIR/Cue.dmg"
+gh release upload stable "$ARCHIVE_DIR/Cue.dmg" --repo "$RELEASES_REPO" --clobber
 
 # Publish the regenerated appcast.
 staging="$(mktemp -d)"

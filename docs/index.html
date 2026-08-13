@@ -189,7 +189,7 @@
       font-family: var(--mono);
       font-size: 0.72rem;
       line-height: 1.55;
-      color: var(--dim);
+      color: var(--muted);
       max-width: 42em;
     }
 
@@ -559,12 +559,13 @@
 
         <div class="cta-block">
           <a class="cta" href="https://github.com/TungSeven30/cue-releases/releases/latest/download/Cue.dmg">Download Cue</a>
-          <p class="micro">Free · Open source · macOS 14+ · ~4&nbsp;MB</p>
+          <p class="micro">Free · Open source · macOS 14+ · Apple Silicon · ~4&nbsp;MB</p>
           <p class="gate">Developer ID signed and notarized. Double-click — no Gatekeeper dance. First transcription downloads the model (~574&nbsp;MB, once).</p>
         </div>
 
-        <figure class="letterbox" aria-label="Watch-folder demo: a file drops in, cues stream, an SRT appears beside it">
-          <div class="letterbox__bar" aria-hidden="true"></div>
+        <figure class="letterbox" role="img" aria-label="Watch-folder demo: a file drops in, cues stream, an SRT appears beside it">
+          <div aria-hidden="true">
+          <div class="letterbox__bar"></div>
           <div class="letterbox__picture">
             <div class="demo-files">
               <span>inbox/ep01.mkv</span>
@@ -576,15 +577,16 @@
             </div>
             <p class="subtitle" id="subtitle"><span id="subtitle-text">In 1960s Saigon, a young chef opens a noodle stall.</span><span class="caret" id="caret" aria-hidden="true"></span></p>
           </div>
-          <div class="letterbox__bar" aria-hidden="true"></div>
+          <div class="letterbox__bar"></div>
+          </div>
         </figure>
 
         <pre class="install"><code><span class="c"># or build from source</span>
 git clone https://github.com/TungSeven30/Cue.git
 <span class="a">./script/build_and_run.sh</span></code></pre>
 
-        <figure class="studio" aria-label="Cue workspace: sidebar queue, video preview with overlay, editable transcript">
-          <aside class="studio__side">
+        <figure class="studio" role="img" aria-label="Cue workspace: sidebar queue, video preview with overlay, editable transcript">
+          <aside class="studio__side" aria-hidden="true">
             <h3>Watch Folders</h3>
             <p class="folder">inbox/</p>
             <h3>Queue</h3>
@@ -594,7 +596,7 @@ git clone https://github.com/TungSeven30/Cue.git
               <li><span>ep03.mkv</span><span>Queued</span></li>
             </ul>
           </aside>
-          <div class="studio__main">
+          <div class="studio__main" aria-hidden="true">
             <div class="studio-player">
               <p>待たせたな。</p>
             </div>
@@ -708,6 +710,7 @@ Quán vẫn còn mở.</code></pre>
     <footer>
       <a class="cta" href="https://github.com/TungSeven30/cue-releases/releases/latest/download/Cue.dmg">Download Cue</a>
       <a href="https://github.com/TungSeven30/Cue">github.com/TungSeven30/Cue</a>
+      <a href="https://github.com/TungSeven30/Cue/blob/master/LICENSE">MIT License</a>
     </footer>
   </div>
 

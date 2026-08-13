@@ -164,3 +164,7 @@ Other script modes:
 
 - The default transcription setup is the built-in engine with `ggml-large-v3-turbo-q5_0` (the MLX backend uses `mlx-community/whisper-large-v3-turbo`); translation languages/model and independent primary/fallback summary models are configurable in Settings, as are the translator prompt, chunk sizes, and parallelism.
 - `transcribe.py` at the repo root is the generated standalone form of the exact helper embedded in the app. Edit `BackendScript.source`, run `python3 script/sync_backend_script.py`, and commit both; the test suite rejects any drift.
+
+## License
+
+Cue is released under the [MIT License](LICENSE).

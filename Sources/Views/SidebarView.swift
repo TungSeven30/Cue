@@ -280,17 +280,32 @@ struct SidebarView: View {
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
                 }
                 if model.hasPendingWork || model.queuePaused {
-                    Button {
-                        model.startAllPendingJobs()
-                    } label: {
-                        Label(
-                            model.queuePaused ? "Resume Queue" : "Start All",
-                            systemImage: "play.fill"
+                    HStack(spacing: 8) {
+                        Button {
+                            model.startSelectedJob()
+                        } label: {
+                            Label("Start", systemImage: "play.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .disabled(!model.canStartSelectedJob)
+                        .help(
+                            model.selectedJobIDs.count == 1
+                                ? "Start only the selected job; other queued jobs stay paused"
+                                : "Select exactly one job to start"
                         )
-                        .frame(maxWidth: .infinity)
+
+                        Button {
+                            model.startAllPendingJobs()
+                        } label: {
+                            Label(
+                                model.queuePaused ? "Resume Queue" : "Start All",
+                                systemImage: "play.rectangle.on.rectangle.fill"
+                            )
+                            .frame(maxWidth: .infinity)
+                        }
+                        .help("Queue every job that still needs transcription or translation")
                     }
                     .controlSize(.large)
-                    .help("Queue every job that still needs transcription or translation")
                 }
                 if let summary = model.queueSummaryText {
                     Text(summary)

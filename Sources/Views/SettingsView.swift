@@ -5,6 +5,8 @@ struct SettingsView: View {
     @ObservedObject var settings: AppSettingsStore
     @AppStorage("showMenuBarExtra") private var showMenuBarExtra = true
     @State private var isBrowsingOpenRouter = false
+    @State private var localModels: [LocalServerModel] = []
+    @State private var localServerStatus: LocalServerStatus = .idle
 
     var body: some View {
         Form {
@@ -125,25 +127,26 @@ struct SettingsView: View {
                 )
                 TextField("Custom target language", text: $settings.translationTargetLanguage)
 
-                presetPicker(
-                    "LLM",
-                    presets: AppSettingPresets.translationModels,
-                    selection: $settings.openAIModel
-                )
-                TextField("Custom model", text: $settings.openAIModel)
-                Button("Browse OpenRouter Models…") { isBrowsingOpenRouter = true }
-                    .help("Pick from OpenRouter's live catalog — hundreds of models with per-token pricing; no key needed to browse")
+                translationModelPicker
+                if settings.currentTranslationProvider == .local {
+                    localServerControls
+                }
+                if settings.currentTranslationProvider == .openRouter {
+                    Button("Browse OpenRouter Models…") { isBrowsingOpenRouter = true }
+                        .help("Pick from OpenRouter's live catalog — hundreds of models with per-token pricing; no key needed to browse")
+                }
                 Picker("Chunk mode", selection: $settings.translationChunkMode) {
                     ForEach(TranslationChunkMode.allCases) { mode in
                         Text(mode.label).tag(mode)
                     }
                 }
                 Stepper("Parallel chunks: \(settings.translationParallelism)", value: $settings.translationParallelism, in: 1...4)
-                SecureField("OpenAI API key", text: $settings.openAIAPIKey)
-                SecureField("Anthropic API key", text: $settings.anthropicAPIKey)
-                SecureField("Google API key", text: $settings.googleAPIKey)
-                SecureField("OpenRouter API key", text: $settings.openRouterAPIKey)
-                TextField("Local server URL", text: $settings.localTranslationEndpoint)
+                DisclosureGroup("Cloud API keys") {
+                    SecureField("OpenAI", text: $settings.openAIAPIKey)
+                    SecureField("Anthropic", text: $settings.anthropicAPIKey)
+                    SecureField("Google", text: $settings.googleAPIKey)
+                    SecureField("OpenRouter", text: $settings.openRouterAPIKey)
+                }
             } header: {
                 Label("Translation", systemImage: "character.bubble")
             } footer: {
@@ -161,18 +164,33 @@ struct SettingsView: View {
                         Text(detail.label).tag(detail)
                     }
                 }
-                presetPicker(
+                providerModelPicker(
                     "Summary model",
                     presets: AppSettingPresets.summaryModels,
                     selection: $settings.summaryModel
                 )
-                TextField("Custom summary model (blank uses translation model)", text: $settings.summaryModel)
-                presetPicker(
+                if summaryHasExplicitLocalModel {
+                    if settings.currentTranslationProvider != .local {
+                        localServerConnectionControls
+                    }
+                    if !localModels.isEmpty {
+                        localModelPicker("Summary running model", selection: $settings.summaryModel)
+                    }
+                }
+
+                providerModelPicker(
                     "Policy fallback",
                     presets: AppSettingPresets.summaryFallbackModels,
                     selection: $settings.summaryFallbackModel
                 )
-                TextField("Custom fallback model (blank disables fallback)", text: $settings.summaryFallbackModel)
+                if fallbackHasLocalModel {
+                    if settings.currentTranslationProvider != .local, !summaryHasExplicitLocalModel {
+                        localServerConnectionControls
+                    }
+                    if !localModels.isEmpty {
+                        localModelPicker("Fallback running model", selection: $settings.summaryFallbackModel)
+                    }
+                }
 
                 if !settings.isSummaryReady {
                     Label(settings.modelReadinessReason(settings.resolvedSummaryModel), systemImage: "exclamationmark.triangle")
@@ -212,6 +230,214 @@ struct SettingsView: View {
         .sheet(isPresented: $isBrowsingOpenRouter) {
             OpenRouterModelBrowserView(settings: settings)
         }
+        .onChange(of: settings.localTranslationEndpoint) { _, _ in
+            localModels = []
+            localServerStatus = .idle
+        }
+        .onChange(of: settings.openAIModel) { _, model in
+            loadLocalModelsIfNeeded(for: model)
+        }
+        .onChange(of: settings.summaryModel) { _, model in
+            loadLocalModelsIfNeeded(for: model)
+        }
+        .onChange(of: settings.summaryFallbackModel) { _, model in
+            loadLocalModelsIfNeeded(for: model)
+        }
+        .task {
+            if anyLocalModelSelected {
+                loadLocalModels()
+            }
+        }
+    }
+
+    private var localServerControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            localServerConnectionControls
+
+            if !localModels.isEmpty {
+                localModelPicker(
+                    localModelsAreConfirmedRunning ? "Running model" : "Server model",
+                    selection: $settings.openAIModel
+                )
+            }
+        }
+    }
+
+    private var localServerConnectionControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                TextField("Local server URL", text: $settings.localTranslationEndpoint)
+                    .onSubmit { loadLocalModels() }
+                    .help("The LM Studio address on this Mac or another Mac, for example http://192.168.0.196:1234")
+
+                Button {
+                    loadLocalModels()
+                } label: {
+                    if localServerStatus == .loading {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Label(localModels.isEmpty ? "Load Models" : "Reload", systemImage: "arrow.clockwise")
+                    }
+                }
+                .disabled(
+                    settings.localTranslationEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || localServerStatus == .loading
+                )
+            }
+
+            localServerStatusView
+        }
+    }
+
+    private func localModelPicker(_ title: String, selection: Binding<String>) -> some View {
+        Picker(title, selection: localModelIDSelection(for: selection)) {
+            Text("Choose a model…").tag("")
+            ForEach(localModels) { model in
+                if model.availability == .running {
+                    Label(model.id, systemImage: "play.circle.fill").tag(model.id)
+                } else {
+                    Text(model.id).tag(model.id)
+                }
+            }
+        }
+        .help("Choose a model reported by the local server. LM Studio models marked as running are confirmed loaded instances.")
+    }
+
+    private func localModelIDSelection(for selection: Binding<String>) -> Binding<String> {
+        Binding {
+            let selected = selection.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard selected.lowercased().hasPrefix("local/") else { return "" }
+            return String(selected.dropFirst("local/".count))
+        } set: { modelID in
+            guard !modelID.isEmpty else { return }
+            selection.wrappedValue = "local/\(modelID)"
+        }
+    }
+
+    private var summaryHasExplicitLocalModel: Bool {
+        let model = settings.summaryModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !model.isEmpty && TranslationProvider.infer(from: model) == .local
+    }
+
+    private var fallbackHasLocalModel: Bool {
+        let model = settings.summaryFallbackModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !model.isEmpty && TranslationProvider.infer(from: model) == .local
+    }
+
+    private var anyLocalModelSelected: Bool {
+        settings.currentTranslationProvider == .local
+            || summaryHasExplicitLocalModel
+            || fallbackHasLocalModel
+    }
+
+    private func loadLocalModelsIfNeeded(for model: String) {
+        let selected = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty,
+            TranslationProvider.infer(from: selected) == .local,
+            localModels.isEmpty,
+            localServerStatus != .loading
+        {
+            loadLocalModels()
+        }
+    }
+
+    /// A concrete local instance id is routing detail, not a separate provider.
+    /// Keep provider pickers labeled "Local server" after a running model is
+    /// chosen instead of presenting a confusing generic "Custom" value.
+    private func providerModelPicker(
+        _ title: String,
+        presets: [SettingsPreset],
+        selection: Binding<String>
+    ) -> some View {
+        Picker(title, selection: providerModelSelection(selection)) {
+            ForEach(presets) { preset in
+                Text(preset.label).tag(preset.value)
+            }
+            if !presets.map(\.value).contains(selection.wrappedValue),
+                TranslationProvider.infer(from: selection.wrappedValue) != .local
+            {
+                Text(providerModelLabel(for: selection.wrappedValue)).tag(selection.wrappedValue)
+            }
+        }
+    }
+
+    private func providerModelSelection(_ selection: Binding<String>) -> Binding<String> {
+        Binding {
+            let model = selection.wrappedValue
+            return TranslationProvider.infer(from: model) == .local ? "local/" : model
+        } set: { model in
+            if model == "local/", TranslationProvider.infer(from: selection.wrappedValue) == .local {
+                return
+            }
+            selection.wrappedValue = model
+        }
+    }
+
+    private func providerModelLabel(for model: String) -> String {
+        switch TranslationProvider.infer(from: model) {
+        case .openai: return "OpenAI model"
+        case .anthropic: return "Anthropic model"
+        case .google: return "Google model"
+        case .local: return "Local server (LM Studio / Ollama)"
+        case .openRouter: return "OpenRouter model"
+        }
+    }
+
+    private var translationModelPicker: some View {
+        providerModelPicker(
+            "LLM",
+            presets: AppSettingPresets.translationModels,
+            selection: $settings.openAIModel
+        )
+    }
+
+    @ViewBuilder
+    private var localServerStatusView: some View {
+        switch localServerStatus {
+        case .idle:
+            Label("Enter the LM Studio address, then load its models.", systemImage: "network")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+        case .loading:
+            Label("Connecting to the local server…", systemImage: "network")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+        case .connected(let count, let confirmedRunning):
+            Label(
+                confirmedRunning
+                    ? "Connected — \(count) model instance\(count == 1 ? "" : "s") running"
+                    : "Connected — server reports \(count) text-generation model\(count == 1 ? "" : "s")",
+                systemImage: "checkmark.circle.fill"
+            )
+            .foregroundStyle(.green)
+            .font(.caption)
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.caption)
+        }
+    }
+
+    private var localModelsAreConfirmedRunning: Bool {
+        !localModels.isEmpty && localModels.allSatisfy { $0.availability == .running }
+    }
+
+    private func loadLocalModels() {
+        let endpoint = settings.localTranslationEndpoint
+        localServerStatus = .loading
+        Task {
+            do {
+                let models = try await LocalModelCatalog.fetch(endpoint: endpoint)
+                guard endpoint == settings.localTranslationEndpoint else { return }
+                localModels = models
+                localServerStatus = .connected(models.count, confirmedRunning: localModelsAreConfirmedRunning)
+            } catch {
+                guard endpoint == settings.localTranslationEndpoint else { return }
+                localModels = []
+                localServerStatus = .failed(error.localizedDescription)
+            }
+        }
     }
 
     private var backendPicker: some View {
@@ -236,4 +462,11 @@ struct SettingsView: View {
             }
         }
     }
+}
+
+private enum LocalServerStatus: Equatable {
+    case idle
+    case loading
+    case connected(Int, confirmedRunning: Bool)
+    case failed(String)
 }

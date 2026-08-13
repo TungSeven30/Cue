@@ -98,6 +98,13 @@ build_bundle() {
   <string>NSApplication</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.video</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>Cue connects to the local model server you configure for private translation and summaries.</string>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
   <key>SUFeedURL</key>
   <string>$SPARKLE_FEED_URL</string>
   <key>SUPublicEDKey</key>

@@ -3,6 +3,17 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
+## 2.3.6 — 2026-08-13
+
+- Added a single-job Start action that runs only the selected job while leaving
+  the rest of the queue paused until Start All resumes it.
+- Local LM Studio and OpenAI-compatible servers can now be reached by network
+  address, tested from Settings, and queried for available or running models.
+- Simplified the Translation and Intro Summary settings with provider-aware
+  model pickers, local running-model selectors, and collapsed cloud API keys.
+- Added the macOS local-network permission description and packaging checks
+  needed for reliable connections to model servers on another computer.
+
 ## 2.3.5 — 2026-08-12
 
 - Kept the sidebar responsive with large job histories by batching queue,

@@ -118,6 +118,45 @@ struct AppModelSelectionTests {
         #expect(model.jobs.allSatisfy { $0.status == .queued })
     }
 
+    @Test func startSelectedJobPausesEveryOtherQueuedJob() throws {
+        let fixture = try makeFixture(createSources: true)
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        model.addVideos(urls: [fixture.sourceURL(1), fixture.sourceURL(2), fixture.sourceURL(3)])
+        let selectedID = try #require(model.jobs.dropFirst().first?.id)
+        let otherIDs = Set(model.jobs.lazy.filter { $0.id != selectedID }.map(\.id))
+
+        for index in model.jobs.indices {
+            model.jobs[index].status = .queued
+            model.jobs[index].progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
+        }
+        model.selectJob(selectedID)
+
+        #expect(model.canStartSelectedJob)
+        model.startSelectedJob()
+
+        #expect(model.queuePaused)
+        #expect(model.gpuJobID == selectedID)
+        #expect(model.jobs.first(where: { $0.id == selectedID })?.status == .transcribing)
+        #expect(model.jobs.filter { otherIDs.contains($0.id) }.allSatisfy { $0.status == .queued })
+
+        model.cancelActiveJob()
+    }
+
+    @Test func startSelectedJobRequiresExactlyOneIdleSelection() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        model.addVideos(urls: [fixture.sourceURL(1), fixture.sourceURL(2)])
+        let ids = Set(model.jobs.map(\.id))
+
+        model.selectJobs(ids)
+        #expect(!model.canStartSelectedJob)
+
+        model.selectJobs([])
+        #expect(!model.canStartSelectedJob)
+    }
+
     @Test func retryFailedJobsQueuesOnlyRetryableFailures() throws {
         let fixture = try makeFixture()
         defer { fixture.cleanUp() }

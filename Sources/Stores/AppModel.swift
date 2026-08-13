@@ -286,6 +286,23 @@ final class AppModel: ObservableObject {
         jobs.contains { jobNeedsWork($0) }
     }
 
+    /// The sidebar's single-job Start action is intentionally stricter than
+    /// queueing: it needs one exact, runnable selection and an idle pipeline.
+    /// This prevents a multi-selection or an already-running batch from
+    /// turning a precise action into more work than the user requested.
+    var canStartSelectedJob: Bool {
+        guard selectedJobIDs.count == 1,
+            let id = selectedJobIDs.first,
+            let job = jobs.first(where: { $0.id == id }),
+            !isProcessing,
+            job.archivedAt == nil,
+            !job.status.isRunning
+        else { return false }
+
+        if job.transcriptSegments.isEmpty { return true }
+        return job.translatedSegments.isEmpty && settings.isTranslationReady
+    }
+
     var queuedJobCount: Int {
         jobs.filter { $0.status == .queued }.count
     }
@@ -582,6 +599,27 @@ final class AppModel: ObservableObject {
             jobRepository.save(queuedSnapshots)
         }
         processQueue()
+    }
+
+    /// Starts exactly the selected job. Other queued jobs remain queued and
+    /// the queue is paused before this job starts, so its completion cannot
+    /// automatically advance into the rest of the batch. Start All resumes
+    /// normal queue processing later.
+    func startSelectedJob() {
+        guard canStartSelectedJob,
+            let id = selectedJobIDs.first,
+            let job = jobs.first(where: { $0.id == id })
+        else { return }
+
+        if jobs.contains(where: { $0.id != id && $0.status == .queued }) {
+            queuePaused = true
+        }
+
+        if job.transcriptSegments.isEmpty {
+            startTranscription(jobID: id)
+        } else {
+            startTranslation(jobID: id)
+        }
     }
 
     /// Queues the useful subset of a sidebar selection as one UI and

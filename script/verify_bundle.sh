@@ -22,6 +22,13 @@ if [[ -n "$EXPECTED_VERSION" && "$ACTUAL_VERSION" != "$EXPECTED_VERSION" ]]; the
   fail "expected version $EXPECTED_VERSION, found $ACTUAL_VERSION"
 fi
 
+LOCAL_NETWORK_DESCRIPTION="$(/usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$INFO_PLIST" 2>/dev/null || true)"
+[[ -n "$LOCAL_NETWORK_DESCRIPTION" ]] \
+  || fail "NSLocalNetworkUsageDescription is missing"
+LOCAL_NETWORK_ATS="$(/usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSAllowsLocalNetworking' "$INFO_PLIST" 2>/dev/null || true)"
+[[ "$LOCAL_NETWORK_ATS" == "true" ]] \
+  || fail "NSAppTransportSecurity.NSAllowsLocalNetworking is not enabled"
+
 [[ -x "$APP_BINARY" ]] || fail "Cue executable is missing or not executable"
 EXPECTED_ARCH="${CUE_EXPECTED_ARCH:-$(uname -m)}"
 ARCHITECTURES="$(lipo -archs "$APP_BINARY")"

@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="Cue  on-device subtitles">
+  <rect width="1200" height="630" fill="#0a0a0a"/>
+  <text x="60" y="58" font-family="ui-monospace, 'IBM Plex Mono', Menlo, monospace" font-size="18" letter-spacing="10" fill="#f2ebe0">CUE</text>
+  <text x="1140" y="58" text-anchor="end" font-family="ui-monospace, 'IBM Plex Mono', Menlo, monospace" font-size="14" letter-spacing="3" fill="#9a9184">FREE · MACOS</text>
+  <rect x="80" y="100" width="1040" height="430" fill="#000"/>
+  <rect x="80" y="100" width="1040" height="48" fill="#000"/>
+  <rect x="80" y="482" width="1040" height="48" fill="#000"/>
+  <g fill="#1a1a1a">
+    <rect x="110" y="114" width="14" height="20" rx="2"/>
+    <rect x="160" y="114" width="14" height="20" rx="2"/>
+    <rect x="210" y="114" width="14" height="20" rx="2"/>
+    <rect x="260" y="114" width="14" height="20" rx="2"/>
+    <rect x="310" y="114" width="14" height="20" rx="2"/>
+    <rect x="360" y="114" width="14" height="20" rx="2"/>
+    <rect x="410" y="114" width="14" height="20" rx="2"/>
+    <rect x="460" y="114" width="14" height="20" rx="2"/>
+    <rect x="510" y="114" width="14" height="20" rx="2"/>
+    <rect x="560" y="114" width="14" height="20" rx="2"/>
+    <rect x="610" y="114" width="14" height="20" rx="2"/>
+    <rect x="660" y="114" width="14" height="20" rx="2"/>
+    <rect x="710" y="114" width="14" height="20" rx="2"/>
+    <rect x="760" y="114" width="14" height="20" rx="2"/>
+    <rect x="810" y="114" width="14" height="20" rx="2"/>
+    <rect x="860" y="114" width="14" height="20" rx="2"/>
+    <rect x="910" y="114" width="14" height="20" rx="2"/>
+    <rect x="960" y="114" width="14" height="20" rx="2"/>
+    <rect x="1010" y="114" width="14" height="20" rx="2"/>
+    <rect x="1060" y="114" width="14" height="20" rx="2"/>
+    <rect x="110" y="496" width="14" height="20" rx="2"/>
+    <rect x="160" y="496" width="14" height="20" rx="2"/>
+    <rect x="210" y="496" width="14" height="20" rx="2"/>
+    <rect x="260" y="496" width="14" height="20" rx="2"/>
+    <rect x="310" y="496" width="14" height="20" rx="2"/>
+    <rect x="360" y="496" width="14" height="20" rx="2"/>
+    <rect x="410" y="496" width="14" height="20" rx="2"/>
+    <rect x="460" y="496" width="14" height="20" rx="2"/>
+    <rect x="510" y="496" width="14" height="20" rx="2"/>
+    <rect x="560" y="496" width="14" height="20" rx="2"/>
+    <rect x="610" y="496" width="14" height="20" rx="2"/>
+    <rect x="660" y="496" width="14" height="20" rx="2"/>
+    <rect x="710" y="496" width="14" height="20" rx="2"/>
+    <rect x="760" y="496" width="14" height="20" rx="2"/>
+    <rect x="810" y="496" width="14" height="20" rx="2"/>
+    <rect x="860" y="496" width="14" height="20" rx="2"/>
+    <rect x="910" y="496" width="14" height="20" rx="2"/>
+    <rect x="960" y="496" width="14" height="20" rx="2"/>
+    <rect x="1010" y="496" width="14" height="20" rx="2"/>
+    <rect x="1060" y="496" width="14" height="20" rx="2"/>
+  </g>
+  <rect x="80" y="148" width="1040" height="334" fill="#12110f"/>
+  <ellipse cx="600" cy="300" rx="380" ry="160" fill="#1a1814"/>
+  <text x="108" y="180" font-family="ui-monospace, 'IBM Plex Mono', Menlo, monospace" font-size="15" fill="#d4a017">1</text>
+  <text x="132" y="180" font-family="ui-monospace, 'IBM Plex Mono', Menlo, monospace" font-size="15" fill="#5c564c">00:00:00,000 --&gt; 00:00:10,000</text>
+  <text x="600" y="330" text-anchor="middle" font-family="Palatino, 'Palatino Linotype', 'Iowan Old Style', serif" font-size="32" font-style="italic" fill="#f2ebe0">In 1960s Saigon, a young chef opens a noodle stall.</text>
+  <text x="60" y="590" font-family="Palatino, 'Palatino Linotype', 'Iowan Old Style', serif" font-size="22" font-style="italic" fill="#9a9184">On-device subtitles for local video.</text>
+</svg>

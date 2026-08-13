@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0a0a0a">
+  <meta name="description" content="Cue is a free, open-source Mac app that turns local video into subtitles. Transcribe on-device with Whisper. Translate with the LLM you choose. Notarized DMG, nothing to brew.">
+  <title>Cue — on-device subtitles for local video</title>
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://tungseven30.github.io/Cue/">
+  <meta property="og:title" content="Cue — on-device subtitles for local video">
+  <meta property="og:description" content="Free native Mac app. Whisper on the GPU. SRT next to the file. Nothing to brew.">
+  <meta property="og:image" content="https://raw.githubusercontent.com/TungSeven30/Cue/master/docs/og.png">
+  <link rel="canonical" href="https://tungseven30.github.io/Cue/">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Letterboxed subtitle cue: In 1960s Saigon, a young chef opens a noodle stall.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Cue — on-device subtitles for local video">
+  <meta name="twitter:description" content="Free native Mac app. Whisper on the GPU. SRT next to the file.">
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/TungSeven30/Cue/master/docs/og.png">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --ink: #f2ebe0;
+      --muted: #9a9184;
+      --dim: #5c564c;
+      --line: #1c1c1c;
+      --amber: #d4a017;
+      --amber-dim: #9a7610;
+      --screen: #12110f;
+      --serif: "Instrument Serif", "Iowan Old Style", Palatino, "Palatino Linotype", serif;
+      --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--serif);
+      font-size: 1.25rem;
+      line-height: 1.45;
+      letter-spacing: 0.01em;
+    }
+
+    a {
+      color: var(--amber);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.22em;
+    }
+    a:hover { color: var(--ink); }
+    p code, .note code, .gate code {
+      font-family: var(--mono);
+      font-size: 0.86em;
+      color: var(--ink);
+    }
+
+    .skip {
+      position: absolute;
+      left: 1rem;
+      top: -4rem;
+      background: var(--amber);
+      color: var(--bg);
+      padding: 0.5rem 0.8rem;
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      z-index: 10;
+    }
+    .skip:focus { top: 1rem; }
+
+    .grain {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 8;
+      opacity: 0.07;
+      mix-blend-mode: overlay;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='0.9'/%3E%3C/svg%3E");
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .grain { animation: grain-shift 1.2s steps(2) infinite; }
+    }
+    @keyframes grain-shift {
+      0% { transform: translate(0, 0); }
+      100% { transform: translate(-1.5%, 1.5%); }
+    }
+
+    .wrap {
+      width: min(72rem, calc(100% - 2.5rem));
+      margin-inline: auto;
+    }
+
+    header.site {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 1.75rem 0 0;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .mark {
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 0.85rem;
+      letter-spacing: 0.32em;
+    }
+    .mark:hover { color: var(--amber); }
+    .nav-links { display: flex; gap: 1.4rem; }
+    .nav-links a { color: var(--muted); text-decoration: none; }
+    .nav-links a:hover { color: var(--amber); }
+
+    .hero { padding: 2.6rem 0 4.2rem; }
+
+    .kicker {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--amber);
+      margin: 0 0 0.7rem;
+    }
+
+    .hero h1 {
+      margin: 0 0 0.7rem;
+      font-size: clamp(2.6rem, 8vw, 5.6rem);
+      font-weight: 400;
+      font-style: italic;
+      line-height: 0.95;
+      letter-spacing: -0.02em;
+    }
+    .lede {
+      margin: 0 0 0.85rem;
+      max-width: 34em;
+      color: var(--muted);
+      font-size: clamp(1.15rem, 2.2vw, 1.45rem);
+    }
+    .who {
+      margin: 0 0 1.8rem;
+      max-width: 36em;
+      color: var(--ink);
+      font-size: clamp(1.05rem, 2vw, 1.25rem);
+    }
+
+    .cta {
+      display: inline-block;
+      background: var(--amber);
+      color: #0a0a0a;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      font-weight: 500;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      text-decoration: none;
+      padding: 0.95rem 1.55rem;
+      border: 0;
+    }
+    .cta:hover { color: #0a0a0a; background: #e0b01c; }
+    .cta:focus-visible {
+      outline: 2px solid var(--ink);
+      outline-offset: 3px;
+    }
+
+    .cta-block { margin: 0 0 1.6rem; }
+    .micro {
+      margin: 0.75rem 0 0.35rem;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.06em;
+      color: var(--ink);
+    }
+    .gate {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      line-height: 1.55;
+      color: var(--dim);
+      max-width: 42em;
+    }
+
+    .letterbox {
+      margin: 0 0 1.1rem;
+      background: #000;
+      border: 1px solid var(--line);
+    }
+    .letterbox__bar {
+      height: clamp(1.4rem, 3.6vw, 2.3rem);
+      background:
+        repeating-linear-gradient(
+          90deg,
+          #000 0 18px,
+          #000 18px,
+          #1a1a1a 18px,
+          #1a1a1a 28px,
+          #000 28px,
+          #000 46px
+        );
+    }
+    .letterbox__picture {
+      position: relative;
+      aspect-ratio: 2.35 / 1;
+      background:
+        radial-gradient(ellipse 70% 80% at 50% 45%, #1a1814 0%, var(--screen) 62%, #0b0b0b 100%);
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      padding: clamp(0.8rem, 3vw, 1.6rem) clamp(1rem, 4vw, 2.4rem) clamp(1.1rem, 3.5vw, 2rem);
+    }
+    .demo-files {
+      position: absolute;
+      top: clamp(0.7rem, 2.4vw, 1.2rem);
+      right: clamp(1rem, 4vw, 2.4rem);
+      font-family: var(--mono);
+      font-size: clamp(0.62rem, 1.4vw, 0.78rem);
+      letter-spacing: 0.04em;
+      text-align: right;
+      color: var(--dim);
+    }
+    .demo-srt {
+      display: block;
+      color: var(--amber);
+      margin-top: 0.25rem;
+      opacity: 0;
+    }
+    .demo-srt.is-on { opacity: 1; }
+    .tc {
+      position: absolute;
+      top: clamp(0.7rem, 2.4vw, 1.2rem);
+      left: clamp(1rem, 4vw, 2.4rem);
+      font-family: var(--mono);
+      font-size: clamp(0.62rem, 1.4vw, 0.78rem);
+      color: var(--dim);
+      letter-spacing: 0.04em;
+    }
+    .tc__id { color: var(--amber-dim); margin-right: 0.85rem; }
+    .subtitle {
+      margin: 0;
+      text-align: center;
+      font-size: clamp(1.15rem, 3.4vw, 2.15rem);
+      line-height: 1.25;
+      min-height: 2.6em;
+      color: var(--ink);
+      text-shadow: 0 1px 0 #000, 0 0 18px rgba(0, 0, 0, 0.8);
+    }
+    .caret {
+      display: inline-block;
+      width: 0.45em;
+      height: 0.08em;
+      margin-left: 0.08em;
+      background: var(--amber);
+      vertical-align: baseline;
+      transform: translateY(-0.12em);
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .caret { animation: blink 1s steps(1) infinite; }
+      .demo-srt { transition: opacity 0.4s ease; }
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .install {
+      margin: 0 0 3.2rem;
+      padding: 1.1rem 1.25rem;
+      background: #000;
+      border: 1px solid var(--line);
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: clamp(0.72rem, 1.6vw, 0.86rem);
+      line-height: 1.7;
+      overflow-x: auto;
+    }
+    .install .c { color: var(--dim); }
+    .install .a { color: var(--amber); }
+
+    .studio {
+      margin: 0 0 0.7rem;
+      display: grid;
+      grid-template-columns: minmax(11rem, 15rem) 1fr;
+      border: 1px solid var(--line);
+      background: #0e0e0e;
+      min-height: 22rem;
+    }
+    .studio__side {
+      border-right: 1px solid var(--line);
+      padding: 1rem 1rem 1.2rem;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+    }
+    .studio__side h3 {
+      margin: 0 0 0.55rem;
+      font-size: 0.62rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+    .studio__side h3 + h3 { margin-top: 1.3rem; }
+    .folder { color: var(--ink); margin: 0 0 0.9rem; }
+    .jobs { list-style: none; margin: 0; padding: 0; }
+    .jobs li {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.6rem;
+      padding: 0.4rem 0;
+      color: var(--muted);
+      border-bottom: 1px solid var(--line);
+    }
+    .jobs .on { color: var(--amber); }
+    .studio__main { display: flex; flex-direction: column; min-width: 0; }
+    .studio-player {
+      position: relative;
+      aspect-ratio: 2.35 / 1;
+      max-height: 11.5rem;
+      background: radial-gradient(ellipse at 50% 40%, #1a1814, #0b0b0b 70%);
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      padding: 0.7rem;
+      margin: 0.9rem 0.9rem 0;
+      border: 1px solid var(--line);
+    }
+    .studio-player p {
+      margin: 0;
+      font-size: 0.95rem;
+      font-style: italic;
+      text-align: center;
+      text-shadow: 0 1px 0 #000;
+    }
+    .tabs {
+      display: flex;
+      gap: 1.1rem;
+      padding: 0.7rem 1rem 0.5rem;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+    .tabs .on { color: var(--amber); }
+    .cues { list-style: none; margin: 0; padding: 0 0.7rem 0.8rem; }
+    .cues li {
+      display: grid;
+      grid-template-columns: 1.6rem 7.6rem 1fr;
+      gap: 0.6rem;
+      align-items: baseline;
+      padding: 0.45rem 0.5rem;
+      font-size: 0.92rem;
+      color: var(--muted);
+    }
+    .cues .n, .cues .t {
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      color: var(--dim);
+    }
+    .cues .active {
+      background: rgba(212, 160, 23, 0.08);
+      color: var(--ink);
+    }
+    .cues .active .t { color: var(--amber); }
+    .studio-cap {
+      margin: 0 0 3.4rem;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      color: var(--dim);
+    }
+
+    .reels {
+      border-top: 1px solid var(--line);
+      padding: 0;
+    }
+    .reel {
+      display: grid;
+      grid-template-columns: 7.5rem 1fr;
+      gap: 1.5rem 2rem;
+      padding: 2.75rem 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .reel__index {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--amber);
+      padding-top: 0.55rem;
+    }
+    .reel h2 {
+      margin: 0 0 0.7rem;
+      font-size: clamp(2rem, 5vw, 3.4rem);
+      font-weight: 400;
+      font-style: italic;
+      line-height: 1;
+      letter-spacing: -0.02em;
+    }
+    .reel p {
+      margin: 0;
+      max-width: 38em;
+      color: var(--muted);
+      font-size: 1.15rem;
+    }
+    .reel p + p { margin-top: 0.85rem; }
+    .stat {
+      color: var(--ink);
+    }
+
+    .close {
+      padding: 3.4rem 0 1.2rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .close h2 {
+      margin: 0 0 1.1rem;
+      font-size: clamp(2rem, 5vw, 3.4rem);
+      font-weight: 400;
+      font-style: italic;
+      line-height: 1;
+    }
+
+    .example { padding: 4.5rem 0 3rem; }
+    .example header { display: block; padding: 0 0 1.4rem; }
+    .example h2 {
+      margin: 0;
+      font-size: clamp(2rem, 5vw, 3.4rem);
+      font-weight: 400;
+      font-style: italic;
+      line-height: 1;
+    }
+    .example .note {
+      margin: 0.9rem 0 1.6rem;
+      color: var(--muted);
+      max-width: 40em;
+      font-size: 1.1rem;
+    }
+    .srt-file {
+      margin: 0;
+      padding: 1.25rem 1.35rem 1.4rem;
+      background: #000;
+      border: 1px solid var(--line);
+      overflow-x: auto;
+    }
+    .srt-file .name {
+      display: block;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--amber);
+      letter-spacing: 0.08em;
+      margin-bottom: 1.1rem;
+    }
+    .srt-file code {
+      display: block;
+      font-family: var(--mono);
+      font-size: clamp(0.72rem, 1.55vw, 0.84rem);
+      line-height: 1.65;
+      color: var(--ink);
+      white-space: pre;
+    }
+    .srt-file .n { color: var(--dim); }
+    .srt-file .t { color: var(--amber-dim); }
+
+    .meta {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2.5rem;
+      padding: 3.5rem 0 4.5rem;
+      border-top: 1px solid var(--line);
+    }
+    .meta h2 {
+      margin: 0 0 0.7rem;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      font-weight: 500;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--amber);
+    }
+    .meta p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+    .formats {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      line-height: 1.7;
+      color: var(--ink);
+    }
+
+    footer {
+      border-top: 1px solid var(--line);
+      padding: 1.8rem 0 2.6rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+    footer .cta {
+      letter-spacing: 0.12em;
+      padding: 0.7rem 1.15rem;
+      font-size: 0.72rem;
+    }
+    footer a:not(.cta) {
+      color: var(--muted);
+      text-decoration: none;
+      text-transform: none;
+      letter-spacing: 0.04em;
+    }
+    footer a:not(.cta):hover { color: var(--amber); }
+
+    @media (max-width: 720px) {
+      .wrap { width: calc(100% - 1.6rem); }
+      .reel { grid-template-columns: 1fr; gap: 0.4rem; padding: 2.1rem 0; }
+      .reel__index { padding-top: 0; }
+      .meta { grid-template-columns: 1fr; gap: 2rem; padding: 2.5rem 0 3rem; }
+      .hero { padding: 1.8rem 0 2.8rem; }
+      .studio { grid-template-columns: 1fr; }
+      .studio__side { display: none; }
+      .cues li { grid-template-columns: 1.4rem 1fr; }
+      .cues .t { grid-column: 2; }
+    }
+  </style>
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <div class="wrap">
+    <header class="site">
+      <a class="mark" href="#top">Cue</a>
+      <nav class="nav-links">
+        <a href="https://github.com/TungSeven30/Cue">GitHub</a>
+        <a href="https://github.com/TungSeven30/cue-releases/releases/latest/download/Cue.dmg">Download</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top">
+        <h1>On-device subtitles.</h1>
+        <p class="lede">A native Mac app that turns local video and audio into timed cues. Whisper stays on the GPU. Translation leaves the machine only if you say so.</p>
+        <p class="who">For the people with a Plex library of films that never got English subs, anime rips with no CJK track, home footage in three languages.</p>
+
+        <div class="cta-block">
+          <a class="cta" href="https://github.com/TungSeven30/cue-releases/releases/latest/download/Cue.dmg">Download Cue</a>
+          <p class="micro">Free · Open source · macOS 14+ · ~4&nbsp;MB</p>
+          <p class="gate">Developer ID signed and notarized. Double-click — no Gatekeeper dance. First transcription downloads the model (~574&nbsp;MB, once).</p>
+        </div>
+
+        <figure class="letterbox" aria-label="Watch-folder demo: a file drops in, cues stream, an SRT appears beside it">
+          <div class="letterbox__bar" aria-hidden="true"></div>
+          <div class="letterbox__picture">
+            <div class="demo-files">
+              <span>inbox/ep01.mkv</span>
+              <span class="demo-srt is-on" id="demo-srt">ep01.vi.srt</span>
+            </div>
+            <div class="tc">
+              <span class="tc__id" id="cue-id">1</span>
+              <span id="cue-time">00:00:00,000 --&gt; 00:00:10,000</span>
+            </div>
+            <p class="subtitle" id="subtitle"><span id="subtitle-text">In 1960s Saigon, a young chef opens a noodle stall.</span><span class="caret" id="caret" aria-hidden="true"></span></p>
+          </div>
+          <div class="letterbox__bar" aria-hidden="true"></div>
+        </figure>
+
+        <pre class="install"><code><span class="c"># or build from source</span>
+git clone https://github.com/TungSeven30/Cue.git
+<span class="a">./script/build_and_run.sh</span></code></pre>
+
+        <figure class="studio" aria-label="Cue workspace: sidebar queue, video preview with overlay, editable transcript">
+          <aside class="studio__side">
+            <h3>Watch Folders</h3>
+            <p class="folder">inbox/</p>
+            <h3>Queue</h3>
+            <ul class="jobs">
+              <li><span>ep01.mkv</span><span class="on">Transcribing</span></li>
+              <li><span>ep02.mkv</span><span>Queued</span></li>
+              <li><span>ep03.mkv</span><span>Queued</span></li>
+            </ul>
+          </aside>
+          <div class="studio__main">
+            <div class="studio-player">
+              <p>待たせたな。</p>
+            </div>
+            <div class="tabs">
+              <span class="on">Transcript</span>
+              <span>Translation</span>
+              <span>Log</span>
+            </div>
+            <ol class="cues">
+              <li>
+                <span class="n">1</span>
+                <span class="t">00:00:00 – 00:00:10</span>
+                <span>In 1960s Saigon, a young chef opens a noodle stall.</span>
+              </li>
+              <li class="active">
+                <span class="n">2</span>
+                <span class="t">00:00:12 – 00:00:14</span>
+                <span>待たせたな。</span>
+              </li>
+              <li>
+                <span class="n">3</span>
+                <span class="t">00:00:15 – 00:00:17</span>
+                <span>店、まだ開いてる。</span>
+              </li>
+            </ol>
+          </div>
+        </figure>
+        <p class="studio-cap">Queue, preview, transcript — the three panes, from the app’s actual split view.</p>
+      </section>
+
+      <section class="reels" aria-label="Features">
+        <article class="reel">
+          <p class="reel__index">Reel 01</p>
+          <div>
+            <h2>Transcribe</h2>
+            <p><span class="stat">A 30-minute clip: about 2 minutes on an M3 Max</span>, Balanced preset, built-in engine. M3 Pro ~3 min; M4 Max ~1–2 min. The DMG is the whole stack — no Homebrew, no Python.</p>
+            <p>Optional engines if you want them: mlx-whisper, faster-whisper, or Qwen3-ASR (the pick for CJK). Empty cues get dropped, repeats collapse, fragments merge, zero-length and overlong timings get repaired.</p>
+          </div>
+        </article>
+
+        <article class="reel">
+          <p class="reel__index">Reel 02</p>
+          <div>
+            <h2>Translate</h2>
+            <p><span class="stat">Transcription is free and local.</span> Translation is your API key — OpenAI, Anthropic, Gemini, OpenRouter — or an OpenAI-compatible local server, no key. Cloud work starts after the first streamed batch; typically 2–6 minutes for a dialogue-heavy 30-minute clip, same on every Mac.</p>
+            <p>Already-translated ranges are never sent twice. Partial work is saved as it lands. Keys live in the Keychain, never in job files.</p>
+          </div>
+        </article>
+
+        <article class="reel">
+          <p class="reel__index">Reel 03</p>
+          <div>
+            <h2>Watch</h2>
+            <p>Drop a folder on the sidebar. Every video that lands there — including subfolders, in episode order — is queued, transcribed, and translated. Language-coded <code>.srt</code> sidecars are written next to the file so players pick them up.</p>
+            <p>As many folders as you want, each with its own language, preset, and translation profile. The Mac holds a sleep assertion while jobs run. Close the lid and it still sleeps; leave it open for overnight batches.</p>
+          </div>
+        </article>
+
+        <article class="reel">
+          <p class="reel__index">Reel 04</p>
+          <div>
+            <h2>Intro</h2>
+            <p>One click — or a toggle on every job — asks your model for a spoiler-free, back-of-the-box intro from the subtitles. Cue prepends it as the first caption: from 0s until first dialogue, 3s minimum, 10s cap.</p>
+            <p>Written in the translation’s language, or the film’s own language if you didn’t translate. Then you review against a synced preview, export, or burn the words into <code>.burned.mp4</code>.</p>
+          </div>
+        </article>
+      </section>
+
+      <section class="close">
+        <h2>Free. Notarized. Nothing to brew.</h2>
+        <div class="cta-block">
+          <a class="cta" href="https://github.com/TungSeven30/cue-releases/releases/latest/download/Cue.dmg">Download Cue</a>
+          <p class="micro">Free · Open source · macOS 14+ · Apple Silicon · ~4&nbsp;MB</p>
+          <p class="gate">Intel Macs can build from source; the built-in engine is CPU-only there, and slow.</p>
+        </div>
+      </section>
+
+      <section class="example" aria-labelledby="example-title">
+        <header>
+          <p class="kicker">Usage</p>
+          <h2 id="example-title">What it writes</h2>
+        </header>
+        <p class="note">Sidecar next to the source, intro cue prepended, bilingual line breaks preserved. Timestamps are millisecond-rounded SRT — <code>1.0599</code> becomes <code>00:00:01,060</code>, not truncated.</p>
+        <pre class="srt-file"><span class="name">ep01.bilingual.srt</span><code><span class="n">1</span>
+<span class="t">00:00:00,000 --&gt; 00:00:10,000</span>
+In 1960s Saigon, a young chef opens a noodle stall.
+
+<span class="n">2</span>
+<span class="t">00:00:12,000 --&gt; 00:00:14,000</span>
+待たせたな。
+Xin lỗi vì đã bắt cậu đợi.
+
+<span class="n">3</span>
+<span class="t">00:00:15,000 --&gt; 00:00:17,000</span>
+店、まだ開いてる。
+Quán vẫn còn mở.</code></pre>
+      </section>
+
+      <section class="meta">
+        <div>
+          <h2>Platform</h2>
+          <p>macOS 14+. The DMG is Apple Silicon only. Updates arrive in-app (Cue → Check for Updates…).</p>
+        </div>
+        <div>
+          <h2>Formats</h2>
+          <p class="formats">in &nbsp; mp4 m4v mov mkv avi webm wmv mpg mpeg ts mts m2ts 3gp flv<br>in &nbsp; mp3 m4a aac wav flac ogg opus aiff<br>out SRT WebVTT TXT Markdown JSON<br>out original · translated · bilingual · <span style="color:var(--muted)">name.burned.mp4</span></p>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <a class="cta" href="https://github.com/TungSeven30/cue-releases/releases/latest/download/Cue.dmg">Download Cue</a>
+      <a href="https://github.com/TungSeven30/Cue">github.com/TungSeven30/Cue</a>
+    </footer>
+  </div>
+
+  <script>
+    (function () {
+      var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      var srt = document.getElementById("demo-srt");
+      if (reduce) {
+        if (srt) srt.className = "demo-srt is-on";
+        return;
+      }
+
+      var cues = [
+        { id: "1", time: "00:00:00,000 --> 00:00:10,000", text: "In 1960s Saigon, a young chef opens a noodle stall." },
+        { id: "2", time: "00:00:12,000 --> 00:00:14,000", text: "待たせたな。" },
+        { id: "3", time: "00:00:15,000 --> 00:00:17,000", text: "店、まだ開いてる。" }
+      ];
+
+      var idEl = document.getElementById("cue-id");
+      var timeEl = document.getElementById("cue-time");
+      var textEl = document.getElementById("subtitle-text");
+      var caret = document.getElementById("caret");
+      var index = 0;
+
+      function wait(ms) {
+        return new Promise(function (resolve) { setTimeout(resolve, ms); });
+      }
+
+      function typeText(text) {
+        return new Promise(function (resolve) {
+          var i = 0;
+          textEl.textContent = "";
+          function step() {
+            i += 1;
+            textEl.textContent = text.slice(0, i);
+            if (i < text.length) setTimeout(step, 28);
+            else resolve();
+          }
+          step();
+        });
+      }
+
+      async function play() {
+        while (true) {
+          if (srt) srt.className = "demo-srt";
+          index = 0;
+          caret.style.visibility = "visible";
+          while (index < cues.length) {
+            var cue = cues[index];
+            idEl.textContent = cue.id;
+            timeEl.textContent = cue.time;
+            await typeText(cue.text);
+            await wait(index === 0 ? 1600 : 1400);
+            index += 1;
+          }
+          if (srt) srt.className = "demo-srt is-on";
+          await wait(2200);
+        }
+      }
+
+      textEl.textContent = "";
+      if (srt) srt.className = "demo-srt";
+      play();
+    })();
+  </script>
+</body>
+</html>

@@ -5,7 +5,7 @@ import SwiftUI
 /// being written back to it. With automatic write-back, this is how the user
 /// finds out — and how they stop it.
 struct ImportedSubtitleBanner: View {
-    @EnvironmentObject private var model: AppModel
+    @ObservedObject var model: AppModel
     let slot: SubtitleSidecarScanner.Slot
 
     var body: some View {

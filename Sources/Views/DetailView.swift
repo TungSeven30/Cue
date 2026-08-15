@@ -137,10 +137,7 @@ struct DetailView: View {
 
             Divider()
 
-            // ImportedSubtitleBanner reads AppModel via @EnvironmentObject;
-            // nothing above this in the tree provides one otherwise.
             tabContent
-                .environmentObject(model)
         }
     }
 
@@ -227,7 +224,7 @@ struct DetailView: View {
                 }
             } else {
                 VStack(alignment: .leading, spacing: 10) {
-                    ImportedSubtitleBanner(slot: .transcript)
+                    ImportedSubtitleBanner(model: model, slot: .transcript)
                     segmentList(segments: model.displayTranscriptSegments, onEdit: model.updateTranscriptSegment)
                 }
             }
@@ -246,7 +243,7 @@ struct DetailView: View {
                 }
             } else {
                 VStack(alignment: .leading, spacing: 10) {
-                    ImportedSubtitleBanner(slot: .translation)
+                    ImportedSubtitleBanner(model: model, slot: .translation)
                     segmentList(segments: model.displayTranslatedSegments, onEdit: model.updateTranslatedSegment)
                 }
             }

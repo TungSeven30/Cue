@@ -2222,6 +2222,129 @@ git commit -m "Show imported subtitle provenance and sync state"
 
 ---
 
+### Task 11: Back up the original at import, not at first edit
+
+**Files:**
+- Modify: `Sources/Services/SubtitleImporter.swift` (`importFile`)
+- Test: `Tests/CueTests/SubtitleImporterTests.swift` (append)
+
+Added after Task 8, by owner decision. Task 8 clears `importedTranslationSource` when a
+re-translation starts — correct, since the machine translation no longer describes the
+imported file. But clearing it also drops that path from Task 7's `protectedPaths`, so
+auto-export may then overwrite `movie.vi.srt`. A user who imported a file and never
+edited it had no `.bak`, because the backup was only taken on the first write-back.
+
+Taking the backup at import time closes that: a recovery copy always exists, and
+auto-export keeps behaving as it always has.
+
+**Interfaces:**
+- Consumes: `SubtitleReader`, `ImportedSubtitleSource`.
+- Produces: no signature change. `Document.source.didBackup` is now `true` on return
+  whenever a `.bak` exists on disk.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `SubtitleImporterTests`:
+
+```swift
+    // The user's file must be recoverable from the moment Cue adopts it: a
+    // later re-translation unlinks the file and lets auto-export overwrite
+    // it, and by then there may never have been an edit to trigger a backup.
+    @Test func importBacksUpTheOriginalImmediately() throws {
+        let dir = try makeFolder(["movie.ja.srt"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = dir.appendingPathComponent("movie.ja.srt")
+
+        let document = try SubtitleImporter.importFile(at: source)
+
+        let backup = dir.appendingPathComponent("movie.ja.srt.bak")
+        #expect(FileManager.default.fileExists(atPath: backup.path))
+        #expect(try String(contentsOf: backup, encoding: .utf8) == srt)
+        #expect(document.source.didBackup)
+    }
+
+    @Test func importNeverOverwritesAnExistingBackup() throws {
+        let dir = try makeFolder(["movie.ja.srt"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let backup = dir.appendingPathComponent("movie.ja.srt.bak")
+        try Data("an older backup".utf8).write(to: backup)
+
+        let document = try SubtitleImporter.importFile(at: dir.appendingPathComponent("movie.ja.srt"))
+
+        #expect(try String(contentsOf: backup, encoding: .utf8) == "an older backup")
+        #expect(document.source.didBackup)
+    }
+
+    // A failed backup must not fail the import; write-back's own backup step
+    // stays as the fallback.
+    @Test func importSucceedsWhenTheBackupCannotBeWritten() throws {
+        let dir = try makeFolder(["movie.ja.srt"])
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let document = try SubtitleImporter.importFile(at: dir.appendingPathComponent("movie.ja.srt"))
+        #expect(document.segments.count == 2)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        let second = try SubtitleImporter.importFile(at: dir.appendingPathComponent("movie.ja.srt"))
+        #expect(second.segments.count == 2, "A read-only folder must not fail the import")
+    }
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `./script/run_tests.sh`
+Expected: FAIL — no `.bak` is created at import time.
+
+- [ ] **Step 3: Write the implementation**
+
+In `Sources/Services/SubtitleImporter.swift`, change `importFile` and add the helper:
+
+```swift
+    static func importFile(at url: URL) throws -> Document {
+        let segments = try SubtitleReader.parse(contentsOf: url)
+        guard let format = SubtitleReader.format(for: url),
+            var source = ImportedSubtitleSource(url: url, format: format)
+        else {
+            throw SubtitleReader.ReadError.unreadable
+        }
+        source.didBackup = backUpOriginal(at: url)
+        return Document(source: source, segments: segments)
+    }
+
+    /// Copies the untouched original beside itself the moment Cue adopts it.
+    /// Waiting for the first edit was not enough: a re-translation unlinks the
+    /// file so auto-export may overwrite it, and a user who only imported has
+    /// made no edit to trigger a backup. Returns whether a backup now exists —
+    /// a failure here is not fatal, and write-back's own backup step remains
+    /// the fallback.
+    private static func backUpOriginal(at url: URL) -> Bool {
+        let backupURL = url.appendingPathExtension("bak")
+        guard !FileManager.default.fileExists(atPath: backupURL.path) else { return true }
+        do {
+            try FileManager.default.copyItem(at: url, to: backupURL)
+            return true
+        } catch {
+            return false
+        }
+    }
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `./script/format_swift.sh && ./script/run_tests.sh`
+Expected: PASS, whole suite green.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add Sources/Services/SubtitleImporter.swift Tests/CueTests/SubtitleImporterTests.swift
+git commit -m "Back up an imported subtitle at import time"
+```
+
+---
+
 ## Verification
 
 Run before opening a PR:

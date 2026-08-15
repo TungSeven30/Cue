@@ -21,6 +21,8 @@ final class AppModel: ObservableObject {
     @Published var overridesEditorJobID: UUID?
     @Published var isGeneratingSummary = false
     @Published var isShowingBurnInSheet = false
+    /// Set when a subtitle file has been parsed and needs a slot chosen.
+    @Published var subtitleLoadRequest: SubtitleLoadRequest?
     /// nil = not yet checked; cached until Recheck (spec §3.1).
     @Published var burnInPreflight: BurnInService.PreflightResult?
     /// The setup guide auto-opens once per launch (when something required is
@@ -38,13 +40,19 @@ final class AppModel: ObservableObject {
     @Published var queuePaused = false
     /// Guards the 30s volume-reconnect retry so timers never stack.
     private var volumeRetryScheduled = false
+    /// Jobs whose folder is still being scanned for subtitle sidecars. They
+    /// must not be scheduled: an adopted transcript would arrive after ASR had
+    /// already started. In-memory only — a scan interrupted by a quit simply
+    /// never adopts, which is safe.
+    private var subtitleScanPendingIDs: Set<UUID> = []
+    private var subtitleSyncWorkItems: [SubtitleSyncKey: DispatchWorkItem] = [:]
     let playerController = PlayerController()
     private var didProcessQueuedJob = false
     /// Keeps very chatty jobs from growing without bound in memory and on disk.
     private static let maxLogLength = 200_000
 
     private let transcriptionService = TranscriptionService()
-    private let translationService = TranslationService()
+    private let translationService: TranslationService
     private let diagnosticsService: any EnvironmentDiagnosing
     private let jobRepository: JobRepository
     private let burnInService = BurnInService()
@@ -110,12 +118,14 @@ final class AppModel: ObservableObject {
     init(
         settings: AppSettingsStore? = nil,
         jobStore: JobStore? = nil,
-        diagnosticsService: any EnvironmentDiagnosing = EnvironmentDiagnosticsService()
+        diagnosticsService: any EnvironmentDiagnosing = EnvironmentDiagnosticsService(),
+        translationService: TranslationService = TranslationService()
     ) {
         self.settings = settings ?? AppSettingsStore()
         let resolvedJobStore = jobStore ?? JobStore()
         jobRepository = JobRepository(store: resolvedJobStore)
         self.diagnosticsService = diagnosticsService
+        self.translationService = translationService
         isPlayerVisible = UserDefaults.standard.object(forKey: "isPlayerVisible") as? Bool ?? true
         jobs = jobRepository.loadJobs().sorted { $0.orderIndex < $1.orderIndex }
         persistenceError = jobRepository.startupError ?? watchLedger.startupError
@@ -173,6 +183,7 @@ final class AppModel: ObservableObject {
     /// Writes every pending job mutation to disk synchronously. Called on
     /// app termination.
     func flushPendingWork() {
+        flushSubtitleSync()
         jobRepository.flush()
     }
 
@@ -243,6 +254,10 @@ final class AppModel: ObservableObject {
         id == gpuJobID || id == translationJobID
     }
 
+    func isScanningForSubtitles(_ id: UUID) -> Bool {
+        subtitleScanPendingIDs.contains(id)
+    }
+
     /// The job the user is looking at is the one running.
     var isSelectedJobRunning: Bool {
         currentJob?.status.isRunning == true
@@ -283,7 +298,7 @@ final class AppModel: ObservableObject {
     }
 
     var hasPendingWork: Bool {
-        jobs.contains { jobNeedsWork($0) }
+        jobs.contains { jobNeedsWork($0) } || !subtitleScanPendingIDs.isEmpty
     }
 
     /// The sidebar's single-job Start action is intentionally stricter than
@@ -377,6 +392,7 @@ final class AppModel: ObservableObject {
     }
 
     func selectJob(_ id: UUID?) {
+        flushSubtitleSync()
         selectedJobID = id
         selectedJobIDs = id.map { [$0] } ?? []
     }
@@ -487,6 +503,10 @@ final class AppModel: ObservableObject {
         jobs.insert(contentsOf: newJobs, at: 0)
         selectJob(newJobs.first?.id)
         jobRepository.save(newJobs)
+        // Adoption gates scheduling via subtitleScanPendingIDs, so processQueue
+        // is safe to call now: pending jobs are filtered out of jobViews and
+        // picked up when the scan lands.
+        adoptSidecars(for: newJobs.map(\.id))
         if shouldStart {
             processQueue()
         }
@@ -587,8 +607,14 @@ final class AppModel: ObservableObject {
         var updatedJobs = jobs
         var queuedSnapshots: [TranscriptionJob] = []
         let now = Date()
+        // jobNeedsWork is false for a job mid-sidecar-scan, but the click must
+        // not be lost: jobViews keeps it out of both pumps until the scan
+        // lands, and applyAdoptions preserves .queued through wasQueued, so
+        // queuing it now is safe and it transcribes once the scan settles.
         for index in updatedJobs.indices
-        where jobNeedsWork(updatedJobs[index]) && updatedJobs[index].status != .queued {
+        where (jobNeedsWork(updatedJobs[index]) || subtitleScanPendingIDs.contains(updatedJobs[index].id))
+            && updatedJobs[index].status != .queued
+        {
             updatedJobs[index].status = .queued
             updatedJobs[index].progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
             updatedJobs[index].updatedAt = now
@@ -628,7 +654,12 @@ final class AppModel: ObservableObject {
     func enqueueJobs(_ ids: Set<UUID>) {
         guard !ids.isEmpty else { return }
         queuePaused = false
-        updateJobs(ids, where: { jobNeedsWork($0) && $0.status != .queued }) { job in
+        // See the comment in startAllPendingJobs: a job mid-sidecar-scan must
+        // still be queueable, or the click is lost once the scan lands.
+        let shouldQueue = { (job: TranscriptionJob) in
+            (self.jobNeedsWork(job) || self.subtitleScanPendingIDs.contains(job.id)) && job.status != .queued
+        }
+        updateJobs(ids, where: shouldQueue) { job in
             job.status = .queued
             job.progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
         }
@@ -712,6 +743,7 @@ final class AppModel: ObservableObject {
 
     func jobNeedsWork(_ job: TranscriptionJob) -> Bool {
         if job.archivedAt != nil { return false }
+        if subtitleScanPendingIDs.contains(job.id) { return false }
         if job.status.isRunning { return false }
         if job.status == .queued { return true }
         if job.transcriptSegments.isEmpty { return true }
@@ -732,8 +764,12 @@ final class AppModel: ObservableObject {
         // before the notification whenever queuePaused was set, and jobs are
         // usually still waiting. Jobs waiting on an offline volume also keep
         // the queue "unfinished" — no notification, no after-queue action.
+        // A job mid-sidecar-scan is likewise not "finished": jobViews hides it
+        // from the scheduler checks below, so without this the queue could
+        // report itself empty (and even sleep the Mac) while a batch add is
+        // still scanning.
         if !queuePaused, gpuJobID == nil, translationJobID == nil, !pipeline.hasQueuedTranslationWork, didProcessQueuedJob,
-            jobsWaitingOnVolumes.isEmpty,
+            jobsWaitingOnVolumes.isEmpty, subtitleScanPendingIDs.isEmpty,
             PipelineScheduler.nextGPUJob(jobs: jobViews, gpuBusy: false, queuePaused: queuePaused) == nil,
             PipelineScheduler.nextTranslationJob(jobs: jobViews, translationBusy: false, queuePaused: queuePaused) == nil
         {
@@ -880,7 +916,7 @@ final class AppModel: ObservableObject {
 
     private var jobViews: [PipelineScheduler.JobView] {
         let mounted = SourceVolume.mountedVolumeNames()
-        return jobs.filter { $0.archivedAt == nil }.map {
+        return jobs.filter { $0.archivedAt == nil && !subtitleScanPendingIDs.contains($0.id) }.map {
             PipelineScheduler.JobView(
                 id: $0.id,
                 orderIndex: $0.orderIndex,
@@ -1054,6 +1090,7 @@ final class AppModel: ObservableObject {
         let profile =
             settings.watchFolders.first(where: { $0.id == folderID })?.profile
             ?? JobSettingsOverrides()
+        var addedIDs: [UUID] = []
         for url in urls {
             var job = TranscriptionJob(sourceURL: url, settings: settings)
             job.origin = .watchFolder
@@ -1063,8 +1100,10 @@ final class AppModel: ObservableObject {
             job.progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
             job.log = "Picked up from the watch folder: \(url.path(percentEncoded: false)).\n"
             jobs.append(job)
+            addedIDs.append(job.id)
             persistJob(job.id)
         }
+        adoptSidecars(for: addedIDs)
         processQueue()
     }
 
@@ -1187,7 +1226,12 @@ final class AppModel: ObservableObject {
         // Per-job autoTranslate wins over the global toggle (spec §0.3).
         let autoTranslate = jobs[index].overrides.autoTranslate ?? settings.autoTranslateAfterTranscription
 
+        // An imported transcript satisfies the checks below by accident: its
+        // settings snapshot describes the globals at add time, not a run that
+        // produced these subtitles. Pressing Transcribe on one means "actually
+        // run ASR".
         if !force,
+            jobs[index].importedTranscriptSource == nil,
             !jobs[index].transcriptSegments.isEmpty,
             jobs[index].sourceFingerprint == currentFingerprint,
             jobs[index].settings.transcriptionIdentity == resolved.transcriptionIdentity
@@ -1220,6 +1264,14 @@ final class AppModel: ObservableObject {
         jobs[index].translatedSegments = []
         jobs[index].partialTranslatedSegments = []
         jobs[index].partialTranscriptSegments = []
+        // The imported files no longer describe this job's contents, so write-
+        // back must stop pointing at them — and any write already queued for
+        // them must be dropped too, exactly as startTranslationNow does for
+        // the translation slot.
+        cancelSubtitleSync(jobID: jobID, slot: .transcript)
+        cancelSubtitleSync(jobID: jobID, slot: .translation)
+        jobs[index].importedTranscriptSource = nil
+        jobs[index].importedTranslationSource = nil
         jobs[index].transcriptionStartedAt = Date()
         jobs[index].transcriptionFinishedAt = nil
         jobs[index].translationStartedAt = nil
@@ -1449,6 +1501,12 @@ final class AppModel: ObservableObject {
         let resolved = JobSettingsSnapshot(settings: settings).applying(jobs[index].overrides)
         jobs[index].status = .translating
         jobs[index].progress = JobProgress(stage: .translating, detail: "Starting translation.", fraction: 0)
+        // This run replaces translatedSegments with machine output, so the
+        // imported file no longer describes them and write-back must stop
+        // pointing at it (same reasoning as startTranscriptionNow). The
+        // changed-on-disk guard could not catch this: the file is untouched.
+        cancelSubtitleSync(jobID: jobID, slot: .translation)
+        jobs[index].importedTranslationSource = nil
         // Translating a job whose previous run already finished starts a new
         // run: the old run's clock must not carry over, or a Monday
         // transcript translated on Wednesday reports a two-day total. Within
@@ -1635,10 +1693,12 @@ final class AppModel: ObservableObject {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    /// Export problems must be visible without opening the Log tab.
-    private func presentExportError(_ message: String) {
+    /// Export problems must be visible without opening the Log tab. Other
+    /// callers (e.g. the subtitle load panel) pass their own title so the
+    /// dialog doesn't claim to be about an export that never happened.
+    private func presentExportError(_ message: String, title: String = "Export Failed") {
         let alert = NSAlert()
-        alert.messageText = "Export Failed"
+        alert.messageText = title
         alert.informativeText = message
         alert.alertStyle = .critical
         alert.runModal()
@@ -1771,6 +1831,299 @@ final class AppModel: ObservableObject {
         return duration.seconds.isFinite ? duration.seconds : 0
     }
 
+    // MARK: - Subtitle import
+
+    /// Scans each job's folder for subtitle sidecars and adopts what it finds.
+    /// Jobs are already in the sidebar by now; scanning and parsing happen off
+    /// the main actor so a large batch add stays responsive.
+    private func adoptSidecars(for ids: [UUID]) {
+        let requests: [(id: UUID, url: URL, source: String, target: String)] = ids.compactMap { id in
+            guard let job = jobs.first(where: { $0.id == id }) else { return nil }
+            let resolved = job.settings.applying(job.overrides)
+            return (id, job.sourceURL, resolved.sourceLanguage, resolved.translationTargetLanguage)
+        }
+        guard !requests.isEmpty else { return }
+        subtitleScanPendingIDs.formUnion(requests.map(\.id))
+
+        // An n-file add of one folder listed that folder n times; the listing
+        // is per folder, so do it once and match every video against it.
+        let byFolder = Dictionary(grouping: requests, by: { $0.url.deletingLastPathComponent() })
+
+        Task { [weak self] in
+            for (folder, folderRequests) in byFolder {
+                // SubtitleImporter is nonisolated, so this hops off the main
+                // actor for the directory listing and the parse.
+                let candidates = await Task.detached { SubtitleImporter.folderContents(of: folder) }.value
+                for request in folderRequests {
+                    let result = await Task.detached {
+                        SubtitleImporter.importSidecars(
+                            mediaURL: request.url,
+                            candidates: candidates,
+                            sourceLanguage: request.source,
+                            translationTargetLanguage: request.target
+                        )
+                    }.value
+                    guard let self else { return }
+                    // Applied as it lands: holding the whole batch back until
+                    // the last scan finished froze the queue with every job
+                    // hidden from the sidebar and no sign of why.
+                    self.applyAdoption(id: request.id, result: result)
+                }
+            }
+        }
+    }
+
+    private func applyAdoption(id: UUID, result: SubtitleImporter.Result) {
+        let translationReady = settings.isTranslationReady
+        subtitleScanPendingIDs.remove(id)
+        // The job leaves the pending set either way, so the queue must be
+        // pumped even when nothing is adopted.
+        defer { processQueue() }
+        guard result.transcript != nil || result.translation != nil || !result.logLines.isEmpty else { return }
+        // Adoption may only land on a job nothing has touched since the
+        // scan began. Liveness alone is not enough: a hand-started run
+        // (canStartSelectedJob/canTranscribe don't consult the pending
+        // set) that completes or fails during the scan window leaves the
+        // job neither active nor running, and adopting then replaces a
+        // real transcript — or a failure — with the sidecar. `.idle` and
+        // `.queued` are the only states an untouched job can be in.
+        // Empty slots are checked too because an explicit Load Subtitles…
+        // onto a queued job leaves it queued, so its status alone cannot
+        // tell the two apart.
+        guard let current = jobs.first(where: { $0.id == id }),
+            current.status == .idle || current.status == .queued,
+            !isJobActive(id),
+            current.transcriptSegments.isEmpty,
+            current.translatedSegments.isEmpty
+        else { return }
+        updateJob(id) { job in
+            for line in result.logLines {
+                job.log += line + "\n"
+            }
+            // A job auto-started or ingested by a watch folder is .queued.
+            // PipelineScheduler only ever picks .queued jobs (both slots),
+            // so clearing that status here would drop the job out of the
+            // queue and it would never translate. Adopting a transcript
+            // just moves it from the GPU slot's filter to the translation
+            // slot's — hasTranscript is now true.
+            let wasQueued = job.status == .queued
+            if let transcript = result.transcript {
+                job.transcriptSegments = transcript.segments
+                job.importedTranscriptSource = transcript.source
+                // Nothing ran, so the transcription clock stays unset.
+                job.progress = JobProgress(stage: .complete, detail: "Loaded existing subtitles.", fraction: 1)
+                job.status = wasQueued && translationReady ? .queued : .transcriptionComplete
+            }
+            // Second guard on the same invariant SubtitleImporter enforces:
+            // a translation adopted without a transcript would be silently
+            // discarded by the ASR run that the empty transcript triggers.
+            if let translation = result.translation, !job.transcriptSegments.isEmpty {
+                job.translatedSegments = translation.segments
+                job.importedTranslationSource = translation.source
+                // Both slots filled: there is no work left, so leave the
+                // queue rather than sit there waiting to be re-translated.
+                job.status = .translationComplete
+            }
+        }
+    }
+
+    struct SubtitleLoadRequest: Identifiable {
+        let id: UUID
+        let document: SubtitleImporter.Document
+    }
+
+    var canLoadSubtitles: Bool {
+        currentJob != nil && !isSelectedJobRunning
+    }
+
+    /// A translation with no transcript is a state the rest of the app cannot
+    /// represent — bilingual export and canTranslate both require one.
+    var canLoadTranslationSubtitles: Bool {
+        canLoadSubtitles && !transcriptSegments.isEmpty
+    }
+
+    func presentSubtitleLoadPanel() {
+        guard canLoadSubtitles else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = SubtitleSidecarScanner.supportedExtensions.compactMap {
+            UTType(filenameExtension: $0, conformingTo: .plainText)
+        }
+        panel.allowsOtherFileTypes = false
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Load"
+        panel.message = "Choose an SRT or WebVTT subtitle file."
+        panel.directoryURL = selectedVideoURL?.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            // Unlike auto-detect, this was an explicit request, so a failure
+            // gets a dialog rather than a quiet log line. No backup yet: the
+            // slot picker below can still be cancelled, and a cancelled load
+            // must not leave a .bak beside the user's file.
+            let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+            subtitleLoadRequest = SubtitleLoadRequest(id: UUID(), document: document)
+        } catch {
+            presentExportError(
+                "Could not read \(url.lastPathComponent): \(error.localizedDescription)",
+                title: "Could Not Load Subtitles"
+            )
+        }
+    }
+
+    func applySubtitleLoad(_ request: SubtitleLoadRequest, to slot: SubtitleSidecarScanner.Slot) {
+        guard let id = selectedJobID, let job = jobs.first(where: { $0.id == id }) else { return }
+        let existing = slot == .transcript ? job.transcriptSegments : job.translatedSegments
+        if !existing.isEmpty, !confirmReplacingSegments(slot: slot) { return }
+
+        let document = request.document
+        // The manual path leaves the backup until here, so a cancelled slot
+        // picker writes nothing. Adoption still backs up at import time: it
+        // has no cancel step and no later commit to hang the backup on.
+        var source = document.source
+        if !source.didBackup {
+            source.didBackup = SubtitleImporter.backUpOriginal(at: source.url)
+        }
+        // A queued write for the slot being replaced would otherwise fire at
+        // the newly loaded file moments later, rewriting it with renumbered
+        // ids and normalized timestamps without the user editing anything.
+        cancelSubtitleSync(jobID: id, slot: slot)
+        // Mirrors applyAdoption: a .queued job must stay .queued when
+        // translation is configured, or PipelineScheduler.nextTranslationJob
+        // (which only checks status/hasTranscript, not readiness) would pick
+        // it up and fail immediately with no translation host to talk to.
+        let translationReady = settings.isTranslationReady
+        updateJob(id) { job in
+            switch slot {
+            case .transcript:
+                job.transcriptSegments = document.segments
+                job.importedTranscriptSource = source
+                let wasQueued = job.status == .queued
+                if wasQueued {
+                    job.status = translationReady ? .queued : .transcriptionComplete
+                } else if job.status == .idle || job.status == .canceled || job.status == .failed {
+                    job.status = .transcriptionComplete
+                }
+                job.progress = JobProgress(stage: .complete, detail: "Loaded existing subtitles.", fraction: 1)
+            case .translation:
+                job.translatedSegments = document.segments
+                job.importedTranslationSource = source
+                job.status = .translationComplete
+            }
+            job.log += "Loaded subtitles from \(document.source.fileName) (\(document.segments.count) cues).\n"
+        }
+        subtitleLoadRequest = nil
+        processQueue()
+    }
+
+    private func confirmReplacingSegments(slot: SubtitleSidecarScanner.Slot) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = slot == .transcript ? "Replace the Transcript?" : "Replace the Translation?"
+        alert.informativeText = "The segments currently in this tab will be replaced by the subtitle file."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Replace")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    // MARK: - Imported subtitle sync
+
+    private struct SubtitleSyncKey: Hashable {
+        let jobID: UUID
+        let slot: SubtitleSidecarScanner.Slot
+    }
+
+    /// Edits are written back on a debounce so a Replace All firing hundreds of
+    /// edits produces one write, not hundreds.
+    private static let subtitleSyncDebounce: TimeInterval = 1.5
+
+    private func scheduleSubtitleSync(jobID: UUID, slot: SubtitleSidecarScanner.Slot) {
+        let key = SubtitleSyncKey(jobID: jobID, slot: slot)
+        subtitleSyncWorkItems[key]?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            self?.subtitleSyncWorkItems[key] = nil
+            self?.writeBackImportedSubtitles(jobID: jobID, slot: slot)
+        }
+        subtitleSyncWorkItems[key] = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.subtitleSyncDebounce, execute: item)
+    }
+
+    /// Runs every pending write immediately. Called on quit and when the
+    /// selection moves off a job.
+    func flushSubtitleSync() {
+        let pending = subtitleSyncWorkItems
+        subtitleSyncWorkItems.removeAll()
+        for (key, item) in pending {
+            item.cancel()
+            writeBackImportedSubtitles(jobID: key.jobID, slot: key.slot)
+        }
+    }
+
+    /// Drops a queued write so it cannot fire after the link it was made for
+    /// is gone.
+    private func cancelSubtitleSync(jobID: UUID, slot: SubtitleSidecarScanner.Slot) {
+        subtitleSyncWorkItems.removeValue(forKey: SubtitleSyncKey(jobID: jobID, slot: slot))?.cancel()
+    }
+
+    func unlinkImportedSubtitles(slot: SubtitleSidecarScanner.Slot, jobID: UUID? = nil) {
+        guard let id = jobID ?? selectedJobID else { return }
+        cancelSubtitleSync(jobID: id, slot: slot)
+        updateJob(id) { job in
+            let name = job.importedSource(for: slot)?.fileName
+            job.setImportedSource(nil, for: slot)
+            if let name {
+                job.log += "Stopped syncing edits to \(name).\n"
+            }
+        }
+    }
+
+    private func writeBackImportedSubtitles(jobID: UUID, slot: SubtitleSidecarScanner.Slot) {
+        guard let job = jobs.first(where: { $0.id == jobID }),
+            var source = job.importedSource(for: slot),
+            !source.syncPaused
+        else { return }
+
+        let segments = slot == .transcript ? job.transcriptSegments : job.translatedSegments
+        guard !segments.isEmpty else { return }
+
+        // If the file changed under us, the user's other edits win. Pausing is
+        // recoverable; overwriting is not.
+        guard source.matchesFileOnDisk() else {
+            source.syncPaused = true
+            updateJob(jobID) { job in
+                job.setImportedSource(source, for: slot)
+                job.log += "\(source.fileName) changed outside Cue; sync paused.\n"
+            }
+            return
+        }
+
+        do {
+            if !source.didBackup {
+                let backupURL = source.url.appendingPathExtension("bak")
+                if !FileManager.default.fileExists(atPath: backupURL.path) {
+                    try FileManager.default.copyItem(at: source.url, to: backupURL)
+                }
+                source.didBackup = true
+            }
+            // Written without the intro summary: applyingIntro is export-only,
+            // so the file mirrors exactly what the editor shows.
+            try SubtitleWriter.write(segments: segments, format: source.format, to: source.url)
+            // Re-baseline, or our own write looks like an external change next
+            // time round.
+            source.refreshFileState()
+            source.lastSyncError = nil
+            updateJob(jobID, debouncePersist: true) { job in
+                job.setImportedSource(source, for: slot)
+            }
+        } catch {
+            source.lastSyncError = error.localizedDescription
+            updateJob(jobID) { job in
+                job.setImportedSource(source, for: slot)
+                job.log += "Could not update \(source.fileName): \(error.localizedDescription)\n"
+            }
+        }
+    }
+
     // MARK: - Sidecar auto-export
 
     /// Writes SRT files next to the source video when a job finishes, named
@@ -1786,13 +2139,19 @@ final class AppModel: ObservableObject {
         let includeTranslation = defaults.object(forKey: "exportIncludeTranslation") as? Bool ?? true
         let includeBilingual = defaults.object(forKey: "exportIncludeBilingual") as? Bool ?? false
 
+        let protectedPaths = Set(
+            [job.importedTranscriptSource, job.importedTranslationSource]
+                .compactMap { $0?.url.standardizedFileURL.path }
+        )
+
         do {
             let written = try exportCoordinator.writeSidecars(
                 job: job,
                 options: ExportCoordinator.SidecarOptions(
                     includeOriginal: includeOriginal,
                     includeTranslation: includeTranslation,
-                    includeBilingual: includeBilingual
+                    includeBilingual: includeBilingual,
+                    protectedPaths: protectedPaths
                 )
             )
             if !written.isEmpty {
@@ -2160,12 +2519,22 @@ final class AppModel: ObservableObject {
         text: String,
         keyPath: WritableKeyPath<TranscriptionJob, [TranscriptionSegment]>
     ) {
-        guard let id = selectedJobID else { return }
+        // A mutation that changes nothing must not schedule a write: an
+        // untouched file should stay untouched, byte for byte.
+        guard let id = selectedJobID,
+            let job = jobs.first(where: { $0.id == id }),
+            let existing = job[keyPath: keyPath].first(where: { $0.id == segment.id }),
+            existing.text != text
+        else { return }
         updateJob(id, debouncePersist: true) { job in
             guard let index = job[keyPath: keyPath].firstIndex(where: { $0.id == segment.id }) else {
                 return
             }
             job[keyPath: keyPath][index].text = text
+        }
+        let slot: SubtitleSidecarScanner.Slot = keyPath == \TranscriptionJob.transcriptSegments ? .transcript : .translation
+        if let source = jobs.first(where: { $0.id == id })?.importedSource(for: slot), !source.syncPaused {
+            scheduleSubtitleSync(jobID: id, slot: slot)
         }
     }
 

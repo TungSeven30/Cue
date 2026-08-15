@@ -219,9 +219,14 @@ struct DetailView: View {
                     Button("Transcribe") { model.startTranscription() }
                         .buttonStyle(.borderedProminent)
                         .disabled(!model.canTranscribe)
+                    Button("Load Subtitles…") { model.presentSubtitleLoadPanel() }
+                        .disabled(!model.canLoadSubtitles)
                 }
             } else {
-                segmentList(segments: model.displayTranscriptSegments, onEdit: model.updateTranscriptSegment)
+                VStack(alignment: .leading, spacing: 10) {
+                    ImportedSubtitleBanner(model: model, slot: .transcript)
+                    segmentList(segments: model.displayTranscriptSegments, onEdit: model.updateTranscriptSegment)
+                }
             }
         case .translation:
             if model.displayTranslatedSegments.isEmpty {
@@ -233,9 +238,14 @@ struct DetailView: View {
                     Button("Translate") { model.startTranslation() }
                         .buttonStyle(.borderedProminent)
                         .disabled(!model.canTranslate)
+                    Button("Load Subtitles…") { model.presentSubtitleLoadPanel() }
+                        .disabled(!model.canLoadSubtitles)
                 }
             } else {
-                segmentList(segments: model.displayTranslatedSegments, onEdit: model.updateTranslatedSegment)
+                VStack(alignment: .leading, spacing: 10) {
+                    ImportedSubtitleBanner(model: model, slot: .translation)
+                    segmentList(segments: model.displayTranslatedSegments, onEdit: model.updateTranslatedSegment)
+                }
             }
         case .log:
             ScrollView {

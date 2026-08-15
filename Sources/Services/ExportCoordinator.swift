@@ -26,6 +26,10 @@ struct ExportCoordinator {
         let includeOriginal: Bool
         let includeTranslation: Bool
         let includeBilingual: Bool
+        /// Standardized paths that must never be written — the files this job
+        /// imported its subtitles from. Rewriting one would replace a user's
+        /// file with a summary-prepended copy.
+        var protectedPaths: Set<String> = []
     }
 
     func plan(
@@ -66,37 +70,56 @@ struct ExportCoordinator {
         var written: [String] = []
         if options.includeOriginal, !job.transcriptSegments.isEmpty {
             let code = Self.sidecarLanguageCode(for: job.settings.sourceLanguage) ?? "original"
-            let name = "\(base).\(code).srt"
-            try SubtitleWriter.writeSRT(
-                segments: Self.applyingIntro(job.transcriptSegments, format: .srt, summary: job.summary),
-                to: folder.appendingPathComponent(name)
+            try write(
+                job.transcriptSegments,
+                named: "\(base).\(code).srt",
+                in: folder,
+                summary: job.summary,
+                protectedPaths: options.protectedPaths,
+                into: &written
             )
-            written.append(name)
         }
         if options.includeTranslation, !job.translatedSegments.isEmpty {
             let code =
                 Self.sidecarLanguageCode(for: job.settings.translationTargetLanguage)
                 ?? Self.languageSuffix(job.settings.translationTargetLanguage)
-            let name = "\(base).\(code).srt"
-            try SubtitleWriter.writeSRT(
-                segments: Self.applyingIntro(job.translatedSegments, format: .srt, summary: job.summary),
-                to: folder.appendingPathComponent(name)
+            try write(
+                job.translatedSegments,
+                named: "\(base).\(code).srt",
+                in: folder,
+                summary: job.summary,
+                protectedPaths: options.protectedPaths,
+                into: &written
             )
-            written.append(name)
         }
         if options.includeBilingual, !job.transcriptSegments.isEmpty, !job.translatedSegments.isEmpty {
-            let name = "\(base).bilingual.srt"
-            try SubtitleWriter.writeSRT(
-                segments: Self.applyingIntro(
-                    Self.bilingualSegments(transcript: job.transcriptSegments, translated: job.translatedSegments),
-                    format: .srt,
-                    summary: job.summary
-                ),
-                to: folder.appendingPathComponent(name)
+            try write(
+                Self.bilingualSegments(transcript: job.transcriptSegments, translated: job.translatedSegments),
+                named: "\(base).bilingual.srt",
+                in: folder,
+                summary: job.summary,
+                protectedPaths: options.protectedPaths,
+                into: &written
             )
-            written.append(name)
         }
         return written
+    }
+
+    private func write(
+        _ segments: [TranscriptionSegment],
+        named name: String,
+        in folder: URL,
+        summary: String?,
+        protectedPaths: Set<String>,
+        into written: inout [String]
+    ) throws {
+        let url = folder.appendingPathComponent(name)
+        guard !protectedPaths.contains(url.standardizedFileURL.path) else { return }
+        try SubtitleWriter.writeSRT(
+            segments: Self.applyingIntro(segments, format: .srt, summary: summary),
+            to: url
+        )
+        written.append(name)
     }
 
     static func normalizedURL(_ url: URL, expectedExtension: String) -> URL {

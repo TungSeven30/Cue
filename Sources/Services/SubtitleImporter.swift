@@ -16,19 +16,36 @@ enum SubtitleImporter {
         let logLines: [String]
     }
 
+    /// Every file in `folder`, for `importSidecars` to match against. Listed
+    /// separately so a batch add of one folder reads that folder once rather
+    /// than once per video.
+    static func folderContents(of folder: URL) -> [URL] {
+        (try? FileManager.default.contentsOfDirectory(
+            at: folder,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+        )) ?? []
+    }
+
     static func importSidecars(
         mediaURL: URL,
         sourceLanguage: String,
         translationTargetLanguage: String
     ) -> Result {
-        let folder = mediaURL.deletingLastPathComponent()
-        let candidates =
-            (try? FileManager.default.contentsOfDirectory(
-                at: folder,
-                includingPropertiesForKeys: [.isRegularFileKey],
-                options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
-            )) ?? []
+        importSidecars(
+            mediaURL: mediaURL,
+            candidates: folderContents(of: mediaURL.deletingLastPathComponent()),
+            sourceLanguage: sourceLanguage,
+            translationTargetLanguage: translationTargetLanguage
+        )
+    }
 
+    static func importSidecars(
+        mediaURL: URL,
+        candidates: [URL],
+        sourceLanguage: String,
+        translationTargetLanguage: String
+    ) -> Result {
         let matches = SubtitleSidecarScanner.match(
             mediaURL: mediaURL,
             candidates: candidates,
@@ -69,14 +86,19 @@ enum SubtitleImporter {
         return Result(transcript: transcript, translation: translation, logLines: logLines)
     }
 
-    static func importFile(at url: URL) throws -> Document {
+    /// `backingUp: false` is for the manual load path, where the file is only
+    /// read to fill the slot picker: the user may still cancel, and a cancelled
+    /// load must leave nothing behind. That path backs up when it commits.
+    static func importFile(at url: URL, backingUp: Bool = true) throws -> Document {
         let segments = try SubtitleReader.parse(contentsOf: url)
         guard let format = SubtitleReader.format(for: url),
             var source = ImportedSubtitleSource(url: url, format: format)
         else {
             throw SubtitleReader.ReadError.unreadable
         }
-        source.didBackup = backUpOriginal(at: url)
+        if backingUp {
+            source.didBackup = backUpOriginal(at: url)
+        }
         return Document(source: source, segments: segments)
     }
 
@@ -86,7 +108,7 @@ enum SubtitleImporter {
     /// made no edit to trigger a backup. Returns whether a backup now exists —
     /// a failure here is not fatal, and write-back's own backup step remains
     /// the fallback.
-    private static func backUpOriginal(at url: URL) -> Bool {
+    static func backUpOriginal(at url: URL) -> Bool {
         let backupURL = url.appendingPathExtension("bak")
         guard !FileManager.default.fileExists(atPath: backupURL.path) else { return true }
         do {

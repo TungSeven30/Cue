@@ -1841,77 +1841,86 @@ final class AppModel: ObservableObject {
         guard !requests.isEmpty else { return }
         subtitleScanPendingIDs.formUnion(requests.map(\.id))
 
+        // An n-file add of one folder listed that folder n times; the listing
+        // is per folder, so do it once and match every video against it.
+        let byFolder = Dictionary(grouping: requests, by: { $0.url.deletingLastPathComponent() })
+
         Task { [weak self] in
-            var results: [(id: UUID, result: SubtitleImporter.Result)] = []
-            for request in requests {
+            for (folder, folderRequests) in byFolder {
                 // SubtitleImporter is nonisolated, so this hops off the main
                 // actor for the directory listing and the parse.
-                let result = await Task.detached {
-                    SubtitleImporter.importSidecars(
-                        mediaURL: request.url,
-                        sourceLanguage: request.source,
-                        translationTargetLanguage: request.target
-                    )
-                }.value
-                results.append((request.id, result))
+                let candidates = await Task.detached { SubtitleImporter.folderContents(of: folder) }.value
+                for request in folderRequests {
+                    let result = await Task.detached {
+                        SubtitleImporter.importSidecars(
+                            mediaURL: request.url,
+                            candidates: candidates,
+                            sourceLanguage: request.source,
+                            translationTargetLanguage: request.target
+                        )
+                    }.value
+                    guard let self else { return }
+                    // Applied as it lands: holding the whole batch back until
+                    // the last scan finished froze the queue with every job
+                    // hidden from the sidebar and no sign of why.
+                    self.applyAdoption(id: request.id, result: result)
+                }
             }
-            guard let self else { return }
-            self.applyAdoptions(results)
         }
     }
 
-    private func applyAdoptions(_ results: [(id: UUID, result: SubtitleImporter.Result)]) {
+    private func applyAdoption(id: UUID, result: SubtitleImporter.Result) {
         let translationReady = settings.isTranslationReady
-        for (id, result) in results {
-            subtitleScanPendingIDs.remove(id)
-            guard result.transcript != nil || result.translation != nil || !result.logLines.isEmpty else { continue }
-            // Adoption may only land on a job nothing has touched since the
-            // scan began. Liveness alone is not enough: a hand-started run
-            // (canStartSelectedJob/canTranscribe don't consult the pending
-            // set) that completes or fails during the scan window leaves the
-            // job neither active nor running, and adopting then replaces a
-            // real transcript — or a failure — with the sidecar. `.idle` and
-            // `.queued` are the only states an untouched job can be in.
-            // Empty slots are checked too because an explicit Load Subtitles…
-            // onto a queued job leaves it queued, so its status alone cannot
-            // tell the two apart.
-            guard let current = jobs.first(where: { $0.id == id }),
-                current.status == .idle || current.status == .queued,
-                !isJobActive(id),
-                current.transcriptSegments.isEmpty,
-                current.translatedSegments.isEmpty
-            else { continue }
-            updateJob(id) { job in
-                for line in result.logLines {
-                    job.log += line + "\n"
-                }
-                // A job auto-started or ingested by a watch folder is .queued.
-                // PipelineScheduler only ever picks .queued jobs (both slots),
-                // so clearing that status here would drop the job out of the
-                // queue and it would never translate. Adopting a transcript
-                // just moves it from the GPU slot's filter to the translation
-                // slot's — hasTranscript is now true.
-                let wasQueued = job.status == .queued
-                if let transcript = result.transcript {
-                    job.transcriptSegments = transcript.segments
-                    job.importedTranscriptSource = transcript.source
-                    // Nothing ran, so the transcription clock stays unset.
-                    job.progress = JobProgress(stage: .complete, detail: "Loaded existing subtitles.", fraction: 1)
-                    job.status = wasQueued && translationReady ? .queued : .transcriptionComplete
-                }
-                // Second guard on the same invariant SubtitleImporter enforces:
-                // a translation adopted without a transcript would be silently
-                // discarded by the ASR run that the empty transcript triggers.
-                if let translation = result.translation, !job.transcriptSegments.isEmpty {
-                    job.translatedSegments = translation.segments
-                    job.importedTranslationSource = translation.source
-                    // Both slots filled: there is no work left, so leave the
-                    // queue rather than sit there waiting to be re-translated.
-                    job.status = .translationComplete
-                }
+        subtitleScanPendingIDs.remove(id)
+        // The job leaves the pending set either way, so the queue must be
+        // pumped even when nothing is adopted.
+        defer { processQueue() }
+        guard result.transcript != nil || result.translation != nil || !result.logLines.isEmpty else { return }
+        // Adoption may only land on a job nothing has touched since the
+        // scan began. Liveness alone is not enough: a hand-started run
+        // (canStartSelectedJob/canTranscribe don't consult the pending
+        // set) that completes or fails during the scan window leaves the
+        // job neither active nor running, and adopting then replaces a
+        // real transcript — or a failure — with the sidecar. `.idle` and
+        // `.queued` are the only states an untouched job can be in.
+        // Empty slots are checked too because an explicit Load Subtitles…
+        // onto a queued job leaves it queued, so its status alone cannot
+        // tell the two apart.
+        guard let current = jobs.first(where: { $0.id == id }),
+            current.status == .idle || current.status == .queued,
+            !isJobActive(id),
+            current.transcriptSegments.isEmpty,
+            current.translatedSegments.isEmpty
+        else { return }
+        updateJob(id) { job in
+            for line in result.logLines {
+                job.log += line + "\n"
+            }
+            // A job auto-started or ingested by a watch folder is .queued.
+            // PipelineScheduler only ever picks .queued jobs (both slots),
+            // so clearing that status here would drop the job out of the
+            // queue and it would never translate. Adopting a transcript
+            // just moves it from the GPU slot's filter to the translation
+            // slot's — hasTranscript is now true.
+            let wasQueued = job.status == .queued
+            if let transcript = result.transcript {
+                job.transcriptSegments = transcript.segments
+                job.importedTranscriptSource = transcript.source
+                // Nothing ran, so the transcription clock stays unset.
+                job.progress = JobProgress(stage: .complete, detail: "Loaded existing subtitles.", fraction: 1)
+                job.status = wasQueued && translationReady ? .queued : .transcriptionComplete
+            }
+            // Second guard on the same invariant SubtitleImporter enforces:
+            // a translation adopted without a transcript would be silently
+            // discarded by the ASR run that the empty transcript triggers.
+            if let translation = result.translation, !job.transcriptSegments.isEmpty {
+                job.translatedSegments = translation.segments
+                job.importedTranslationSource = translation.source
+                // Both slots filled: there is no work left, so leave the
+                // queue rather than sit there waiting to be re-translated.
+                job.status = .translationComplete
             }
         }
-        processQueue()
     }
 
     struct SubtitleLoadRequest: Identifiable {
@@ -1945,8 +1954,10 @@ final class AppModel: ObservableObject {
 
         do {
             // Unlike auto-detect, this was an explicit request, so a failure
-            // gets a dialog rather than a quiet log line.
-            let document = try SubtitleImporter.importFile(at: url)
+            // gets a dialog rather than a quiet log line. No backup yet: the
+            // slot picker below can still be cancelled, and a cancelled load
+            // must not leave a .bak beside the user's file.
+            let document = try SubtitleImporter.importFile(at: url, backingUp: false)
             subtitleLoadRequest = SubtitleLoadRequest(id: UUID(), document: document)
         } catch {
             presentExportError(
@@ -1962,7 +1973,14 @@ final class AppModel: ObservableObject {
         if !existing.isEmpty, !confirmReplacingSegments(slot: slot) { return }
 
         let document = request.document
-        // Mirrors applyAdoptions: a .queued job must stay .queued when
+        // The manual path leaves the backup until here, so a cancelled slot
+        // picker writes nothing. Adoption still backs up at import time: it
+        // has no cancel step and no later commit to hang the backup on.
+        var source = document.source
+        if !source.didBackup {
+            source.didBackup = SubtitleImporter.backUpOriginal(at: source.url)
+        }
+        // Mirrors applyAdoption: a .queued job must stay .queued when
         // translation is configured, or PipelineScheduler.nextTranslationJob
         // (which only checks status/hasTranscript, not readiness) would pick
         // it up and fail immediately with no translation host to talk to.
@@ -1971,7 +1989,7 @@ final class AppModel: ObservableObject {
             switch slot {
             case .transcript:
                 job.transcriptSegments = document.segments
-                job.importedTranscriptSource = document.source
+                job.importedTranscriptSource = source
                 let wasQueued = job.status == .queued
                 if wasQueued {
                     job.status = translationReady ? .queued : .transcriptionComplete
@@ -1981,7 +1999,7 @@ final class AppModel: ObservableObject {
                 job.progress = JobProgress(stage: .complete, detail: "Loaded existing subtitles.", fraction: 1)
             case .translation:
                 job.translatedSegments = document.segments
-                job.importedTranslationSource = document.source
+                job.importedTranslationSource = source
                 job.status = .translationComplete
             }
             job.log += "Loaded subtitles from \(document.source.fileName) (\(document.segments.count) cues).\n"

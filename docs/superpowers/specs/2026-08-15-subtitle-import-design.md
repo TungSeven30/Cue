@@ -231,8 +231,12 @@ segment edit entry points. `TranscriptView`'s Replace All routes through them to
   preserved: a `.vtt` import is written back as WebVTT.
 - Written **without** the intro summary. `ExportCoordinator.applyingIntro` stays
   export-only, so the file mirrors exactly what the editor shows.
-- **One-time `.bak`** of the original before the first write, when no `.bak` already
-  exists; recorded via `didBackup`.
+- **One-time `.bak`** of the original, when no `.bak` already exists; recorded via
+  `didBackup`. Auto-adoption takes it at import time, because a re-translation can
+  unlink the file before any edit is ever made. A manual Load Subtitles… takes it when
+  the slot picker commits instead, so cancelling the picker leaves nothing behind.
+  Write-back takes it before the first write if neither has (`didBackup == false`,
+  e.g. the folder was read-only earlier).
 - **External-change guard.** Before writing, the file's current size and modification
   date are compared against the values recorded at import. On mismatch the write is
   skipped, sync pauses, and the job log records

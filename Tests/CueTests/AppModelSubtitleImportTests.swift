@@ -649,6 +649,62 @@ struct AppModelSubtitleImportTests {
         #expect(job.log.contains("Loaded subtitles from elsewhere.srt (2 cues)."))
     }
 
+    // A batch add of one folder now lists that folder once and matches every
+    // video against the same listing, so each job must still pick up its own
+    // sidecar and only its own.
+    @Test func batchAddInOneFolderAdoptsEachVideosOwnSidecar() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+
+        let second = fixture.baseURL.appendingPathComponent("other.mp4")
+        try Data("media".utf8).write(to: second)
+        try Data("1\n00:00:09,000 --> 00:00:10,000\nOther subtitle\n".utf8)
+            .write(to: fixture.baseURL.appendingPathComponent("other.ja.srt"))
+        let third = fixture.baseURL.appendingPathComponent("bare.mp4")
+        try Data("media".utf8).write(to: third)
+
+        model.addVideos(urls: [fixture.mediaURL, second, third])
+        for job in model.jobs {
+            try await waitForAdoption(model, jobID: job.id)
+        }
+
+        let byName = Dictionary(uniqueKeysWithValues: model.jobs.map { ($0.title, $0) })
+        #expect(byName["movie"]?.importedTranscriptSource?.fileName == "movie.ja.srt")
+        #expect(byName["movie"]?.transcriptSegments.count == 2)
+        #expect(byName["other"]?.importedTranscriptSource?.fileName == "other.ja.srt")
+        #expect(byName["other"]?.transcriptSegments.map(\.text) == ["Other subtitle"])
+        #expect(byName["bare"]?.importedTranscriptSource == nil)
+        #expect(byName["bare"]?.status == .idle)
+    }
+
+    // Reading the chosen file only fills the slot picker; the user can still
+    // cancel it. Backing up there left a .bak beside a file the user never
+    // ended up loading — a side effect with nothing to show for it.
+    @Test func manualLoadBacksUpOnlyWhenTheSlotIsCommitted() async throws {
+        let fixture = try makeFixture(sidecars: [])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+
+        let elsewhere = fixture.baseURL.appendingPathComponent("elsewhere.srt")
+        try Data(Self.srt.utf8).write(to: elsewhere)
+        let backupURL = fixture.baseURL.appendingPathComponent("elsewhere.srt.bak")
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let jobID = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: jobID)
+
+        // What presentSubtitleLoadPanel does before showing the picker.
+        let document = try SubtitleImporter.importFile(at: elsewhere, backingUp: false)
+        #expect(document.source.didBackup == false)
+        #expect(FileManager.default.fileExists(atPath: backupURL.path) == false, "A cancelled load must leave no .bak")
+
+        model.applySubtitleLoad(.init(id: UUID(), document: document), to: .transcript)
+
+        #expect(try String(contentsOf: backupURL, encoding: .utf8) == Self.srt)
+        #expect(model.jobs.first?.importedTranscriptSource?.didBackup == true)
+    }
+
     // Translation without a transcript is a state the rest of the app cannot
     // represent, so the picker must not offer it.
     @Test func translationSlotIsUnavailableWithoutATranscript() async throws {

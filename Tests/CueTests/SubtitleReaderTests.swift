@@ -96,6 +96,36 @@ struct SubtitleReaderTests {
         #expect(segments[0].text == "step one --> step two")
     }
 
+    // Conversion and OCR tools emit separator lines carrying a space or tab.
+    // Splitting on "\n\n" alone merges the neighbouring cues into one whose
+    // text swallows the next cue's index and timestamp — and because write-back
+    // re-serializes what was parsed, the user's first edit would save that
+    // corruption into their own file.
+    @Test func splitsCuesOnWhitespaceBearingSeparatorLines() throws {
+        let srt =
+            "1\n00:00:01,000 --> 00:00:02,000\nA\n \n"
+            + "2\n00:00:03,000 --> 00:00:04,000\nB\n\t\n"
+            + "3\n00:00:05,000 --> 00:00:06,000\nC"
+        let segments = try SubtitleReader.parse(srt, format: .srt)
+        #expect(segments.map(\.text) == ["A", "B", "C"])
+        #expect(segments.map(\.start) == [1.0, 3.0, 5.0])
+    }
+
+    // The dialog shown by a failed Load Subtitles… prints localizedDescription,
+    // so every case must read as an explanation rather than "error 2".
+    @Test func readErrorsCarryAReadableDescription() {
+        let messages = [
+            SubtitleReader.ReadError.unreadable,
+            .unsupportedFormat("ass"),
+            .noCues,
+            .tooLarge(30 * 1024 * 1024),
+        ].map(\.localizedDescription)
+        #expect(messages.allSatisfy { !$0.contains("couldn't be completed") })
+        #expect(messages.contains { $0.contains("SRT") })
+        #expect(messages.contains { $0.contains("no subtitle cues") })
+        #expect(messages.contains { $0.contains("MB") })
+    }
+
     @Test func emptyFileThrowsNoCues() {
         #expect(throws: SubtitleReader.ReadError.noCues) {
             try SubtitleReader.parse("\n\n", format: .srt)

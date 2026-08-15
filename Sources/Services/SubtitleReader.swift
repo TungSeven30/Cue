@@ -75,6 +75,13 @@ enum SubtitleReader {
             text
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
+            // OCR and conversion tools write separator lines that carry a
+            // space or tab. Without this they don't split, so two cues merge
+            // into one whose text swallows the next cue's index and timings —
+            // and write-back would persist that into the user's own file. The
+            // lookahead leaves the trailing newline in place so consecutive
+            // whitespace-only lines collapse too.
+            .replacingOccurrences(of: "\n[ \t]+(?=\n)", with: "\n", options: .regularExpression)
 
         var segments: [TranscriptionSegment] = []
         for block in normalized.components(separatedBy: "\n\n") {
@@ -149,5 +156,29 @@ enum SubtitleReader {
         }
         guard let last = Double(pieces[pieces.count - 1]) else { return nil }
         return seconds * 60 + last
+    }
+}
+
+/// A manual Load Subtitles… failure is shown in a dialog, so the default
+/// "The operation couldn't be completed. (…error 2.)" is not good enough:
+/// every case has to say what is actually wrong with the file.
+extension SubtitleReader.ReadError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .unreadable:
+            return "The file could not be read as text."
+        case .unsupportedFormat(let fileExtension):
+            let named = fileExtension.isEmpty ? "That kind of file" : "“.\(fileExtension)” files"
+            return "\(named) can't be loaded. Choose an SRT or WebVTT subtitle file."
+        case .noCues:
+            return "The file contains no subtitle cues."
+        case .tooLarge(let size):
+            let actual = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+            let limit = ByteCountFormatter.string(
+                fromByteCount: Int64(SubtitleReader.maximumFileSize),
+                countStyle: .file
+            )
+            return "The file is \(actual), past the \(limit) limit for subtitle files."
+        }
     }
 }

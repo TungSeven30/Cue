@@ -1903,13 +1903,19 @@ final class AppModel: ObservableObject {
         let includeTranslation = defaults.object(forKey: "exportIncludeTranslation") as? Bool ?? true
         let includeBilingual = defaults.object(forKey: "exportIncludeBilingual") as? Bool ?? false
 
+        let protectedPaths = Set(
+            [job.importedTranscriptSource, job.importedTranslationSource]
+                .compactMap { $0?.url.standardizedFileURL.path }
+        )
+
         do {
             let written = try exportCoordinator.writeSidecars(
                 job: job,
                 options: ExportCoordinator.SidecarOptions(
                     includeOriginal: includeOriginal,
                     includeTranslation: includeTranslation,
-                    includeBilingual: includeBilingual
+                    includeBilingual: includeBilingual,
+                    protectedPaths: protectedPaths
                 )
             )
             if !written.isEmpty {

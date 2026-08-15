@@ -72,6 +72,26 @@ struct SubtitleImporterTests {
         #expect(result.logLines[0].contains("Could not read"))
     }
 
+    // The scanner guarantees a translation never arrives without its
+    // transcript, but a transcript that fails to parse breaks that pair here.
+    // Adopting the survivor alone marks the job translated with no transcript,
+    // which then sends it to ASR and throws the adopted translation away.
+    @Test func unparseableTranscriptDropsItsTranslation() throws {
+        let dir = try makeFolder(["movie.vi.srt"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data("not a subtitle at all".utf8).write(to: dir.appendingPathComponent("movie.ja.srt"))
+
+        let result = SubtitleImporter.importSidecars(
+            mediaURL: dir.appendingPathComponent("movie.mp4"),
+            sourceLanguage: "ja",
+            translationTargetLanguage: "Vietnamese"
+        )
+        #expect(result.transcript == nil)
+        #expect(result.translation == nil)
+        #expect(result.logLines.contains { $0.contains("Could not read movie.ja.srt") })
+        #expect(result.logLines.contains { $0.contains("Ignored movie.vi.srt") })
+    }
+
     @Test func importFileParsesAnyFolder() throws {
         let dir = try makeFolder(["elsewhere.srt"])
         defer { try? FileManager.default.removeItem(at: dir) }

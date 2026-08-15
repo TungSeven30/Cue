@@ -1899,7 +1899,10 @@ final class AppModel: ObservableObject {
                     job.progress = JobProgress(stage: .complete, detail: "Loaded existing subtitles.", fraction: 1)
                     job.status = wasQueued && translationReady ? .queued : .transcriptionComplete
                 }
-                if let translation = result.translation {
+                // Second guard on the same invariant SubtitleImporter enforces:
+                // a translation adopted without a transcript would be silently
+                // discarded by the ASR run that the empty transcript triggers.
+                if let translation = result.translation, !job.transcriptSegments.isEmpty {
                     job.translatedSegments = translation.segments
                     job.importedTranslationSource = translation.source
                     // Both slots filled: there is no work left, so leave the

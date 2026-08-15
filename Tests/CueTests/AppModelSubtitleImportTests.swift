@@ -117,6 +117,27 @@ struct AppModelSubtitleImportTests {
         #expect(job.importedTranslationSource?.fileName == "movie.vi.srt")
     }
 
+    // A job marked .translationComplete with an empty transcript is picked up
+    // for ASR (queued && !hasTranscript), and startTranscriptionNow then wipes
+    // translatedSegments — the adopted translation vanishes silently.
+    @Test func brokenTranscriptSidecarLeavesTheTranslationUnadopted() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt", "movie.vi.srt"])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        try Data("not a subtitle at all".utf8)
+            .write(to: fixture.baseURL.appendingPathComponent("movie.ja.srt"))
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let jobID = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: jobID)
+
+        let job = try #require(model.jobs.first)
+        #expect(job.transcriptSegments.isEmpty)
+        #expect(job.translatedSegments.isEmpty)
+        #expect(job.importedTranslationSource == nil)
+        #expect(job.status == .idle)
+    }
+
     @Test func jobWithNoSidecarIsUntouched() async throws {
         let fixture = try makeFixture(sidecars: [])
         defer { fixture.cleanUp() }

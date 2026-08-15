@@ -57,6 +57,15 @@ enum SubtitleImporter {
                 )
             }
         }
+        // SubtitleSidecarScanner never returns a lone translation, but a
+        // transcript that fails to parse turns a valid pair into one. A
+        // translation with no transcript is a state the rest of the app cannot
+        // represent: the job would be marked translated, then swept up for ASR
+        // because it has no transcript, and the adopted translation discarded.
+        if transcript == nil, let orphan = translation {
+            translation = nil
+            logLines.append("Ignored \(orphan.source.fileName): its matching transcript could not be read.")
+        }
         return Result(transcript: transcript, translation: translation, logLines: logLines)
     }
 

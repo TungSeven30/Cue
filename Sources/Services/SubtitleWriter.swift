@@ -1,6 +1,6 @@
 import Foundation
 
-enum SubtitleExportFormat: String, CaseIterable, Identifiable {
+enum SubtitleExportFormat: String, Codable, CaseIterable, Identifiable {
     case srt
     case vtt
     case text

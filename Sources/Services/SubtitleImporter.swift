@@ -63,10 +63,28 @@ enum SubtitleImporter {
     static func importFile(at url: URL) throws -> Document {
         let segments = try SubtitleReader.parse(contentsOf: url)
         guard let format = SubtitleReader.format(for: url),
-            let source = ImportedSubtitleSource(url: url, format: format)
+            var source = ImportedSubtitleSource(url: url, format: format)
         else {
             throw SubtitleReader.ReadError.unreadable
         }
+        source.didBackup = backUpOriginal(at: url)
         return Document(source: source, segments: segments)
+    }
+
+    /// Copies the untouched original beside itself the moment Cue adopts it.
+    /// Waiting for the first edit was not enough: a re-translation unlinks the
+    /// file so auto-export may overwrite it, and a user who only imported has
+    /// made no edit to trigger a backup. Returns whether a backup now exists —
+    /// a failure here is not fatal, and write-back's own backup step remains
+    /// the fallback.
+    private static func backUpOriginal(at url: URL) -> Bool {
+        let backupURL = url.appendingPathExtension("bak")
+        guard !FileManager.default.fileExists(atPath: backupURL.path) else { return true }
+        do {
+            try FileManager.default.copyItem(at: url, to: backupURL)
+            return true
+        } catch {
+            return false
+        }
     }
 }

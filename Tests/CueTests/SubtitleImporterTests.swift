@@ -80,4 +80,48 @@ struct SubtitleImporterTests {
         #expect(document.segments.count == 2)
         #expect(document.source.format == .srt)
     }
+
+    // The user's file must be recoverable from the moment Cue adopts it: a
+    // later re-translation unlinks the file and lets auto-export overwrite
+    // it, and by then there may never have been an edit to trigger a backup.
+    @Test func importBacksUpTheOriginalImmediately() throws {
+        let dir = try makeFolder(["movie.ja.srt"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = dir.appendingPathComponent("movie.ja.srt")
+
+        let document = try SubtitleImporter.importFile(at: source)
+
+        let backup = dir.appendingPathComponent("movie.ja.srt.bak")
+        #expect(FileManager.default.fileExists(atPath: backup.path))
+        #expect(try String(contentsOf: backup, encoding: .utf8) == srt)
+        #expect(document.source.didBackup)
+    }
+
+    @Test func importNeverOverwritesAnExistingBackup() throws {
+        let dir = try makeFolder(["movie.ja.srt"])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let backup = dir.appendingPathComponent("movie.ja.srt.bak")
+        try Data("an older backup".utf8).write(to: backup)
+
+        let document = try SubtitleImporter.importFile(at: dir.appendingPathComponent("movie.ja.srt"))
+
+        #expect(try String(contentsOf: backup, encoding: .utf8) == "an older backup")
+        #expect(document.source.didBackup)
+    }
+
+    // A failed backup must not fail the import; write-back's own backup step
+    // stays as the fallback.
+    @Test func importSucceedsWhenTheBackupCannotBeWritten() throws {
+        let dir = try makeFolder(["movie.ja.srt"])
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let document = try SubtitleImporter.importFile(at: dir.appendingPathComponent("movie.ja.srt"))
+        #expect(document.segments.count == 2)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        let second = try SubtitleImporter.importFile(at: dir.appendingPathComponent("movie.ja.srt"))
+        #expect(second.segments.count == 2, "A read-only folder must not fail the import")
+    }
 }

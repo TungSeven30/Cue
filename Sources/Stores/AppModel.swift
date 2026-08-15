@@ -1265,7 +1265,11 @@ final class AppModel: ObservableObject {
         jobs[index].partialTranslatedSegments = []
         jobs[index].partialTranscriptSegments = []
         // The imported files no longer describe this job's contents, so write-
-        // back must stop pointing at them.
+        // back must stop pointing at them — and any write already queued for
+        // them must be dropped too, exactly as startTranslationNow does for
+        // the translation slot.
+        cancelSubtitleSync(jobID: jobID, slot: .transcript)
+        cancelSubtitleSync(jobID: jobID, slot: .translation)
         jobs[index].importedTranscriptSource = nil
         jobs[index].importedTranslationSource = nil
         jobs[index].transcriptionStartedAt = Date()
@@ -1980,6 +1984,10 @@ final class AppModel: ObservableObject {
         if !source.didBackup {
             source.didBackup = SubtitleImporter.backUpOriginal(at: source.url)
         }
+        // A queued write for the slot being replaced would otherwise fire at
+        // the newly loaded file moments later, rewriting it with renumbered
+        // ids and normalized timestamps without the user editing anything.
+        cancelSubtitleSync(jobID: id, slot: slot)
         // Mirrors applyAdoption: a .queued job must stay .queued when
         // translation is configured, or PipelineScheduler.nextTranslationJob
         // (which only checks status/hasTranscript, not readiness) would pick
@@ -2511,7 +2519,13 @@ final class AppModel: ObservableObject {
         text: String,
         keyPath: WritableKeyPath<TranscriptionJob, [TranscriptionSegment]>
     ) {
-        guard let id = selectedJobID else { return }
+        // A mutation that changes nothing must not schedule a write: an
+        // untouched file should stay untouched, byte for byte.
+        guard let id = selectedJobID,
+            let job = jobs.first(where: { $0.id == id }),
+            let existing = job[keyPath: keyPath].first(where: { $0.id == segment.id }),
+            existing.text != text
+        else { return }
         updateJob(id, debouncePersist: true) { job in
             guard let index = job[keyPath: keyPath].firstIndex(where: { $0.id == segment.id }) else {
                 return

@@ -22,12 +22,13 @@ enum SubtitleReader {
         }
     }
 
-    static func parse(contentsOf url: URL) throws -> [TranscriptionSegment] {
+    static func parse(contentsOf url: URL, maximumSize: Int = maximumFileSize) throws -> [TranscriptionSegment] {
         guard let format = format(for: url) else {
             throw ReadError.unsupportedFormat(url.pathExtension.lowercased())
         }
-        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-        guard size <= maximumFileSize else { throw ReadError.tooLarge(size) }
+        // A file whose size cannot be read must fail the cap, not bypass it.
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? Int.max
+        guard size <= maximumSize else { throw ReadError.tooLarge(size) }
         guard let data = try? Data(contentsOf: url), let text = decode(data) else {
             throw ReadError.unreadable
         }

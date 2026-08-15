@@ -126,6 +126,24 @@ struct SubtitleReaderTests {
         #expect(messages.contains { $0.contains("MB") })
     }
 
+    // The cap exists so a mislabeled video is refused rather than read into
+    // memory; the parameter keeps the test off a 20 MB fixture.
+    @Test func fileOverTheSizeCapThrowsTooLarge() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cue-reader-size-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("big.srt")
+        try Data("1\n00:00:01,000 --> 00:00:02,000\nHello\n".utf8).write(to: url)
+
+        #expect(throws: SubtitleReader.ReadError.tooLarge(38)) {
+            try SubtitleReader.parse(contentsOf: url, maximumSize: 8)
+        }
+        // The same file passes with the cap it actually fits under, so the
+        // throw above is the cap and not a parse failure.
+        #expect(try SubtitleReader.parse(contentsOf: url, maximumSize: 1024).count == 1)
+    }
+
     @Test func emptyFileThrowsNoCues() {
         #expect(throws: SubtitleReader.ReadError.noCues) {
             try SubtitleReader.parse("\n\n", format: .srt)

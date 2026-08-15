@@ -705,6 +705,88 @@ struct AppModelSubtitleImportTests {
         #expect(model.jobs.first?.importedTranscriptSource?.didBackup == true)
     }
 
+    // A write queued for the slot being replaced would fire moments later at
+    // the file just loaded, rewriting it with renumbered ids and normalized
+    // timestamps though the user edited nothing.
+    @Test func loadingASlotCancelsItsPendingWrite() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+
+        // Deliberately non-canonical: a spurious write-back renumbers these to
+        // 1, 2 and rewrites the timestamps, which is what the assertion sees.
+        let elsewhere = fixture.baseURL.appendingPathComponent("elsewhere.srt")
+        let odd = "7\n00:00:01,000 --> 00:00:02,000\nOne\n\n9\n00:00:03,000 --> 00:00:04,000\nTwo\n"
+        try Data(odd.utf8).write(to: elsewhere)
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let jobID = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: jobID)
+
+        let segment = try #require(model.jobs.first?.transcriptSegments.first)
+        model.updateTranscriptSegment(segment, text: "Edited")
+
+        // Emptying the slot by hand keeps applySubtitleLoad off its
+        // replace-confirmation alert, which no test can answer.
+        model.jobs[0].transcriptSegments = []
+        let document = try SubtitleImporter.importFile(at: elsewhere, backingUp: false)
+        model.applySubtitleLoad(.init(id: UUID(), document: document), to: .transcript)
+
+        model.flushSubtitleSync()
+        #expect(try String(contentsOf: elsewhere, encoding: .utf8) == odd, "The freshly loaded file was rewritten with no edit")
+    }
+
+    // An edit that changes nothing (a Replace All that matched nothing, a
+    // rebuilt view handing back the same text) must not rewrite the file.
+    @Test func aNoOpEditDoesNotRewriteTheFile() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        let sidecarURL = fixture.baseURL.appendingPathComponent("movie.ja.srt")
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let jobID = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: jobID)
+
+        let segment = try #require(model.jobs.first?.transcriptSegments.first)
+        model.updateTranscriptSegment(segment, text: segment.text)
+        model.updateTranscriptSegment(
+            TranscriptionSegment(id: 999, start: 0, end: 1, text: "no such segment"),
+            text: "ignored"
+        )
+
+        model.flushSubtitleSync()
+        #expect(try String(contentsOf: sidecarURL, encoding: .utf8) == Self.srt)
+    }
+
+    // startTranscriptionNow clears both provenance fields, so a write queued
+    // before the run must not fire afterwards — the same reasoning that made
+    // startTranslationNow cancel its slot.
+    @Test func startingARunCancelsPendingWritesForBothSlots() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt", "movie.vi.srt"])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        let transcriptURL = fixture.baseURL.appendingPathComponent("movie.ja.srt")
+        let translationURL = fixture.baseURL.appendingPathComponent("movie.vi.srt")
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let jobID = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: jobID)
+
+        let transcriptSegment = try #require(model.jobs.first?.transcriptSegments.first)
+        model.updateTranscriptSegment(transcriptSegment, text: "Edited transcript")
+        let translatedSegment = try #require(model.jobs.first?.translatedSegments.first)
+        model.updateTranslatedSegment(translatedSegment, text: "Edited translation")
+
+        model.startTranscription(jobID: jobID)
+        model.flushSubtitleSync()
+
+        #expect(try String(contentsOf: transcriptURL, encoding: .utf8) == Self.srt)
+        #expect(try String(contentsOf: translationURL, encoding: .utf8) == Self.srt)
+
+        model.cancelActiveJob()
+    }
+
     // Translation without a transcript is a state the rest of the app cannot
     // represent, so the picker must not offer it.
     @Test func translationSlotIsUnavailableWithoutATranscript() async throws {

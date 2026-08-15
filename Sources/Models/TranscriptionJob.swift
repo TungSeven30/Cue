@@ -48,6 +48,10 @@ struct ImportedSubtitleSource: Codable, Hashable {
             let size = values.fileSize,
             let modified = values.contentModificationDate
         else { return false }
+        // The 1 ms tolerance is for the recorded date's JSON round trip: it is
+        // persisted as a Double, which loses the sub-microsecond precision the
+        // filesystem reports, so an exact comparison would call every file
+        // "changed" after a relaunch.
         return size == fileSize && abs(modified.timeIntervalSince(modifiedAt)) < 0.001
     }
 

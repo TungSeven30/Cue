@@ -21,6 +21,8 @@ final class AppModel: ObservableObject {
     @Published var overridesEditorJobID: UUID?
     @Published var isGeneratingSummary = false
     @Published var isShowingBurnInSheet = false
+    /// Set when a subtitle file has been parsed and needs a slot chosen.
+    @Published var subtitleLoadRequest: SubtitleLoadRequest?
     /// nil = not yet checked; cached until Recheck (spec §3.1).
     @Published var burnInPreflight: BurnInService.PreflightResult?
     /// The setup guide auto-opens once per launch (when something required is
@@ -1895,6 +1897,80 @@ final class AppModel: ObservableObject {
             }
         }
         processQueue()
+    }
+
+    struct SubtitleLoadRequest: Identifiable {
+        let id: UUID
+        let document: SubtitleImporter.Document
+    }
+
+    var canLoadSubtitles: Bool {
+        currentJob != nil && !isSelectedJobRunning
+    }
+
+    /// A translation with no transcript is a state the rest of the app cannot
+    /// represent — bilingual export and canTranslate both require one.
+    var canLoadTranslationSubtitles: Bool {
+        canLoadSubtitles && !transcriptSegments.isEmpty
+    }
+
+    func presentSubtitleLoadPanel() {
+        guard canLoadSubtitles else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = SubtitleSidecarScanner.supportedExtensions.compactMap {
+            UTType(filenameExtension: $0, conformingTo: .plainText)
+        }
+        panel.allowsOtherFileTypes = false
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Load"
+        panel.message = "Choose an SRT or WebVTT subtitle file."
+        panel.directoryURL = selectedVideoURL?.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            // Unlike auto-detect, this was an explicit request, so a failure
+            // gets a dialog rather than a quiet log line.
+            let document = try SubtitleImporter.importFile(at: url)
+            subtitleLoadRequest = SubtitleLoadRequest(id: UUID(), document: document)
+        } catch {
+            presentExportError("Could not read \(url.lastPathComponent): \(error.localizedDescription)")
+        }
+    }
+
+    func applySubtitleLoad(_ request: SubtitleLoadRequest, to slot: SubtitleSidecarScanner.Slot) {
+        guard let id = selectedJobID, let job = jobs.first(where: { $0.id == id }) else { return }
+        let existing = slot == .transcript ? job.transcriptSegments : job.translatedSegments
+        if !existing.isEmpty, !confirmReplacingSegments(slot: slot) { return }
+
+        let document = request.document
+        updateJob(id) { job in
+            switch slot {
+            case .transcript:
+                job.transcriptSegments = document.segments
+                job.importedTranscriptSource = document.source
+                if job.status == .idle || job.status == .canceled || job.status == .failed {
+                    job.status = .transcriptionComplete
+                }
+                job.progress = JobProgress(stage: .complete, detail: "Loaded existing subtitles.", fraction: 1)
+            case .translation:
+                job.translatedSegments = document.segments
+                job.importedTranslationSource = document.source
+                job.status = .translationComplete
+            }
+            job.log += "Loaded subtitles from \(document.source.fileName) (\(document.segments.count) cues).\n"
+        }
+        subtitleLoadRequest = nil
+    }
+
+    private func confirmReplacingSegments(slot: SubtitleSidecarScanner.Slot) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = slot == .transcript ? "Replace the Transcript?" : "Replace the Translation?"
+        alert.informativeText = "The segments currently in this tab will be replaced by the subtitle file."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Replace")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     // MARK: - Imported subtitle sync

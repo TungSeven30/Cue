@@ -20,6 +20,10 @@ struct ContentView: View {
         .sheet(isPresented: $model.isShowingBurnInSheet) {
             BurnInOptionsView(model: model)
         }
+        .sheet(item: $model.subtitleLoadRequest) { request in
+            SubtitleSlotPickerView(request: request)
+                .environmentObject(model)
+        }
         .sheet(
             item: Binding(
                 get: { model.overridesEditorJobID.flatMap { id in model.jobs.first { $0.id == id } } },

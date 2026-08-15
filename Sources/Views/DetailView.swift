@@ -219,6 +219,8 @@ struct DetailView: View {
                     Button("Transcribe") { model.startTranscription() }
                         .buttonStyle(.borderedProminent)
                         .disabled(!model.canTranscribe)
+                    Button("Load Subtitles…") { model.presentSubtitleLoadPanel() }
+                        .disabled(!model.canLoadSubtitles)
                 }
             } else {
                 segmentList(segments: model.displayTranscriptSegments, onEdit: model.updateTranscriptSegment)
@@ -233,6 +235,8 @@ struct DetailView: View {
                     Button("Translate") { model.startTranslation() }
                         .buttonStyle(.borderedProminent)
                         .disabled(!model.canTranslate)
+                    Button("Load Subtitles…") { model.presentSubtitleLoadPanel() }
+                        .disabled(!model.canLoadSubtitles)
                 }
             } else {
                 segmentList(segments: model.displayTranslatedSegments, onEdit: model.updateTranslatedSegment)

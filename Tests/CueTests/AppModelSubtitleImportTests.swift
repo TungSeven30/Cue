@@ -473,4 +473,41 @@ struct AppModelSubtitleImportTests {
 
         #expect(try String(contentsOf: translationURL, encoding: .utf8) == original)
     }
+
+    @Test func manualLoadFillsTheChosenSlotAndSetsProvenance() async throws {
+        let fixture = try makeFixture(sidecars: [])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+
+        let elsewhere = fixture.baseURL.appendingPathComponent("elsewhere.srt")
+        try Data(Self.srt.utf8).write(to: elsewhere)
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let jobID = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: jobID)
+
+        let document = try SubtitleImporter.importFile(at: elsewhere)
+        model.applySubtitleLoad(.init(id: UUID(), document: document), to: .transcript)
+
+        let job = try #require(model.jobs.first)
+        #expect(job.transcriptSegments.count == 2)
+        #expect(job.status == .transcriptionComplete)
+        #expect(job.importedTranscriptSource?.fileName == "elsewhere.srt")
+        #expect(job.log.contains("Loaded subtitles from elsewhere.srt (2 cues)."))
+    }
+
+    // Translation without a transcript is a state the rest of the app cannot
+    // represent, so the picker must not offer it.
+    @Test func translationSlotIsUnavailableWithoutATranscript() async throws {
+        let fixture = try makeFixture(sidecars: [])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let jobID = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: jobID)
+
+        #expect(model.canLoadSubtitles)
+        #expect(model.canLoadTranslationSubtitles == false)
+    }
 }

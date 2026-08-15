@@ -359,6 +359,38 @@ struct AppModelSubtitleImportTests {
         #expect(try String(contentsOf: sidecarURL, encoding: .utf8).contains("Two"))
     }
 
+    // Import-time backup is the normal path, but it can fail (e.g. the
+    // sidecar's folder is read-only at adoption time). writeBackImportedSubtitles's
+    // own `if !source.didBackup` step exists precisely to cover that gap; this
+    // exercises it as a genuine fallback rather than a step that always finds
+    // didBackup already true.
+    @Test func writeBackBacksUpTheOriginalWhenImportCouldNotBackItUp() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fixture.baseURL.path)
+            fixture.cleanUp()
+        }
+        let model = fixture.model
+        let backupURL = fixture.baseURL.appendingPathComponent("movie.ja.srt.bak")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: fixture.baseURL.path)
+        model.addVideos(urls: [fixture.mediaURL])
+        let jobID = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: jobID)
+
+        #expect(model.jobs.first?.importedTranscriptSource?.didBackup == false)
+        #expect(FileManager.default.fileExists(atPath: backupURL.path) == false)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fixture.baseURL.path)
+        let segment = try #require(model.jobs.first?.transcriptSegments.first)
+        model.updateTranscriptSegment(segment, text: "Recovered via write-back fallback")
+        model.flushSubtitleSync()
+
+        #expect(FileManager.default.fileExists(atPath: backupURL.path))
+        #expect(try String(contentsOf: backupURL, encoding: .utf8).contains("Hello"), "The backup must hold the untouched original")
+        #expect(model.jobs.first?.importedTranscriptSource?.didBackup == true)
+    }
+
     // The safeguard that makes automatic write-back defensible: an edit made
     // elsewhere must never be silently destroyed.
     @Test func externalChangePausesSyncInsteadOfOverwriting() async throws {

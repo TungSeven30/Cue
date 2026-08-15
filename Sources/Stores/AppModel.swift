@@ -43,6 +43,7 @@ final class AppModel: ObservableObject {
     /// already started. In-memory only — a scan interrupted by a quit simply
     /// never adopts, which is safe.
     private var subtitleScanPendingIDs: Set<UUID> = []
+    private var subtitleSyncWorkItems: [SubtitleSyncKey: DispatchWorkItem] = [:]
     let playerController = PlayerController()
     private var didProcessQueuedJob = false
     /// Keeps very chatty jobs from growing without bound in memory and on disk.
@@ -180,6 +181,7 @@ final class AppModel: ObservableObject {
     /// Writes every pending job mutation to disk synchronously. Called on
     /// app termination.
     func flushPendingWork() {
+        flushSubtitleSync()
         jobRepository.flush()
     }
 
@@ -388,6 +390,7 @@ final class AppModel: ObservableObject {
     }
 
     func selectJob(_ id: UUID?) {
+        flushSubtitleSync()
         selectedJobID = id
         selectedJobIDs = id.map { [$0] } ?? []
     }
@@ -1888,6 +1891,97 @@ final class AppModel: ObservableObject {
         processQueue()
     }
 
+    private struct SubtitleSyncKey: Hashable {
+        let jobID: UUID
+        let slot: SubtitleSidecarScanner.Slot
+    }
+
+    /// Edits are written back on a debounce so a Replace All firing hundreds of
+    /// edits produces one write, not hundreds.
+    private static let subtitleSyncDebounce: TimeInterval = 1.5
+
+    private func scheduleSubtitleSync(jobID: UUID, slot: SubtitleSidecarScanner.Slot) {
+        let key = SubtitleSyncKey(jobID: jobID, slot: slot)
+        subtitleSyncWorkItems[key]?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            self?.subtitleSyncWorkItems[key] = nil
+            self?.writeBackImportedSubtitles(jobID: jobID, slot: slot)
+        }
+        subtitleSyncWorkItems[key] = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.subtitleSyncDebounce, execute: item)
+    }
+
+    /// Runs every pending write immediately. Called on quit and when the
+    /// selection moves off a job.
+    func flushSubtitleSync() {
+        let pending = subtitleSyncWorkItems
+        subtitleSyncWorkItems.removeAll()
+        for (key, item) in pending {
+            item.cancel()
+            writeBackImportedSubtitles(jobID: key.jobID, slot: key.slot)
+        }
+    }
+
+    func unlinkImportedSubtitles(slot: SubtitleSidecarScanner.Slot, jobID: UUID? = nil) {
+        guard let id = jobID ?? selectedJobID else { return }
+        subtitleSyncWorkItems[SubtitleSyncKey(jobID: id, slot: slot)]?.cancel()
+        subtitleSyncWorkItems[SubtitleSyncKey(jobID: id, slot: slot)] = nil
+        updateJob(id) { job in
+            let name = job.importedSource(for: slot)?.fileName
+            job.setImportedSource(nil, for: slot)
+            if let name {
+                job.log += "Stopped syncing edits to \(name).\n"
+            }
+        }
+    }
+
+    private func writeBackImportedSubtitles(jobID: UUID, slot: SubtitleSidecarScanner.Slot) {
+        guard let job = jobs.first(where: { $0.id == jobID }),
+            var source = job.importedSource(for: slot),
+            !source.syncPaused
+        else { return }
+
+        let segments = slot == .transcript ? job.transcriptSegments : job.translatedSegments
+        guard !segments.isEmpty else { return }
+
+        // If the file changed under us, the user's other edits win. Pausing is
+        // recoverable; overwriting is not.
+        guard source.matchesFileOnDisk() else {
+            source.syncPaused = true
+            updateJob(jobID) { job in
+                job.setImportedSource(source, for: slot)
+                job.log += "\(source.fileName) changed outside Cue; sync paused.\n"
+            }
+            return
+        }
+
+        do {
+            if !source.didBackup {
+                let backupURL = source.url.appendingPathExtension("bak")
+                if !FileManager.default.fileExists(atPath: backupURL.path) {
+                    try FileManager.default.copyItem(at: source.url, to: backupURL)
+                }
+                source.didBackup = true
+            }
+            // Written without the intro summary: applyingIntro is export-only,
+            // so the file mirrors exactly what the editor shows.
+            try SubtitleWriter.write(segments: segments, format: source.format, to: source.url)
+            // Re-baseline, or our own write looks like an external change next
+            // time round.
+            source.refreshFileState()
+            source.lastSyncError = nil
+            updateJob(jobID, debouncePersist: true) { job in
+                job.setImportedSource(source, for: slot)
+            }
+        } catch {
+            source.lastSyncError = error.localizedDescription
+            updateJob(jobID) { job in
+                job.setImportedSource(source, for: slot)
+                job.log += "Could not update \(source.fileName): \(error.localizedDescription)\n"
+            }
+        }
+    }
+
     // MARK: - Sidecar auto-export
 
     /// Writes SRT files next to the source video when a job finishes, named
@@ -2289,6 +2383,10 @@ final class AppModel: ObservableObject {
                 return
             }
             job[keyPath: keyPath][index].text = text
+        }
+        let slot: SubtitleSidecarScanner.Slot = keyPath == \TranscriptionJob.transcriptSegments ? .transcript : .translation
+        if jobs.first(where: { $0.id == id })?.importedSource(for: slot) != nil {
+            scheduleSubtitleSync(jobID: id, slot: slot)
         }
     }
 

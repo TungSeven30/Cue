@@ -165,6 +165,17 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         importedTranslationSource = try container.decodeIfPresent(ImportedSubtitleSource.self, forKey: .importedTranslationSource)
     }
 
+    func importedSource(for slot: SubtitleSidecarScanner.Slot) -> ImportedSubtitleSource? {
+        slot == .transcript ? importedTranscriptSource : importedTranslationSource
+    }
+
+    mutating func setImportedSource(_ source: ImportedSubtitleSource?, for slot: SubtitleSidecarScanner.Slot) {
+        switch slot {
+        case .transcript: importedTranscriptSource = source
+        case .translation: importedTranslationSource = source
+        }
+    }
+
     /// Whether an auto-archive pass should tuck this job away: terminal
     /// status, and untouched for longer than the configured window.
     static func shouldAutoArchive(

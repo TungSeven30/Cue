@@ -305,4 +305,114 @@ struct AppModelSubtitleImportTests {
 
         model.cancelActiveJob()
     }
+
+    @Test func editsAreWrittenBackToTheImportedFile() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        let sidecarURL = fixture.baseURL.appendingPathComponent("movie.ja.srt")
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let jobID = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: jobID)
+
+        let segment = try #require(model.jobs.first?.transcriptSegments.first)
+        model.updateTranscriptSegment(segment, text: "Edited text")
+        model.flushSubtitleSync()
+
+        let contents = try String(contentsOf: sidecarURL, encoding: .utf8)
+        #expect(contents.contains("Edited text"))
+        #expect(contents.contains("Hello") == false)
+    }
+
+    @Test func firstWriteBacksUpTheOriginalExactlyOnce() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        let backupURL = fixture.baseURL.appendingPathComponent("movie.ja.srt.bak")
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let jobID = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: jobID)
+
+        let first = try #require(model.jobs.first?.transcriptSegments.first)
+        model.updateTranscriptSegment(first, text: "One")
+        model.flushSubtitleSync()
+        let afterFirst = try String(contentsOf: backupURL, encoding: .utf8)
+        #expect(afterFirst.contains("Hello"), "The backup must hold the untouched original")
+
+        let second = try #require(model.jobs.first?.transcriptSegments.first)
+        model.updateTranscriptSegment(second, text: "Two")
+        model.flushSubtitleSync()
+        #expect(try String(contentsOf: backupURL, encoding: .utf8) == afterFirst, "Backup was taken twice")
+        // Cue's own first write must have been re-baselined, or the changed-on-disk
+        // guard mistakes it for an external edit and sync dies after one write.
+        let sidecarURL = fixture.baseURL.appendingPathComponent("movie.ja.srt")
+        #expect(try String(contentsOf: sidecarURL, encoding: .utf8).contains("Two"))
+    }
+
+    // The safeguard that makes automatic write-back defensible: an edit made
+    // elsewhere must never be silently destroyed.
+    @Test func externalChangePausesSyncInsteadOfOverwriting() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        let sidecarURL = fixture.baseURL.appendingPathComponent("movie.ja.srt")
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let jobID = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: jobID)
+
+        let external = "1\n00:00:01,000 --> 00:00:02,000\nChanged by another app\n"
+        try Data(external.utf8).write(to: sidecarURL)
+
+        let segment = try #require(model.jobs.first?.transcriptSegments.first)
+        model.updateTranscriptSegment(segment, text: "Cue edit")
+        model.flushSubtitleSync()
+
+        #expect(try String(contentsOf: sidecarURL, encoding: .utf8) == external)
+        #expect(model.jobs.first?.importedTranscriptSource?.syncPaused == true)
+        #expect(model.jobs.first?.log.contains("changed outside Cue") == true)
+    }
+
+    @Test func manyEditsCoalesceIntoOneWrite() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        let sidecarURL = fixture.baseURL.appendingPathComponent("movie.ja.srt")
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let jobID = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: jobID)
+
+        for text in ["a", "b", "c", "d"] {
+            let segment = try #require(model.jobs.first?.transcriptSegments.first)
+            model.updateTranscriptSegment(segment, text: text)
+        }
+        // Nothing on disk yet: the debounce has not fired.
+        #expect(try String(contentsOf: sidecarURL, encoding: .utf8).contains("Hello"))
+
+        model.flushSubtitleSync()
+        #expect(try String(contentsOf: sidecarURL, encoding: .utf8).contains("d"))
+    }
+
+    @Test func unlinkStopsWriteBack() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        let sidecarURL = fixture.baseURL.appendingPathComponent("movie.ja.srt")
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let jobID = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: jobID)
+
+        model.unlinkImportedSubtitles(slot: .transcript, jobID: jobID)
+        #expect(model.jobs.first?.importedTranscriptSource == nil)
+
+        let segment = try #require(model.jobs.first?.transcriptSegments.first)
+        model.updateTranscriptSegment(segment, text: "Should not reach disk")
+        model.flushSubtitleSync()
+
+        #expect(try String(contentsOf: sidecarURL, encoding: .utf8).contains("Hello"))
+    }
 }

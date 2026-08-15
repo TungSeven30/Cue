@@ -246,19 +246,119 @@ struct AppModelSubtitleImportTests {
         #expect(model.jobs.first?.status == .transcribing)
 
         try await waitForAdoption(model, jobID: job.id)
+        // The fake media bytes make the real ASR attempt fail; let it land so
+        // the assertions below see the settled job rather than an in-flight
+        // one. Adoption may resolve before or after that failure — with the
+        // guard, both orders end the same way, which is the whole point.
+        for _ in 0..<200 {
+            if model.gpuJobID == nil && model.jobs.first?.status == .failed { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
 
-        // The sidecar existed and would normally be adopted, but the job is
-        // active, so applyAdoptions must have skipped it entirely. The fake
-        // media bytes make the real ASR attempt fail quickly and racily
-        // against this wait, so don't assert the exact in-flight status
-        // (.transcribing vs. .failed) — assert the tell the bug would leave
-        // behind instead. Without the isJobActive/isRunning guard,
-        // applyAdoptions would see a non-.queued status and unconditionally
-        // stamp .transcriptionComplete plus the sidecar's provenance, which a
-        // real failed/still-running ASR attempt never produces on its own.
-        #expect(model.jobs.first?.status != .transcriptionComplete)
+        // The sidecar existed and would normally be adopted, but the job was
+        // started by hand, so applyAdoptions must have skipped it entirely:
+        // the failure stands, with no transcript and no provenance.
+        #expect(model.jobs.first?.status == .failed)
         #expect(model.jobs.first?.transcriptSegments.isEmpty == true)
         #expect(model.jobs.first?.importedTranscriptSource == nil)
+    }
+
+    // The same defect from the other side: a hand-started run that *finishes*
+    // during the scan window leaves the job neither active nor running, so a
+    // liveness-only guard adopts over a real transcript and stamps provenance
+    // pointing at a file whose content no longer matches — every later edit
+    // would then be written into that stale file. Driving the job's state
+    // directly is what makes this deterministic; a real ASR run would race
+    // the scan.
+    @Test func runFinishedDuringScanIsNotClobberedByLateAdoption() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let job = try #require(model.jobs.first)
+        #expect(model.isScanningForSubtitles(job.id))
+
+        model.jobs[0].transcriptSegments = [
+            TranscriptionSegment(id: 1, start: 0, end: 1, text: "Real ASR output")
+        ]
+        model.jobs[0].status = .transcriptionComplete
+
+        try await waitForAdoption(model, jobID: job.id)
+
+        #expect(model.jobs.first?.transcriptSegments.map(\.text) == ["Real ASR output"])
+        #expect(model.jobs.first?.importedTranscriptSource == nil)
+    }
+
+    // A run that failed during the scan window must keep its failure: adoption
+    // stamping .transcriptionComplete over it would hide a real error.
+    @Test func failedRunDuringScanIsNotOverwrittenByAdoption() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let job = try #require(model.jobs.first)
+        #expect(model.isScanningForSubtitles(job.id))
+
+        model.jobs[0].status = .failed
+
+        try await waitForAdoption(model, jobID: job.id)
+
+        #expect(model.jobs.first?.status == .failed)
+        #expect(model.jobs.first?.transcriptSegments.isEmpty == true)
+        #expect(model.jobs.first?.importedTranscriptSource == nil)
+    }
+
+    // Load Subtitles… during the scan window: canLoadSubtitles doesn't consult
+    // the pending set either, so the user's explicit file choice must not be
+    // replaced by the auto-detected sidecar that lands moments later.
+    @Test func manualLoadDuringScanIsNotClobberedByAdoption() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+
+        let elsewhere = fixture.baseURL.appendingPathComponent("elsewhere.srt")
+        try Data("1\n00:00:01,000 --> 00:00:02,000\nChosen by hand\n".utf8).write(to: elsewhere)
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let job = try #require(model.jobs.first)
+        #expect(model.isScanningForSubtitles(job.id))
+
+        let document = try SubtitleImporter.importFile(at: elsewhere)
+        model.applySubtitleLoad(.init(id: UUID(), document: document), to: .transcript)
+
+        try await waitForAdoption(model, jobID: job.id)
+
+        #expect(model.jobs.first?.transcriptSegments.map(\.text) == ["Chosen by hand"])
+        #expect(model.jobs.first?.importedTranscriptSource?.fileName == "elsewhere.srt")
+    }
+
+    // The queued variant of the same sequence: applySubtitleLoad leaves an
+    // auto-started job .queued when translation is configured, so the status
+    // alone cannot distinguish it from an untouched job — the filled slot can.
+    @Test func manualLoadDuringScanOnAQueuedJobIsNotClobberedByAdoption() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt"], autoStart: true)
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        model.settings.openAIAPIKey = "test-key"
+        #expect(model.settings.isTranslationReady, "Fixture must have a usable translation provider")
+
+        let elsewhere = fixture.baseURL.appendingPathComponent("elsewhere.srt")
+        try Data("1\n00:00:01,000 --> 00:00:02,000\nChosen by hand\n".utf8).write(to: elsewhere)
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let job = try #require(model.jobs.first)
+        #expect(model.isScanningForSubtitles(job.id))
+
+        let document = try SubtitleImporter.importFile(at: elsewhere)
+        model.applySubtitleLoad(.init(id: UUID(), document: document), to: .transcript)
+        #expect(model.jobs.first?.status == .queued, "Fixture must reproduce the queued-after-load state")
+
+        try await waitForAdoption(model, jobID: job.id)
+
+        #expect(model.jobs.first?.transcriptSegments.map(\.text) == ["Chosen by hand"])
+        #expect(model.jobs.first?.importedTranscriptSource?.fileName == "elsewhere.srt")
 
         model.cancelActiveJob()
     }

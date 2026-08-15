@@ -1865,12 +1865,22 @@ final class AppModel: ObservableObject {
         for (id, result) in results {
             subtitleScanPendingIDs.remove(id)
             guard result.transcript != nil || result.translation != nil || !result.logLines.isEmpty else { continue }
-            // The user may have started this job by hand during the scan
-            // window (canStartSelectedJob/canTranscribe don't consult the
-            // pending set). Applying adopted content onto a job that is now
-            // mid-run would clobber its live transcript and stamp a bogus
-            // imported-source provenance onto an ASR run.
-            guard !isJobActive(id), jobs.first(where: { $0.id == id })?.status.isRunning != true else { continue }
+            // Adoption may only land on a job nothing has touched since the
+            // scan began. Liveness alone is not enough: a hand-started run
+            // (canStartSelectedJob/canTranscribe don't consult the pending
+            // set) that completes or fails during the scan window leaves the
+            // job neither active nor running, and adopting then replaces a
+            // real transcript — or a failure — with the sidecar. `.idle` and
+            // `.queued` are the only states an untouched job can be in.
+            // Empty slots are checked too because an explicit Load Subtitles…
+            // onto a queued job leaves it queued, so its status alone cannot
+            // tell the two apart.
+            guard let current = jobs.first(where: { $0.id == id }),
+                current.status == .idle || current.status == .queued,
+                !isJobActive(id),
+                current.transcriptSegments.isEmpty,
+                current.translatedSegments.isEmpty
+            else { continue }
             updateJob(id) { job in
                 for line in result.logLines {
                     job.log += line + "\n"

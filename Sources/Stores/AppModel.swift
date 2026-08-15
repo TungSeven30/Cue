@@ -1221,7 +1221,12 @@ final class AppModel: ObservableObject {
         // Per-job autoTranslate wins over the global toggle (spec §0.3).
         let autoTranslate = jobs[index].overrides.autoTranslate ?? settings.autoTranslateAfterTranscription
 
+        // An imported transcript satisfies the checks below by accident: its
+        // settings snapshot describes the globals at add time, not a run that
+        // produced these subtitles. Pressing Transcribe on one means "actually
+        // run ASR".
         if !force,
+            jobs[index].importedTranscriptSource == nil,
             !jobs[index].transcriptSegments.isEmpty,
             jobs[index].sourceFingerprint == currentFingerprint,
             jobs[index].settings.transcriptionIdentity == resolved.transcriptionIdentity
@@ -1254,6 +1259,10 @@ final class AppModel: ObservableObject {
         jobs[index].translatedSegments = []
         jobs[index].partialTranslatedSegments = []
         jobs[index].partialTranscriptSegments = []
+        // The imported files no longer describe this job's contents, so write-
+        // back must stop pointing at them.
+        jobs[index].importedTranscriptSource = nil
+        jobs[index].importedTranslationSource = nil
         jobs[index].transcriptionStartedAt = Date()
         jobs[index].transcriptionFinishedAt = nil
         jobs[index].translationStartedAt = nil

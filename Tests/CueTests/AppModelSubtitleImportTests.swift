@@ -262,4 +262,47 @@ struct AppModelSubtitleImportTests {
 
         model.cancelActiveJob()
     }
+
+    // The skip-if-unchanged branch would otherwise treat imported subtitles as
+    // "already transcribed with these settings", which they never were.
+    @Test func transcribeOnImportedJobDoesNotTakeTheSkipPath() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let jobID = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: jobID)
+        #expect(model.jobs.first?.importedTranscriptSource != nil)
+
+        model.startTranscription(jobID: jobID)
+
+        let job = try #require(model.jobs.first)
+        #expect(job.status != .transcriptionComplete, "Skip path was taken for an imported transcript")
+        #expect(job.log.contains("Skipped transcription") == false)
+        // A real run clears provenance for both slots: the old files no longer
+        // describe this job's contents.
+        #expect(job.importedTranscriptSource == nil)
+        #expect(job.importedTranslationSource == nil)
+
+        model.cancelActiveJob()
+    }
+
+    @Test func realRunClearsImportedTranslationProvenance() async throws {
+        let fixture = try makeFixture(sidecars: ["movie.ja.srt", "movie.vi.srt"])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let jobID = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: jobID)
+        #expect(model.jobs.first?.importedTranslationSource != nil)
+
+        model.startTranscription(jobID: jobID)
+
+        #expect(model.jobs.first?.translatedSegments.isEmpty == true)
+        #expect(model.jobs.first?.importedTranslationSource == nil)
+
+        model.cancelActiveJob()
+    }
 }

@@ -510,4 +510,39 @@ struct AppModelSubtitleImportTests {
         #expect(model.canLoadSubtitles)
         #expect(model.canLoadTranslationSubtitles == false)
     }
+
+    // Regression: a job auto-started before its scan finishes is .queued
+    // with no transcript. Loading a transcript by hand must resolve that
+    // .queued status the same way applyAdoptions does — otherwise
+    // PipelineScheduler.nextTranslationJob (which only checks
+    // status/hasTranscript, not readiness) picks the job up and it fails
+    // immediately with no translation host configured.
+    @Test func manualLoadOnAQueuedJobWithoutTranslationConfiguredCompletesInsteadOfStayingQueued() async throws {
+        let fixture = try makeFixture(sidecars: [], autoStart: true)
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        #expect(model.settings.isTranslationReady == false, "Fixture must have no translation host configured")
+
+        let elsewhere = fixture.baseURL.appendingPathComponent("elsewhere.srt")
+        try Data(Self.srt.utf8).write(to: elsewhere)
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let job = try #require(model.jobs.first)
+        // Caught mid-scan so the load below races nothing: the job is
+        // .queued (autoStart) and still hidden from the scheduler.
+        #expect(job.status == .queued)
+        #expect(model.isScanningForSubtitles(job.id))
+
+        let document = try SubtitleImporter.importFile(at: elsewhere)
+        model.applySubtitleLoad(.init(id: UUID(), document: document), to: .transcript)
+
+        #expect(model.jobs.first?.status == .transcriptionComplete)
+        #expect(model.jobs.first?.transcriptSegments.count == 2)
+
+        // Let the scan settle and the scheduler run; the job must not have
+        // been swept up as a translation candidate and failed.
+        try await waitForAdoption(model, jobID: job.id)
+        #expect(model.jobs.first?.status == .transcriptionComplete)
+        #expect(model.jobs.first?.log.contains("Could not start this job") == false)
+    }
 }

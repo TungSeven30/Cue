@@ -1689,10 +1689,12 @@ final class AppModel: ObservableObject {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    /// Export problems must be visible without opening the Log tab.
-    private func presentExportError(_ message: String) {
+    /// Export problems must be visible without opening the Log tab. Other
+    /// callers (e.g. the subtitle load panel) pass their own title so the
+    /// dialog doesn't claim to be about an export that never happened.
+    private func presentExportError(_ message: String, title: String = "Export Failed") {
         let alert = NSAlert()
-        alert.messageText = "Export Failed"
+        alert.messageText = title
         alert.informativeText = message
         alert.alertStyle = .critical
         alert.runModal()
@@ -1934,7 +1936,10 @@ final class AppModel: ObservableObject {
             let document = try SubtitleImporter.importFile(at: url)
             subtitleLoadRequest = SubtitleLoadRequest(id: UUID(), document: document)
         } catch {
-            presentExportError("Could not read \(url.lastPathComponent): \(error.localizedDescription)")
+            presentExportError(
+                "Could not read \(url.lastPathComponent): \(error.localizedDescription)",
+                title: "Could Not Load Subtitles"
+            )
         }
     }
 
@@ -1944,12 +1949,20 @@ final class AppModel: ObservableObject {
         if !existing.isEmpty, !confirmReplacingSegments(slot: slot) { return }
 
         let document = request.document
+        // Mirrors applyAdoptions: a .queued job must stay .queued when
+        // translation is configured, or PipelineScheduler.nextTranslationJob
+        // (which only checks status/hasTranscript, not readiness) would pick
+        // it up and fail immediately with no translation host to talk to.
+        let translationReady = settings.isTranslationReady
         updateJob(id) { job in
             switch slot {
             case .transcript:
                 job.transcriptSegments = document.segments
                 job.importedTranscriptSource = document.source
-                if job.status == .idle || job.status == .canceled || job.status == .failed {
+                let wasQueued = job.status == .queued
+                if wasQueued {
+                    job.status = translationReady ? .queued : .transcriptionComplete
+                } else if job.status == .idle || job.status == .canceled || job.status == .failed {
                     job.status = .transcriptionComplete
                 }
                 job.progress = JobProgress(stage: .complete, detail: "Loaded existing subtitles.", fraction: 1)
@@ -1961,6 +1974,7 @@ final class AppModel: ObservableObject {
             job.log += "Loaded subtitles from \(document.source.fileName) (\(document.segments.count) cues).\n"
         }
         subtitleLoadRequest = nil
+        processQueue()
     }
 
     private func confirmReplacingSegments(slot: SubtitleSidecarScanner.Slot) -> Bool {

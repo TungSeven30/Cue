@@ -38,6 +38,11 @@ final class AppModel: ObservableObject {
     @Published var queuePaused = false
     /// Guards the 30s volume-reconnect retry so timers never stack.
     private var volumeRetryScheduled = false
+    /// Jobs whose folder is still being scanned for subtitle sidecars. They
+    /// must not be scheduled: an adopted transcript would arrive after ASR had
+    /// already started. In-memory only — a scan interrupted by a quit simply
+    /// never adopts, which is safe.
+    private var subtitleScanPendingIDs: Set<UUID> = []
     let playerController = PlayerController()
     private var didProcessQueuedJob = false
     /// Keeps very chatty jobs from growing without bound in memory and on disk.
@@ -241,6 +246,10 @@ final class AppModel: ObservableObject {
     /// deleted, only canceled.
     func isJobActive(_ id: UUID) -> Bool {
         id == gpuJobID || id == translationJobID
+    }
+
+    func isScanningForSubtitles(_ id: UUID) -> Bool {
+        subtitleScanPendingIDs.contains(id)
     }
 
     /// The job the user is looking at is the one running.
@@ -487,6 +496,10 @@ final class AppModel: ObservableObject {
         jobs.insert(contentsOf: newJobs, at: 0)
         selectJob(newJobs.first?.id)
         jobRepository.save(newJobs)
+        // Adoption gates scheduling via subtitleScanPendingIDs, so processQueue
+        // is safe to call now: pending jobs are filtered out of jobViews and
+        // picked up when the scan lands.
+        adoptSidecars(for: newJobs.map(\.id))
         if shouldStart {
             processQueue()
         }
@@ -712,6 +725,7 @@ final class AppModel: ObservableObject {
 
     func jobNeedsWork(_ job: TranscriptionJob) -> Bool {
         if job.archivedAt != nil { return false }
+        if subtitleScanPendingIDs.contains(job.id) { return false }
         if job.status.isRunning { return false }
         if job.status == .queued { return true }
         if job.transcriptSegments.isEmpty { return true }
@@ -880,7 +894,7 @@ final class AppModel: ObservableObject {
 
     private var jobViews: [PipelineScheduler.JobView] {
         let mounted = SourceVolume.mountedVolumeNames()
-        return jobs.filter { $0.archivedAt == nil }.map {
+        return jobs.filter { $0.archivedAt == nil && !subtitleScanPendingIDs.contains($0.id) }.map {
             PipelineScheduler.JobView(
                 id: $0.id,
                 orderIndex: $0.orderIndex,
@@ -1054,6 +1068,7 @@ final class AppModel: ObservableObject {
         let profile =
             settings.watchFolders.first(where: { $0.id == folderID })?.profile
             ?? JobSettingsOverrides()
+        var addedIDs: [UUID] = []
         for url in urls {
             var job = TranscriptionJob(sourceURL: url, settings: settings)
             job.origin = .watchFolder
@@ -1063,8 +1078,10 @@ final class AppModel: ObservableObject {
             job.progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
             job.log = "Picked up from the watch folder: \(url.path(percentEncoded: false)).\n"
             jobs.append(job)
+            addedIDs.append(job.id)
             persistJob(job.id)
         }
+        adoptSidecars(for: addedIDs)
         processQueue()
     }
 
@@ -1769,6 +1786,74 @@ final class AppModel: ObservableObject {
         let asset = AVURLAsset(url: url)
         let duration = (try? await asset.load(.duration)) ?? .zero
         return duration.seconds.isFinite ? duration.seconds : 0
+    }
+
+    // MARK: - Subtitle import
+
+    /// Scans each job's folder for subtitle sidecars and adopts what it finds.
+    /// Jobs are already in the sidebar by now; scanning and parsing happen off
+    /// the main actor so a large batch add stays responsive.
+    private func adoptSidecars(for ids: [UUID]) {
+        let requests: [(id: UUID, url: URL, source: String, target: String)] = ids.compactMap { id in
+            guard let job = jobs.first(where: { $0.id == id }) else { return nil }
+            let resolved = job.settings.applying(job.overrides)
+            return (id, job.sourceURL, resolved.sourceLanguage, resolved.translationTargetLanguage)
+        }
+        guard !requests.isEmpty else { return }
+        subtitleScanPendingIDs.formUnion(requests.map(\.id))
+
+        Task { [weak self] in
+            var results: [(id: UUID, result: SubtitleImporter.Result)] = []
+            for request in requests {
+                // SubtitleImporter is nonisolated, so this hops off the main
+                // actor for the directory listing and the parse.
+                let result = await Task.detached {
+                    SubtitleImporter.importSidecars(
+                        mediaURL: request.url,
+                        sourceLanguage: request.source,
+                        translationTargetLanguage: request.target
+                    )
+                }.value
+                results.append((request.id, result))
+            }
+            guard let self else { return }
+            self.applyAdoptions(results)
+        }
+    }
+
+    private func applyAdoptions(_ results: [(id: UUID, result: SubtitleImporter.Result)]) {
+        for (id, result) in results {
+            subtitleScanPendingIDs.remove(id)
+            guard result.transcript != nil || result.translation != nil || !result.logLines.isEmpty else { continue }
+            let translationReady = settings.isTranslationReady
+            updateJob(id) { job in
+                for line in result.logLines {
+                    job.log += line + "\n"
+                }
+                // A job auto-started or ingested by a watch folder is .queued.
+                // PipelineScheduler only ever picks .queued jobs (both slots),
+                // so clearing that status here would drop the job out of the
+                // queue and it would never translate. Adopting a transcript
+                // just moves it from the GPU slot's filter to the translation
+                // slot's — hasTranscript is now true.
+                let wasQueued = job.status == .queued
+                if let transcript = result.transcript {
+                    job.transcriptSegments = transcript.segments
+                    job.importedTranscriptSource = transcript.source
+                    // Nothing ran, so the transcription clock stays unset.
+                    job.progress = JobProgress(stage: .complete, detail: "Loaded existing subtitles.", fraction: 1)
+                    job.status = wasQueued && translationReady ? .queued : .transcriptionComplete
+                }
+                if let translation = result.translation {
+                    job.translatedSegments = translation.segments
+                    job.importedTranslationSource = translation.source
+                    // Both slots filled: there is no work left, so leave the
+                    // queue rather than sit there waiting to be re-translated.
+                    job.status = .translationComplete
+                }
+            }
+        }
+        processQueue()
     }
 
     // MARK: - Sidecar auto-export

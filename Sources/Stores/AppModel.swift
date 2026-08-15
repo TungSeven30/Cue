@@ -1495,6 +1495,12 @@ final class AppModel: ObservableObject {
         let resolved = JobSettingsSnapshot(settings: settings).applying(jobs[index].overrides)
         jobs[index].status = .translating
         jobs[index].progress = JobProgress(stage: .translating, detail: "Starting translation.", fraction: 0)
+        // This run replaces translatedSegments with machine output, so the
+        // imported file no longer describes them and write-back must stop
+        // pointing at it (same reasoning as startTranscriptionNow). The
+        // changed-on-disk guard could not catch this: the file is untouched.
+        cancelSubtitleSync(jobID: jobID, slot: .translation)
+        jobs[index].importedTranslationSource = nil
         // Translating a job whose previous run already finished starts a new
         // run: the old run's clock must not carry over, or a Monday
         // transcript translated on Wednesday reports a two-day total. Within
@@ -1891,6 +1897,8 @@ final class AppModel: ObservableObject {
         processQueue()
     }
 
+    // MARK: - Imported subtitle sync
+
     private struct SubtitleSyncKey: Hashable {
         let jobID: UUID
         let slot: SubtitleSidecarScanner.Slot
@@ -1922,10 +1930,15 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Drops a queued write so it cannot fire after the link it was made for
+    /// is gone.
+    private func cancelSubtitleSync(jobID: UUID, slot: SubtitleSidecarScanner.Slot) {
+        subtitleSyncWorkItems.removeValue(forKey: SubtitleSyncKey(jobID: jobID, slot: slot))?.cancel()
+    }
+
     func unlinkImportedSubtitles(slot: SubtitleSidecarScanner.Slot, jobID: UUID? = nil) {
         guard let id = jobID ?? selectedJobID else { return }
-        subtitleSyncWorkItems[SubtitleSyncKey(jobID: id, slot: slot)]?.cancel()
-        subtitleSyncWorkItems[SubtitleSyncKey(jobID: id, slot: slot)] = nil
+        cancelSubtitleSync(jobID: id, slot: slot)
         updateJob(id) { job in
             let name = job.importedSource(for: slot)?.fileName
             job.setImportedSource(nil, for: slot)
@@ -2385,7 +2398,7 @@ final class AppModel: ObservableObject {
             job[keyPath: keyPath][index].text = text
         }
         let slot: SubtitleSidecarScanner.Slot = keyPath == \TranscriptionJob.transcriptSegments ? .transcript : .translation
-        if jobs.first(where: { $0.id == id })?.importedSource(for: slot) != nil {
+        if let source = jobs.first(where: { $0.id == id })?.importedSource(for: slot), !source.syncPaused {
             scheduleSubtitleSync(jobID: id, slot: slot)
         }
     }

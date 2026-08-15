@@ -316,6 +316,11 @@ struct AppModelSubtitleImportTests {
         let jobID = try #require(model.jobs.first?.id)
         try await waitForAdoption(model, jobID: jobID)
 
+        // A summary is reachable on a wholly imported job (generateSummary
+        // runs on any job with segments), and it must stay export-only: the
+        // file has to mirror exactly what the editor shows.
+        model.jobs[0].summary = "A spoiler-free intro."
+
         let segment = try #require(model.jobs.first?.transcriptSegments.first)
         model.updateTranscriptSegment(segment, text: "Edited text")
         model.flushSubtitleSync()
@@ -323,6 +328,9 @@ struct AppModelSubtitleImportTests {
         let contents = try String(contentsOf: sidecarURL, encoding: .utf8)
         #expect(contents.contains("Edited text"))
         #expect(contents.contains("Hello") == false)
+        #expect(contents.contains("A spoiler-free intro.") == false)
+        let firstCue = try #require(contents.components(separatedBy: "\n\n").first)
+        #expect(firstCue.contains("Edited text"), "The first cue must be the real segment, not an intro summary")
     }
 
     @Test func firstWriteBacksUpTheOriginalExactlyOnce() async throws {
@@ -406,13 +414,63 @@ struct AppModelSubtitleImportTests {
         let jobID = try #require(model.jobs.first?.id)
         try await waitForAdoption(model, jobID: jobID)
 
+        // Edit first, so unlink really has a queued write to cancel.
+        let segment = try #require(model.jobs.first?.transcriptSegments.first)
+        model.updateTranscriptSegment(segment, text: "Should not reach disk")
+
         model.unlinkImportedSubtitles(slot: .transcript, jobID: jobID)
         #expect(model.jobs.first?.importedTranscriptSource == nil)
 
-        let segment = try #require(model.jobs.first?.transcriptSegments.first)
-        model.updateTranscriptSegment(segment, text: "Should not reach disk")
         model.flushSubtitleSync()
 
         #expect(try String(contentsOf: sidecarURL, encoding: .utf8).contains("Hello"))
+    }
+
+    // A machine translation replaces translatedSegments wholesale. If the
+    // imported file stayed linked, the next edit would write machine output
+    // over the user's own translation — and the changed-on-disk guard cannot
+    // catch it, because the file never changed on disk.
+    @Test func retranslationStopsWritingToTheImportedTranslationFile() async throws {
+        let response = Data(
+            #"{"choices":[{"message":{"content":"{\"segments\":[{\"id\":3,\"text\":\"Machine three\"}]}"},"finish_reason":"stop"}]}"#
+                .utf8
+        )
+        let client = RecordingHTTPClient(responses: [.init(data: response, statusCode: 200)])
+        let fixture = try makeFixture(
+            sidecars: ["movie.ja.srt", "movie.vi.srt"],
+            translationService: TranslationService(httpClient: client)
+        )
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        model.settings.openAIModel = "local/qwen"
+        model.settings.localTranslationEndpoint = "http://127.0.0.1:1234/v1"
+        // A downloaded translation rarely matches the transcript cue for cue.
+        // The extra transcript cue is what gives the re-translation real work
+        // to do, so machine output genuinely enters translatedSegments.
+        let threeCues = Self.srt + "\n\n3\n00:00:05,000 --> 00:00:06,000\nThird\n"
+        try Data(threeCues.utf8).write(to: fixture.baseURL.appendingPathComponent("movie.ja.srt"))
+        let translationURL = fixture.baseURL.appendingPathComponent("movie.vi.srt")
+        let original = try String(contentsOf: translationURL, encoding: .utf8)
+
+        model.addVideos(urls: [fixture.mediaURL])
+        let jobID = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: jobID)
+        #expect(model.jobs.first?.importedTranslationSource != nil)
+
+        model.startTranslation(jobID: jobID)
+        // Adoption already left the job .translationComplete, so wait on the
+        // machine output landing rather than on the status.
+        for _ in 0..<200 {
+            if model.jobs.first?.translatedSegments.count == 3 { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(model.jobs.first?.translatedSegments.last?.text == "Machine three")
+        #expect(model.jobs.first?.importedTranslationSource == nil)
+
+        let segment = try #require(model.jobs.first?.translatedSegments.first)
+        model.updateTranslatedSegment(segment, text: "Edited")
+        model.flushSubtitleSync()
+
+        #expect(try String(contentsOf: translationURL, encoding: .utf8) == original)
     }
 }

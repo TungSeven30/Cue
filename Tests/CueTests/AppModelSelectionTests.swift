@@ -166,10 +166,15 @@ struct AppModelSelectionTests {
         // gates retryFailedJobs) treats a job mid-scan as having no work, so the
         // scan must land before this test forces jobs into .failed and retries.
         for job in model.jobs {
+            var settled = false
             for _ in 0..<100 {
-                if !model.isScanningForSubtitles(job.id) { break }
+                if !model.isScanningForSubtitles(job.id) {
+                    settled = true
+                    break
+                }
                 try await Task.sleep(for: .milliseconds(20))
             }
+            if !settled { Issue.record("Sidecar scan never finished") }
         }
         let failedIDs = Set(model.jobs.prefix(2).map(\.id))
         for index in model.jobs.indices where failedIDs.contains(model.jobs[index].id) {

@@ -49,7 +49,7 @@ final class AppModel: ObservableObject {
     private static let maxLogLength = 200_000
 
     private let transcriptionService = TranscriptionService()
-    private let translationService = TranslationService()
+    private let translationService: TranslationService
     private let diagnosticsService: any EnvironmentDiagnosing
     private let jobRepository: JobRepository
     private let burnInService = BurnInService()
@@ -115,12 +115,14 @@ final class AppModel: ObservableObject {
     init(
         settings: AppSettingsStore? = nil,
         jobStore: JobStore? = nil,
-        diagnosticsService: any EnvironmentDiagnosing = EnvironmentDiagnosticsService()
+        diagnosticsService: any EnvironmentDiagnosing = EnvironmentDiagnosticsService(),
+        translationService: TranslationService = TranslationService()
     ) {
         self.settings = settings ?? AppSettingsStore()
         let resolvedJobStore = jobStore ?? JobStore()
         jobRepository = JobRepository(store: resolvedJobStore)
         self.diagnosticsService = diagnosticsService
+        self.translationService = translationService
         isPlayerVisible = UserDefaults.standard.object(forKey: "isPlayerVisible") as? Bool ?? true
         jobs = jobRepository.loadJobs().sorted { $0.orderIndex < $1.orderIndex }
         persistenceError = jobRepository.startupError ?? watchLedger.startupError
@@ -292,7 +294,7 @@ final class AppModel: ObservableObject {
     }
 
     var hasPendingWork: Bool {
-        jobs.contains { jobNeedsWork($0) }
+        jobs.contains { jobNeedsWork($0) } || !subtitleScanPendingIDs.isEmpty
     }
 
     /// The sidebar's single-job Start action is intentionally stricter than
@@ -600,8 +602,14 @@ final class AppModel: ObservableObject {
         var updatedJobs = jobs
         var queuedSnapshots: [TranscriptionJob] = []
         let now = Date()
+        // jobNeedsWork is false for a job mid-sidecar-scan, but the click must
+        // not be lost: jobViews keeps it out of both pumps until the scan
+        // lands, and applyAdoptions preserves .queued through wasQueued, so
+        // queuing it now is safe and it transcribes once the scan settles.
         for index in updatedJobs.indices
-        where jobNeedsWork(updatedJobs[index]) && updatedJobs[index].status != .queued {
+        where (jobNeedsWork(updatedJobs[index]) || subtitleScanPendingIDs.contains(updatedJobs[index].id))
+            && updatedJobs[index].status != .queued
+        {
             updatedJobs[index].status = .queued
             updatedJobs[index].progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
             updatedJobs[index].updatedAt = now
@@ -641,7 +649,12 @@ final class AppModel: ObservableObject {
     func enqueueJobs(_ ids: Set<UUID>) {
         guard !ids.isEmpty else { return }
         queuePaused = false
-        updateJobs(ids, where: { jobNeedsWork($0) && $0.status != .queued }) { job in
+        // See the comment in startAllPendingJobs: a job mid-sidecar-scan must
+        // still be queueable, or the click is lost once the scan lands.
+        let shouldQueue = { (job: TranscriptionJob) in
+            (self.jobNeedsWork(job) || self.subtitleScanPendingIDs.contains(job.id)) && job.status != .queued
+        }
+        updateJobs(ids, where: shouldQueue) { job in
             job.status = .queued
             job.progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
         }
@@ -746,8 +759,12 @@ final class AppModel: ObservableObject {
         // before the notification whenever queuePaused was set, and jobs are
         // usually still waiting. Jobs waiting on an offline volume also keep
         // the queue "unfinished" — no notification, no after-queue action.
+        // A job mid-sidecar-scan is likewise not "finished": jobViews hides it
+        // from the scheduler checks below, so without this the queue could
+        // report itself empty (and even sleep the Mac) while a batch add is
+        // still scanning.
         if !queuePaused, gpuJobID == nil, translationJobID == nil, !pipeline.hasQueuedTranslationWork, didProcessQueuedJob,
-            jobsWaitingOnVolumes.isEmpty,
+            jobsWaitingOnVolumes.isEmpty, subtitleScanPendingIDs.isEmpty,
             PipelineScheduler.nextGPUJob(jobs: jobViews, gpuBusy: false, queuePaused: queuePaused) == nil,
             PipelineScheduler.nextTranslationJob(jobs: jobViews, translationBusy: false, queuePaused: queuePaused) == nil
         {
@@ -1822,10 +1839,16 @@ final class AppModel: ObservableObject {
     }
 
     private func applyAdoptions(_ results: [(id: UUID, result: SubtitleImporter.Result)]) {
+        let translationReady = settings.isTranslationReady
         for (id, result) in results {
             subtitleScanPendingIDs.remove(id)
             guard result.transcript != nil || result.translation != nil || !result.logLines.isEmpty else { continue }
-            let translationReady = settings.isTranslationReady
+            // The user may have started this job by hand during the scan
+            // window (canStartSelectedJob/canTranscribe don't consult the
+            // pending set). Applying adopted content onto a job that is now
+            // mid-run would clobber its live transcript and stamp a bogus
+            // imported-source provenance onto an ASR run.
+            guard !isJobActive(id), jobs.first(where: { $0.id == id })?.status.isRunning != true else { continue }
             updateJob(id) { job in
                 for line in result.logLines {
                     job.log += line + "\n"

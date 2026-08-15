@@ -139,4 +139,55 @@ struct SubtitleReaderTests {
             #expect(parsed == original, "\(format.label) round trip changed the segments")
         }
     }
+
+    // The UTF-16 BOM check must come before UTF-8 to stop Foundation's lenient
+    // .utf16 decoder from claiming non-UTF-16 bytes and producing garbage. This
+    // test exercises that BOM-sniff branch.
+    @Test func decodesUTF16WithBOM() throws {
+        let text = "Hello\nWorld"
+
+        // UTF-16 Little-Endian with BOM (FF FE).
+        var utf16le = Data([0xFF, 0xFE])  // LE BOM
+        utf16le.append(try #require(text.data(using: .utf16LittleEndian)))
+        let decodedLE = try #require(SubtitleReader.decode(utf16le))
+        #expect(decodedLE == text)
+
+        // UTF-16 Big-Endian with BOM (FE FF).
+        var utf16be = Data([0xFE, 0xFF])  // BE BOM
+        utf16be.append(try #require(text.data(using: .utf16BigEndian)))
+        let decodedBE = try #require(SubtitleReader.decode(utf16be))
+        #expect(decodedBE == text)
+    }
+
+    // Verify that Latin-1 bytes without a UTF-16 BOM fall through to
+    // Windows-1252 decoding rather than being misinterpreted as garbage
+    // UTF-16. This guards against the lenient .utf16 decoder.
+    @Test func latin1WithoutBOMDecodesAsWindows1252NotUTF16Garbage() throws {
+        let srt = "1\n00:00:01,000 --> 00:00:02,000\nCafé\n"
+        let latin1Data = try #require(srt.data(using: .windowsCP1252))
+
+        // Confirm no UTF-16 BOM is present.
+        guard latin1Data.count >= 2 else { return }
+        let first = latin1Data[latin1Data.startIndex]
+        let second = latin1Data[latin1Data.index(after: latin1Data.startIndex)]
+        #expect((first, second) != (0xFF, 0xFE))
+        #expect((first, second) != (0xFE, 0xFF))
+
+        // Decode should succeed and contain the accented character, not garbage.
+        let decoded = try #require(SubtitleReader.decode(latin1Data))
+        #expect(decoded.contains("Café"))
+    }
+
+    // FFmpeg and players respect inline markup (`<i>`, `{\an8}`, etc.);
+    // it must survive parsing unchanged.
+    @Test func preservesInlineMarkupVerbatim() throws {
+        let srt = """
+            1
+            00:00:01,000 --> 00:00:02,000
+            <i>Italics</i> and {\\an8}position
+            """
+        let segments = try SubtitleReader.parse(srt, format: .srt)
+        #expect(segments.count == 1)
+        #expect(segments[0].text == "<i>Italics</i> and {\\an8}position")
+    }
 }

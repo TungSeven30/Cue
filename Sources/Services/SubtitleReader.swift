@@ -35,34 +35,39 @@ enum SubtitleReader {
     }
 
     /// SRT files in the wild are frequently Latin-1, so a UTF-8 failure must
-    /// not end the attempt. Order matters: UTF-8 first (the modern default),
-    /// then BOM-tagged UTF-16, then Windows-1252 last because it decodes any
-    /// byte sequence and would otherwise shadow the others.
+    /// not end the attempt. Order matters: UTF-16 BOM must be checked first
+    /// (Foundation's `.utf16` decoder is lenient and will claim non-UTF-16 bytes
+    /// as valid, shadowing other encodings), then UTF-8 (the modern default),
+    /// then Windows-1252 last because it decodes any byte sequence.
     static func decode(_ data: Data) -> String? {
         // Check for UTF-16 BOM explicitly: FF FE (LE) or FE FF (BE).
-        // Only try UTF-16 if the BOM is present, since raw UTF-16 detection
-        // is too lenient and can succeed on Windows-1252 bytes, producing garbage.
+        // Only try UTF-16 if the BOM is present; raw UTF-16 detection is too
+        // lenient and can succeed on Windows-1252 bytes, producing garbage.
         if data.count >= 2 {
             let first = data[data.startIndex]
             let second = data[data.index(after: data.startIndex)]
             if (first == 0xFF && second == 0xFE) || (first == 0xFE && second == 0xFF) {
                 if let text = String(data: data, encoding: .utf16) {
-                    return text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
+                    return stripBOM(text)
                 }
             }
         }
 
         // Try UTF-8 next (the modern default).
         if let text = String(data: data, encoding: .utf8) {
-            return text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
+            return stripBOM(text)
         }
 
         // Fall back to Windows-1252, which accepts any byte sequence.
         if let text = String(data: data, encoding: .windowsCP1252) {
-            return text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
+            return stripBOM(text)
         }
 
         return nil
+    }
+
+    private static func stripBOM(_ text: String) -> String {
+        text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
     }
 
     static func parse(_ text: String, format: SubtitleExportFormat) throws -> [TranscriptionSegment] {

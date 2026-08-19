@@ -3,6 +3,21 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
+## Unreleased
+
+- Added **Add from URL** (⌘L): paste or drop a video page link and Cue fetches
+  it with yt-dlp into a Downloads folder you choose, then queues it as an
+  ordinary job. Fetches run alongside the queue and appear in a sidebar
+  Downloads section with progress, cancel, and retry.
+- Added a **headless CLI** inside the app binary — `Cue.app/Contents/MacOS/Cue
+  transcribe clip.mkv` — with `fetch`, `transcribe`, `translate`, `summarize`,
+  `burn-in`, `pipeline`, and `doctor` stages. Each stage writes a
+  `<name>.cue.json` manifest that the next stage reads, so runs chain and stay
+  scriptable; `--json` prints the manifest on stdout while progress goes to
+  stderr. Settings and API keys come from the app's own Settings and Keychain.
+- `cue translate` also accepts an existing `.srt`/`.vtt` file, so subtitles Cue
+  did not produce can be translated without re-transcribing.
+
 ## 2.3.6 — 2026-08-13
 
 - Added a single-job Start action that runs only the selected job while leaving

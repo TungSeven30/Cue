@@ -2,9 +2,13 @@ import Foundation
 
 /// How a job entered the app. Watch-folder jobs get implicit sidecar export
 /// and write the watch ledger on terminal states; manual jobs do neither.
+/// `url` jobs are manual adds whose media was fetched with yt-dlp first —
+/// they behave exactly like `manual` and exist only so the sidebar and the
+/// job log can say where the file came from.
 enum JobOrigin: String, Codable, Hashable {
     case manual
     case watchFolder
+    case url
 }
 
 /// Per-job settings overrides. `nil` means "inherit the global setting at the

@@ -38,6 +38,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Watch folder** is its own small pipeline: `WatchFolderService` (polling/orchestration) + `WatchFolderScanEngine` (diffing the folder, scanned recursively through subfolders) + `WatchFolderLedger` (tracks already-ingested files so they aren't re-queued). Ingested jobs bypass `AppModel.enqueueJob` on purpose — that path would clear `queuePaused` and would respect `autoStartAddedJobs`, both of which are semantics for interactive adds only, not automatic ingest (see the comment above the watch-folder ingest function in `AppModel.swift`).
 
+**URL ingest is deliberately outside the pipeline.** `MediaDownloadService` (`Sources/Services/MediaDownloadService.swift`) spawns yt-dlp into a private staging directory and identifies the result by being the largest media file in it — never by parsing yt-dlp's `--print filepath`, whose flags interact with `--quiet`/`--simulate` differently across versions. `AppModel`'s downloads section tracks fetches in `downloads` rather than `jobs` (a job's identity is a file that does not exist yet) and only calls `addVideos(urls:origin:sourceNote:)` once a file lands. Fetches hold no pipeline slot and run concurrently with the queue; they do hold the sleep assertion.
+
+**The CLI lives inside the shipped binary** (`Sources/CLI`), dispatched from `CueApp.init` right after `PackagedInferenceSelfTest` and before any window exists — same bundle, same Metal resources, same Keychain items. It never constructs `AppModel`: there is no queue, no persistence, and no notifications in a headless run, only the services driven directly. Because those services are `@MainActor`, the entry point starts a `@MainActor` Task and calls `dispatchMain()` rather than blocking on a semaphore the way the self-test does — blocking the main thread would deadlock every main-actor hop. Stages hand off through `CLIManifest`, a JSON artifact whose decode is optional-tolerant on every field so an older manifest still chains. Arguments that name no known command fall through to the GUI launch, which is what keeps Finder's `-psn_…` from being read as a command.
+
 **Secrets** live in the macOS Keychain via `KeychainStore` (`Sources/Support/KeychainStore.swift`) — never in job files, settings plists, or exports.
 
 **Layout:**
@@ -47,6 +51,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `Sources/Models` — `TranscriptionJob`, settings/preset enums, job status/stage
 - `Sources/Views` — SwiftUI views
 - `Sources/Support` — Keychain, process helpers, the Python backend script writer
+- `Sources/CLI` — headless mode: argument parsing, the stage runner, and the JSON manifest that chains stages
 - `Tests/CueTests` — swift-testing suite (`import Testing`, `@Test func ...`, `@testable import Cue`)
 - `script/` — build, test, and release tooling
 

@@ -31,6 +31,12 @@ Transcription runs locally. Translation and summaries use only the cloud provide
 - Prepended as the first cue of SRT/VTT exports, shown from 0s until the first dialogue (3s minimum, 10s cap)
 - Generated in the translation's target language, or the film's own language for untranslated jobs
 
+**Add from URL**
+- **File > Add from URL…** (⌘L) takes a video page address — paste it, or drag a link straight from your browser into the sidebar. Cue downloads it with [yt-dlp](https://github.com/yt-dlp/yt-dlp) and queues the result as an ordinary job
+- Downloads run alongside the queue (they hold no GPU or translation slot) and appear in a sidebar Downloads section with live progress; right-click to cancel, retry a failure, or copy the link
+- Files land in `~/Movies/Cue Downloads` unless you pick another folder in Settings. The downloaded file stays the job's source, so sidecar subtitles are written next to it
+- Needs `brew install yt-dlp`; every other feature works without it, and diagnostics flag it as optional
+
 **Watch folders**
 - The sidebar's Watch Folders section: click Add Watch Folder (or drag a folder from Finder into the sidebar) and every video dropped into it afterward is queued, transcribed, and translated automatically, with SRT sidecars saved next to each file
 - Watch as many folders as you like, each with its own language/preset/translation profile (right-click > Folder Settings) — e.g. one inbox that translates Japanese to Vietnamese and another that only transcribes English
@@ -49,6 +55,9 @@ Transcription runs locally. Translation and summaries use only the cloud provide
 - Export SRT, WebVTT, plain text, Markdown, and JSON — original, translated, and bilingual documents, plus run logs
 - Auto-sidecar export drops language-coded `.srt` files next to the source video so media players pick them up automatically
 - Burn in subtitles as permanent video text: from the export sheet or a job's context menu ("Burn In Video…"), pick a text size and it renders `<name>.burned.mp4` next to the source video. This is what your ffmpeg install (also used for audio extraction) needs libass for — the standard Homebrew bottle usually includes it, but the app preflights the check and tells you if your build lacks the subtitles filter. Output is always 8-bit SDR H.264 — HDR sources come out tone-shifted, so re-encode from an SDR source if that matters to you
+
+**Command line**
+- The app binary is also a headless CLI — `Cue.app/Contents/MacOS/Cue transcribe clip.mkv` — so batches, cron jobs, and AI agents can drive Cue without the GUI. See [Scripting Cue](#scripting-cue)
 
 **Reliability**
 - Serial job queue for batch processing (one model on the GPU at a time) with per-job persistence — a crash or force-quit never loses finished work, and interrupted jobs resume
@@ -107,6 +116,8 @@ The flags matter on Homebrew's Python 3.12+, which rejects a plain `pip install`
 
 ffmpeg (`brew install ffmpeg`) is only needed for the **Clean audio** preprocessing option and for rare containers the system decoders can't read.
 
+yt-dlp (`brew install yt-dlp`) is only needed for **Add from URL** and the CLI's `fetch` stage.
+
 For Qwen, set the spoken language when it is known and enter character names,
 places, or unusual vocabulary in **Qwen names & terms**. The standalone helper
 offers the same feature through `--qwen-context "Name Place Term"`.
@@ -114,6 +125,62 @@ offers the same feature through `--qwen-context "Name Place Term"`.
 #### Local translation
 
 Translation can also run free and offline against any OpenAI-compatible server (LM Studio, Ollama, mlx-lm) instead of a cloud API. Pick the **Local server (LM Studio / Ollama)** model in Settings — or any `local/…` model name — and point **Local server URL** at your server (default `http://localhost:1234/v1`, LM Studio's address); no API key is needed. Choose **Load Models** to test the connection and select a model currently loaded on the server. LM Studio's "serve on local network" toggle even lets a big Mac translate for a MacBook over the LAN — just set the URL to that Mac's address and allow Cue's local-network permission when macOS asks.
+
+## Scripting Cue
+
+The same binary that runs the app also runs headless, so there is nothing extra
+to install or build:
+
+```sh
+/Applications/Cue.app/Contents/MacOS/Cue transcribe clip.mkv
+alias cue='/Applications/Cue.app/Contents/MacOS/Cue'   # optional, for your shell profile
+```
+
+In a checkout, `./script/cue <command>` finds whichever build you have.
+
+| Command | What it does |
+|---|---|
+| `cue fetch <url>` | Downloads a video page with yt-dlp |
+| `cue transcribe <input>` | Transcribes on-device, writes subtitles |
+| `cue translate <input>` | Translates an existing transcript |
+| `cue summarize <input>` | Writes the spoiler-free intro cue |
+| `cue burn-in <input>` | Renders subtitles into the video |
+| `cue pipeline <input>` | fetch → transcribe → translate → summarize → export |
+| `cue doctor` | Reports engine and tool availability |
+| `cue help`, `cue version` | |
+
+**Stages chain through a manifest.** Every stage writes `<name>.cue.json` next
+to its output, recording the media path, the settings the run actually used,
+the segments produced so far, and the files written. Passing that manifest to
+the next command is all the handoff there is:
+
+```sh
+cue transcribe episode.mkv --preset bestAccuracy --language ja
+cue translate episode.cue.json --to Vietnamese --bilingual
+cue burn-in episode.cue.json --text-size large
+```
+
+Or run the whole thing at once, from a URL, and read the result as JSON:
+
+```sh
+cue pipeline "https://example.com/watch?v=…" --to English --summary --json | jq '.outputs'
+```
+
+An input can be a media file, an http(s) page URL (fetched first), a
+`.cue.json` manifest, or an existing `.srt`/`.vtt` file — so subtitles Cue did
+not produce can still be translated without re-transcribing.
+
+Useful options: `--output-dir`, `--format srt,vtt,text,markdown,json`,
+`--language`, `--preset`, `--quality`, `--backend`, `--model`,
+`--translation-model`, `--to`, `--from`, `--parallelism`, `--bilingual`,
+`--summary`, `--detail`, `--burn-in`, `--document`, `--text-size`, `--json`,
+`--quiet`. Run `cue help` for the full list.
+
+Anything you do not pass comes from the app's own Settings, and API keys come
+from the same Keychain items — the CLI never reads keys from the environment or
+writes your settings back. Progress and warnings go to stderr and the result
+goes to stdout, so `--json` pipes cleanly. Exit codes are `0` success,
+`1` the run failed, `2` the invocation was wrong.
 
 ## Building from source (for developers)
 
@@ -157,7 +224,8 @@ Other script modes:
 - **Transcription**: the default backend calls whisper.cpp (pinned SwiftPM dependency, Metal) in-process; the optional Python backends use a self-contained helper script invoked as a subprocess. Qwen reads the cached PCM WAV once, vectorizes silence planning, passes NumPy chunks without temporary files, and streams segments plus structured performance metrics over stderr
 - **Translation/summaries**: direct HTTPS to the explicitly selected provider APIs—or the configured local server—with JSON-schema-constrained outputs and token-aware adaptive batching; no SDK dependencies
 - **Persistence**: one JSON file per job under `~/Library/Application Support/Cue/jobs/`, written atomically off the main thread and flushed on quit; corrupt files are quarantined, never overwritten
-- **Layout**: `Sources/` — `App`, `Views`, `Stores`, `Services`, `Models`, `Support`; `Tests/` — swift-testing suite; `script/` — build, test, and release tooling
+- **Command line**: `Sources/CLI` — an argument-driven mode inside the shipped binary (dispatched from `CueApp.init` before any window exists), driving the same services the GUI does, with a JSON manifest as the handoff between stages
+- **Layout**: `Sources/` — `App`, `Views`, `Stores`, `Services`, `Models`, `Support`, `CLI`; `Tests/` — swift-testing suite; `script/` — build, test, and release tooling
 - **Audit/runbooks**: [architecture review](docs/architecture-review-2026-08-08.md), [security model](docs/security-model.md), [dependency policy](docs/dependency-policy.md), [release/rollback](docs/release-runbook.md), and [data recovery](docs/data-recovery.md)
 
 ## Notes

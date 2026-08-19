@@ -21,6 +21,10 @@ final class AppModel: ObservableObject {
     @Published var overridesEditorJobID: UUID?
     @Published var isGeneratingSummary = false
     @Published var isShowingBurnInSheet = false
+    /// In-flight and just-failed yt-dlp fetches. Kept out of `jobs` because a
+    /// job is identified by a file that does not exist until a fetch lands.
+    @Published private(set) var downloads: [MediaDownload] = []
+    private var downloadTasks: [UUID: Task<Void, Never>] = [:]
     /// nil = not yet checked; cached until Recheck (spec §3.1).
     @Published var burnInPreflight: BurnInService.PreflightResult?
     /// The setup guide auto-opens once per launch (when something required is
@@ -95,7 +99,10 @@ final class AppModel: ObservableObject {
     private var processingActivity: NSObjectProtocol?
 
     private func updateProcessingActivity() {
-        if isProcessing {
+        // Downloads keep the assertion alive too: a long fetch is exactly
+        // the kind of unattended work idle sleep would otherwise stall,
+        // even though it occupies no pipeline slot.
+        if isProcessing || downloads.contains(where: { !$0.state.isFailed }) {
             guard processingActivity == nil else { return }
             processingActivity = ProcessInfo.processInfo.beginActivity(
                 options: [.userInitiated, .idleSystemSleepDisabled],
@@ -465,13 +472,18 @@ final class AppModel: ObservableObject {
         return expanded.count
     }
 
-    /// Adds videos as separate jobs. Used by the file picker and drag-and-drop.
-    func addVideos(urls: [URL]) {
+    /// Adds videos as separate jobs. Used by the file picker, drag-and-drop,
+    /// and — with `origin: .url` — by a finished yt-dlp download, which is a
+    /// manual add in every respect except where the file came from.
+    func addVideos(urls: [URL], origin: JobOrigin = .manual, sourceNote: String? = nil) {
         let batchIndices = QueueOrdering.indicesForBatchAdd(count: urls.count, existing: jobs.map(\.orderIndex))
         let shouldStart = settings.autoStartAddedJobs
         let newJobs = zip(urls, batchIndices).map { url, orderIndex in
             var job = TranscriptionJob(sourceURL: url, settings: settings)
-            job.log = "Selected \(url.path(percentEncoded: false)).\n"
+            job.origin = origin
+            job.log =
+                sourceNote.map { "\($0)\nSaved to \(url.path(percentEncoded: false)).\n" }
+                ?? "Selected \(url.path(percentEncoded: false)).\n"
             job.orderIndex = orderIndex
             if shouldStart {
                 job.status = .queued
@@ -1066,6 +1078,128 @@ final class AppModel: ObservableObject {
             persistJob(job.id)
         }
         processQueue()
+    }
+
+    // MARK: - URL ingest
+
+    /// Fetches happen off the pipeline entirely: they are network-bound,
+    /// hold no GPU or translation slot, and run concurrently with each other
+    /// and with the queue. A download only touches the queue once it has
+    /// produced a real file, at which point it enters through the ordinary
+    /// add path.
+    func addRemoteMedia(from text: String) {
+        guard let url = MediaDownloadService.normalizedWebURL(from: text) else {
+            presentDownloadError(MediaDownloadError.notAWebURL(text.trimmingCharacters(in: .whitespacesAndNewlines)))
+            return
+        }
+        startDownload(MediaDownload(pageURL: url))
+    }
+
+    /// Asks for a URL, pre-filling anything web-shaped already on the
+    /// clipboard — pasting a link is the whole interaction, so requiring a
+    /// second ⌘V would be the only friction left.
+    func promptForRemoteMedia() {
+        guard MediaDownloadService.isAvailable else {
+            presentDownloadError(MediaDownloadError.toolMissing)
+            return
+        }
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
+        field.placeholderString = "https://…"
+        if let clipboard = NSPasteboard.general.string(forType: .string),
+            let url = MediaDownloadService.normalizedWebURL(from: clipboard)
+        {
+            field.stringValue = url.absoluteString
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Add from URL"
+        alert.informativeText = "Paste a video or audio page address. Cue downloads it with yt-dlp, then queues it like any other file."
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Download")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let entered = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !entered.isEmpty else { return }
+        addRemoteMedia(from: entered)
+    }
+
+    func cancelDownload(_ id: UUID) {
+        downloadTasks[id]?.cancel()
+        downloadTasks[id] = nil
+        downloads.removeAll { $0.id == id }
+        updateProcessingActivity()
+    }
+
+    /// Clears a failed row. Running downloads go through cancelDownload so
+    /// the yt-dlp process is actually stopped.
+    func dismissDownload(_ id: UUID) {
+        guard downloads.first(where: { $0.id == id })?.state.isFailed == true else { return }
+        downloads.removeAll { $0.id == id }
+    }
+
+    func retryDownload(_ id: UUID) {
+        guard let existing = downloads.first(where: { $0.id == id }), existing.state.isFailed else { return }
+        downloads.removeAll { $0.id == id }
+        startDownload(MediaDownload(pageURL: existing.pageURL))
+    }
+
+    private func startDownload(_ download: MediaDownload) {
+        // Re-adding a link that is already downloading would fetch the same
+        // bytes twice and land two jobs on the same content.
+        guard !downloads.contains(where: { $0.pageURL == download.pageURL && !$0.state.isFailed }) else { return }
+        downloads.append(download)
+        updateProcessingActivity()
+
+        let id = download.id
+        let pageURL = download.pageURL
+        let directory = settings.resolvedDownloadDirectory
+        downloadTasks[id] = Task { [weak self] in
+            do {
+                let file = try await MediaDownloadService().download(url: pageURL, into: directory) { update in
+                    self?.updateDownload(id) { record in
+                        record.fraction = update.fraction
+                        record.detail = update.detail
+                    }
+                }
+                guard let self, !Task.isCancelled else { return }
+                self.finishDownload(id, file: file, pageURL: pageURL)
+            } catch is CancellationError {
+                // cancelDownload already removed the row.
+            } catch {
+                self?.failDownload(id, message: error.localizedDescription)
+            }
+        }
+    }
+
+    private func finishDownload(_ id: UUID, file: URL, pageURL: URL) {
+        downloadTasks[id] = nil
+        downloads.removeAll { $0.id == id }
+        addVideos(urls: [file], origin: .url, sourceNote: "Downloaded from \(pageURL.absoluteString).")
+        updateProcessingActivity()
+    }
+
+    private func failDownload(_ id: UUID, message: String) {
+        downloadTasks[id] = nil
+        updateDownload(id) { download in
+            download.state = .failed(message)
+            download.fraction = nil
+            download.detail = message
+        }
+        updateProcessingActivity()
+    }
+
+    private func updateDownload(_ id: UUID, mutate: (inout MediaDownload) -> Void) {
+        guard let index = downloads.firstIndex(where: { $0.id == id }) else { return }
+        mutate(&downloads[index])
+    }
+
+    private func presentDownloadError(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "Can't Add That URL"
+        alert.informativeText = error.localizedDescription
+        alert.alertStyle = .warning
+        alert.runModal()
     }
 
     /// Terminal-state bookkeeping for watch jobs (spec §2.4): success and

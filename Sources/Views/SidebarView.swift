@@ -115,6 +115,7 @@ struct SidebarView: View {
             )
         ) {
             watchFoldersSection
+            downloadsSection
             jobControlsSection(listState.counts)
             if groupByStatus {
                 groupedSections(listState)
@@ -130,7 +131,14 @@ struct SidebarView: View {
         // become jobs, same as dropping on the main workspace.
         .dropDestination(for: URL.self) { urls, _ in
             let fileURLs = urls.filter(\.isFileURL)
-            guard !fileURLs.isEmpty else { return false }
+            // A link dragged from a browser arrives as a non-file URL; treat
+            // it exactly like Add from URL. Anything else (mailto:, custom
+            // schemes) is silently ignored rather than alerted about — a
+            // stray drop is not an error worth a modal.
+            let webURLs = urls.compactMap { url -> URL? in
+                url.isFileURL ? nil : MediaDownloadService.normalizedWebURL(from: url.absoluteString)
+            }
+            guard !fileURLs.isEmpty || !webURLs.isEmpty else { return false }
             var isDirectory: ObjCBool = false
             for url in fileURLs {
                 if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
@@ -138,6 +146,9 @@ struct SidebarView: View {
                 } else {
                     model.addVideos(urls: [url])
                 }
+            }
+            for url in webURLs {
+                model.addRemoteMedia(from: url.absoluteString)
             }
             return true
         }
@@ -358,6 +369,47 @@ struct SidebarView: View {
 
     private var settingsWatchFolders: [WatchFolder] {
         model.settings.watchFolders
+    }
+
+    /// Only present while something is fetching or has failed: an empty
+    /// section header would be permanent chrome for an occasional action,
+    /// which the "Add from URL…" menu command already covers.
+    @ViewBuilder
+    private var downloadsSection: some View {
+        if !model.downloads.isEmpty {
+            Section("Downloads") {
+                ForEach(model.downloads) { download in
+                    DownloadRow(download: download)
+                        .contextMenu {
+                            if download.state.isFailed {
+                                Button {
+                                    model.retryDownload(download.id)
+                                } label: {
+                                    Label("Try Again", systemImage: "arrow.clockwise")
+                                }
+                                Button(role: .destructive) {
+                                    model.dismissDownload(download.id)
+                                } label: {
+                                    Label("Dismiss", systemImage: "xmark.circle")
+                                }
+                            } else {
+                                Button(role: .destructive) {
+                                    model.cancelDownload(download.id)
+                                } label: {
+                                    Label("Cancel Download", systemImage: "stop.circle")
+                                }
+                            }
+                            Divider()
+                            Button {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(download.pageURL.absoluteString, forType: .string)
+                            } label: {
+                                Label("Copy Link", systemImage: "link")
+                            }
+                        }
+                }
+            }
+        }
     }
 
     /// The folder promises translated output its provider can't deliver yet.
@@ -1026,6 +1078,36 @@ private struct WatchFolderRow: View {
         if !folder.enabled { return "Paused" }
         if let error = service?.lastError { return error }
         return "Watching"
+    }
+}
+
+private struct DownloadRow: View {
+    let download: MediaDownload
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: download.state.isFailed ? "exclamationmark.arrow.triangle.2.circlepath" : "arrow.down.circle")
+                .foregroundStyle(download.state.isFailed ? Color.red : Color.accentColor)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(download.title)
+                    .lineLimit(1)
+                Text(download.detail)
+                    .font(.caption)
+                    .foregroundStyle(download.state.isFailed ? .red : .secondary)
+                    .lineLimit(1)
+                if !download.state.isFailed {
+                    // An indeterminate bar during the resolve and merge
+                    // phases, which report no percentage at all.
+                    ProgressView(value: download.fraction, total: 1)
+                        .progressViewStyle(.linear)
+                        .controlSize(.small)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+        .help(download.failureMessage ?? download.pageURL.absoluteString)
     }
 }
 

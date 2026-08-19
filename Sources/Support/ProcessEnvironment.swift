@@ -23,13 +23,19 @@ enum ProcessEnvironment {
         return environment
     }
 
+    /// Whether `name` is an executable on the PATH spawned helpers see.
+    /// Probes the filesystem on every call, so a tool installed mid-session
+    /// is picked up — use it for tools whose absence is a recoverable,
+    /// user-facing error (yt-dlp), not for hot paths.
+    static func toolExists(_ name: String) -> Bool {
+        let path = withToolPaths()["PATH"] ?? ""
+        return path.split(separator: ":").contains { directory in
+            FileManager.default.isExecutableFile(atPath: "\(directory)/\(name)")
+        }
+    }
+
     /// Whether ffmpeg is reachable on the PATH spawned helpers see. Computed
     /// once per launch: installing ffmpeg mid-session is not worth re-probing
     /// the filesystem on every transcription.
-    static let hasFFmpeg: Bool = {
-        let path = withToolPaths()["PATH"] ?? ""
-        return path.split(separator: ":").contains { directory in
-            FileManager.default.isExecutableFile(atPath: "\(directory)/ffmpeg")
-        }
-    }()
+    static let hasFFmpeg: Bool = toolExists("ffmpeg")
 }

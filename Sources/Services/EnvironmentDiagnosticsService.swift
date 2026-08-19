@@ -46,6 +46,14 @@ struct EnvironmentDiagnosticsService: EnvironmentDiagnosing {
             repairCommand: "brew install ffmpeg",
             optional: optional("ffmpeg")
         )
+        async let ytDlp = commandDiagnostic(
+            id: "yt-dlp",
+            title: "yt-dlp",
+            command: ["/usr/bin/env", "yt-dlp", "--version"],
+            recovery: "Only needed for Add from URL, which downloads a video page before transcribing it.",
+            repairCommand: "brew install yt-dlp",
+            optional: optional("yt-dlp")
+        )
         async let python = commandDiagnostic(
             id: "python3",
             title: "Python 3",
@@ -96,7 +104,7 @@ struct EnvironmentDiagnosticsService: EnvironmentDiagnosing {
                 state: .passed
             )
         ]
-        results.append(contentsOf: await [ffmpeg, python, mlx, faster, qwen3])
+        results.append(contentsOf: await [ffmpeg, ytDlp, python, mlx, faster, qwen3])
         let providerLabel = translationProvider.label
         let title: String
         let detail: String

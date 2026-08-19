@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Runs Cue's headless CLI against whichever build is available, so
+# `script/cue transcribe clip.mkv` works during development without
+# remembering the path inside the bundle.
+#
+# The CLI lives in the app binary itself (see Sources/CLI/CueCommandLine.swift),
+# so there is nothing separate to build. To use it outside this repo, either
+# call the bundle directly:
+#
+#   /Applications/Cue.app/Contents/MacOS/Cue transcribe clip.mkv
+#
+# or add a shell alias:
+#
+#   alias cue='/Applications/Cue.app/Contents/MacOS/Cue'
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+candidates=(
+  "$ROOT_DIR/dist/Cue.app/Contents/MacOS/Cue"
+  "/Applications/Cue.app/Contents/MacOS/Cue"
+  "$HOME/Applications/Cue.app/Contents/MacOS/Cue"
+)
+
+for candidate in "${candidates[@]}"; do
+  if [[ -x "$candidate" ]]; then
+    exec "$candidate" "$@"
+  fi
+done
+
+cat >&2 <<'EOF'
+error: no Cue build found.
+
+Build one first:
+  ./script/build_and_run.sh --bundle     # writes dist/Cue.app
+  ./script/build_and_run.sh --install    # installs to /Applications
+
+Looked in dist/, /Applications, and ~/Applications.
+EOF
+exit 2

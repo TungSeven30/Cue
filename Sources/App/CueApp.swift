@@ -19,6 +19,10 @@ struct CueApp: App {
     // the WhisperDesk-era data move ahead of every disk and defaults read.
     init() {
         PackagedInferenceSelfTest.runAndExitIfRequested()
+        // Both of these exit the process rather than returning when they
+        // recognise their arguments, so nothing below them runs in a
+        // headless invocation — no windows, no watch folders, no queue.
+        CueCommandLine.runAndExitIfRequested()
         LegacyMigration.run()
         OrphanReaper.reap()
     }
@@ -47,6 +51,11 @@ struct CueApp: App {
                     model.selectVideo()
                 }
                 .keyboardShortcut("o")
+
+                Button("Add from URL...") {
+                    model.promptForRemoteMedia()
+                }
+                .keyboardShortcut("l")
 
                 Button("Start All") {
                     model.startAllPendingJobs()

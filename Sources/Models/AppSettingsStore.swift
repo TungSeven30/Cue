@@ -447,6 +447,9 @@ final class AppSettingsStore: ObservableObject {
         }
     }
     @Published var lastExportDirectory: String { didSet { save() } }
+    /// Where yt-dlp downloads land. Empty means the built-in default
+    /// (~/Movies/Cue Downloads); a stored path is used verbatim.
+    @Published var downloadDirectory: String { didSet { save() } }
     @Published var preprocessAudio: Bool { didSet { markCustomQualityAndSave() } }
     @Published var vadFilter: Bool { didSet { markCustomQualityAndSave() } }
     @Published var removeEmptySegments: Bool { didSet { markCustomQualityAndSave() } }
@@ -572,6 +575,7 @@ final class AppSettingsStore: ObservableObject {
         translationChunkMode = TranslationChunkMode(rawValue: defaults.string(forKey: "translationChunkMode") ?? "") ?? .balanced
         translationParallelism = max(1, min(4, defaults.object(forKey: "translationParallelism") as? Int ?? 2))
         lastExportDirectory = defaults.string(forKey: "lastExportDirectory") ?? ""
+        downloadDirectory = defaults.string(forKey: "downloadDirectory") ?? ""
         preprocessAudio = defaults.object(forKey: "preprocessAudio") as? Bool ?? true
         vadFilter = defaults.object(forKey: "vadFilter") as? Bool ?? true
         removeEmptySegments = defaults.object(forKey: "removeEmptySegments") as? Bool ?? true
@@ -721,6 +725,7 @@ final class AppSettingsStore: ObservableObject {
         defaults.set(translationChunkMode.rawValue, forKey: "translationChunkMode")
         defaults.set(translationParallelism, forKey: "translationParallelism")
         defaults.set(lastExportDirectory, forKey: "lastExportDirectory")
+        defaults.set(downloadDirectory, forKey: "downloadDirectory")
         defaults.set(preprocessAudio, forKey: "preprocessAudio")
         defaults.set(vadFilter, forKey: "vadFilter")
         defaults.set(removeEmptySegments, forKey: "removeEmptySegments")
@@ -763,6 +768,14 @@ final class AppSettingsStore: ObservableObject {
                 secretPersistenceError = "The Google API key could not be saved to Keychain. Cue will retry; the key may be lost if the app quits first."
             }
         }
+    }
+
+    /// The folder yt-dlp writes into, with the stored path taking priority
+    /// over the built-in default and `~` expanded.
+    var resolvedDownloadDirectory: URL {
+        let trimmed = downloadDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return MediaDownloadService.defaultDirectory() }
+        return URL(fileURLWithPath: (trimmed as NSString).expandingTildeInPath, isDirectory: true)
     }
 
     func resetTranslationPrompt() {

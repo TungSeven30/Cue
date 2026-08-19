@@ -4,7 +4,7 @@ import Testing
 
 struct EnvironmentDiagnosticsTests {
     @Test func nothingIsRequiredForNativeOrAutoBackend() {
-        let allProbeIDs = ["ffmpeg", "python3", "mlx-whisper", "faster-whisper", "qwen3-asr"]
+        let allProbeIDs = ["ffmpeg", "yt-dlp", "python3", "mlx-whisper", "faster-whisper", "qwen3-asr"]
         for backend in [WhisperBackend.native, .auto] {
             for id in allProbeIDs {
                 #expect(!EnvironmentDiagnosticsService.isRequired(diagnosticID: id, selectedBackend: backend))
@@ -40,6 +40,8 @@ struct EnvironmentDiagnosticsTests {
         // on — pin them so the seam cannot drift silently.
         let ids = Set(diagnostics.map(\.id))
         #expect(ids.isSuperset(of: ["mlx-whisper", "faster-whisper", "qwen3-asr"]))
+        // yt-dlp backs Add from URL and must never be a required probe.
+        #expect(ids.contains("yt-dlp"))
     }
 
     @Test func translationKeyRowPassesForLocalProvider() async throws {

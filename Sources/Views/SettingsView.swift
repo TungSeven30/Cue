@@ -44,6 +44,7 @@ struct SettingsView: View {
                     }
                 }
                 .help("Runs after the last queued job completes — useful for overnight batches")
+                downloadFolderControl
                 Toggle("Show the Cue icon in the menu bar", isOn: $showMenuBarExtra)
                 Toggle("Show advanced transcription controls", isOn: $settings.showAdvancedControls)
                 if settings.showAdvancedControls {
@@ -248,6 +249,36 @@ struct SettingsView: View {
                 loadLocalModels()
             }
         }
+    }
+
+    /// Where File > Add from URL saves what yt-dlp fetches. The downloaded
+    /// file is the job's source for good — sidecar export writes beside it —
+    /// so this is a real destination the user picks, not a cache location.
+    private var downloadFolderControl: some View {
+        LabeledContent("Downloads folder") {
+            HStack(spacing: 8) {
+                Text(settings.resolvedDownloadDirectory.path(percentEncoded: false))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                Button("Choose…") {
+                    let panel = NSOpenPanel()
+                    panel.canChooseDirectories = true
+                    panel.canChooseFiles = false
+                    panel.allowsMultipleSelection = false
+                    panel.prompt = "Use Folder"
+                    panel.message = "Choose where Add from URL saves downloaded videos."
+                    if panel.runModal() == .OK, let url = panel.url {
+                        settings.downloadDirectory = url.path
+                    }
+                }
+                if !settings.downloadDirectory.isEmpty {
+                    Button("Reset") { settings.downloadDirectory = "" }
+                }
+            }
+        }
+        .help("Add from URL (⌘L) downloads with yt-dlp into this folder, then queues the file")
     }
 
     private var localServerControls: some View {

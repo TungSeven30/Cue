@@ -57,6 +57,10 @@ xcrun stapler validate "$DMG"
 mkdir -p "$ARCHIVE_DIR"
 cp "$DMG" "$ARCHIVE_DIR/Cue-$VERSION.dmg"
 
+# The unversioned alias left by an earlier run collides with the versioned
+# archive during appcast generation; it is re-created below, after generation.
+rm -f "$ARCHIVE_DIR/Cue.dmg"
+
 "$APPCAST_TOOL" "$ARCHIVE_DIR" --download-url-prefix "$DOWNLOAD_PREFIX"
 
 # Rolling "stable" release holds every DMG so one URL prefix covers all.

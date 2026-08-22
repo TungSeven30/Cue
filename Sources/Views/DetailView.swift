@@ -476,29 +476,37 @@ private struct HeaderCard: View {
     }
 
     private var summaryRow: some View {
-        HStack(spacing: 10) {
-            Button {
-                model.generateSummaryNow()
-            } label: {
-                Label(
-                    model.currentJob?.summary == nil ? "Write Intro Summary" : "Redo Intro Summary",
-                    systemImage: "sparkles"
-                )
-            }
-            .disabled(!model.canGenerateSummary)
-            .help("Ask the translation LLM for a spoiler-free intro, shown as the first cue of SRT/VTT exports")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Button {
+                    model.generateSummaryNow()
+                } label: {
+                    Label(
+                        model.currentJob?.summary == nil ? "Write Intro Summary" : "Redo Intro Summary",
+                        systemImage: "sparkles"
+                    )
+                }
+                .disabled(!model.canGenerateSummary)
+                .help("Ask the translation LLM for a spoiler-free intro, shown as the first cue of SRT/VTT exports")
 
-            if model.isGeneratingSummary {
-                ProgressView()
-                    .controlSize(.small)
-            } else if let summary = model.currentJob?.summary {
+                if model.isGeneratingSummary {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Spacer(minLength: 0)
+            }
+
+            // Full width, wrapped over several lines: the summary is a paragraph, not a label.
+            if !model.isGeneratingSummary, let summary = model.currentJob?.summary {
                 Text(summary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .textSelection(.enabled)
+                    .lineLimit(6)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .help(summary)
             }
-            Spacer(minLength: 0)
         }
     }
 }

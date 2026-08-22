@@ -135,10 +135,11 @@ struct LocalModelCatalogTests {
         #expect(models.count == 2)
         #expect(models.allSatisfy { $0.availability == .advertised })
         let requests = await client.capturedRequests()
-        #expect(requests.map(\.url?.absoluteString) == [
-            "http://localhost:11434/api/v1/models",
-            "http://localhost:11434/v1/models",
-        ])
+        #expect(
+            requests.map(\.url?.absoluteString) == [
+                "http://localhost:11434/api/v1/models",
+                "http://localhost:11434/v1/models",
+            ])
     }
 
     @Test func fetchFallsBackWhenAnotherServerUsesADifferentModelsEnvelope() async throws {

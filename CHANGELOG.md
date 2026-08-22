@@ -3,7 +3,7 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
-## Unreleased
+## 2.4.0 — 2026-08-22
 
 - Added **Add from URL** (⌘L): paste or drop a video page link and Cue fetches
   it with yt-dlp into a Downloads folder you choose, then queues it as an
@@ -15,8 +15,19 @@ here for the version being released and uses it as the GitHub release notes.
   `<name>.cue.json` manifest that the next stage reads, so runs chain and stay
   scriptable; `--json` prints the manifest on stdout while progress goes to
   stderr. Settings and API keys come from the app's own Settings and Keychain.
+- Added **subtitle import**: existing SRT/WebVTT sidecars sitting next to the
+  media are detected on add and adopted into the matching transcript and
+  translation slots (routed by language code), so jobs that already have
+  subtitles skip ASR entirely and go straight to translation or export.
+- Added a **Load Subtitles…** command (⌘⇧O) that loads a subtitle from any
+  folder into a chosen slot — with an import-time backup, a provenance banner,
+  automatic write-back of edits to the imported file, and safeguards so sidecar
+  exports never overwrite the original. Imported files keep UTF-8, UTF-16, and
+  Windows-1252 encodings working.
 - `cue translate` also accepts an existing `.srt`/`.vtt` file, so subtitles Cue
   did not produce can be translated without re-transcribing.
+- The intro summary in the job detail header now wraps over several lines and
+  its text can be selected.
 
 ## 2.3.6 — 2026-08-13
 

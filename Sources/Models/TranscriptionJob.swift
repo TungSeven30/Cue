@@ -1,5 +1,72 @@
 import Foundation
 
+/// Where a job's subtitles were imported from, and enough file state to tell
+/// whether that file has changed under us since. Automatic write-back depends
+/// on this: overwriting a file someone edited elsewhere would destroy their
+/// work silently.
+struct ImportedSubtitleSource: Codable, Hashable {
+    var path: String
+    var importedAt: Date
+    /// Always `.srt` or `.vtt`; the other export formats are never parsed.
+    var format: SubtitleExportFormat
+    var fileSize: Int
+    var modifiedAt: Date
+    /// The one-time `.bak` of the untouched original has been taken.
+    var didBackup: Bool
+    /// Set when the file changed outside Cue; stops write-back until the user
+    /// unlinks or re-imports.
+    var syncPaused: Bool
+    var lastSyncError: String?
+
+    var url: URL {
+        URL(filePath: path, directoryHint: .notDirectory)
+    }
+
+    var fileName: String {
+        url.lastPathComponent
+    }
+
+    init?(url: URL, format: SubtitleExportFormat) {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+            let size = values.fileSize,
+            let modified = values.contentModificationDate
+        else { return nil }
+        self.path = url.path
+        self.importedAt = Date()
+        self.format = format
+        self.fileSize = size
+        self.modifiedAt = modified
+        self.didBackup = false
+        self.syncPaused = false
+        self.lastSyncError = nil
+    }
+
+    /// True when the file on disk is byte-count and mtime identical to what we
+    /// recorded. A missing file reads as changed.
+    func matchesFileOnDisk() -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+            let size = values.fileSize,
+            let modified = values.contentModificationDate
+        else { return false }
+        // The 1 ms tolerance is for the recorded date's JSON round trip: it is
+        // persisted as a Double, which loses the sub-microsecond precision the
+        // filesystem reports, so an exact comparison would call every file
+        // "changed" after a relaunch.
+        return size == fileSize && abs(modified.timeIntervalSince(modifiedAt)) < 0.001
+    }
+
+    /// Re-baselines after Cue itself writes the file, so the next edit does not
+    /// mistake our own write for an external one.
+    mutating func refreshFileState() {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+            let size = values.fileSize,
+            let modified = values.contentModificationDate
+        else { return }
+        fileSize = size
+        modifiedAt = modified
+    }
+}
+
 struct TranscriptionJob: Codable, Identifiable, Hashable {
     var id: UUID
     var sourcePath: String
@@ -30,6 +97,9 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
     /// When set, the job is hidden from the default sidebar views and
     /// skipped by the queue; its JSON stays on disk.
     var archivedAt: Date?
+    /// Set when the transcript came from a subtitle file rather than a run.
+    var importedTranscriptSource: ImportedSubtitleSource?
+    var importedTranslationSource: ImportedSubtitleSource?
 
     var sourceURL: URL {
         // .notDirectory skips the lstat that URL(fileURLWithPath:) performs to
@@ -67,6 +137,8 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         self.origin = .manual
         self.orderIndex = -now.timeIntervalSince1970
         self.archivedAt = nil
+        self.importedTranscriptSource = nil
+        self.importedTranslationSource = nil
     }
 
     init(from decoder: Decoder) throws {
@@ -93,6 +165,19 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         origin = try container.decodeIfPresent(JobOrigin.self, forKey: .origin) ?? .manual
         orderIndex = try container.decodeIfPresent(Double.self, forKey: .orderIndex) ?? -createdAt.timeIntervalSince1970
         archivedAt = try container.decodeIfPresent(Date.self, forKey: .archivedAt)
+        importedTranscriptSource = try container.decodeIfPresent(ImportedSubtitleSource.self, forKey: .importedTranscriptSource)
+        importedTranslationSource = try container.decodeIfPresent(ImportedSubtitleSource.self, forKey: .importedTranslationSource)
+    }
+
+    func importedSource(for slot: SubtitleSidecarScanner.Slot) -> ImportedSubtitleSource? {
+        slot == .transcript ? importedTranscriptSource : importedTranslationSource
+    }
+
+    mutating func setImportedSource(_ source: ImportedSubtitleSource?, for slot: SubtitleSidecarScanner.Slot) {
+        switch slot {
+        case .transcript: importedTranscriptSource = source
+        case .translation: importedTranslationSource = source
+        }
     }
 
     /// Whether an auto-archive pass should tuck this job away: terminal

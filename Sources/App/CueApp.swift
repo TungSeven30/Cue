@@ -57,6 +57,12 @@ struct CueApp: App {
                 }
                 .keyboardShortcut("l")
 
+                Button("Load Subtitles…") {
+                    model.presentSubtitleLoadPanel()
+                }
+                .disabled(!model.canLoadSubtitles)
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+
                 Button("Start All") {
                     model.startAllPendingJobs()
                 }

@@ -25,6 +25,9 @@ final class AppModel: ObservableObject {
     /// job is identified by a file that does not exist until a fetch lands.
     @Published private(set) var downloads: [MediaDownload] = []
     private var downloadTasks: [UUID: Task<Void, Never>] = [:]
+    /// Non-nil while the offer-to-install-yt-dlp sheet is up.
+    @Published var ytDlpInstallRequest: YtDlpInstallRequest?
+    private var ytDlpInstallTask: Task<Void, Never>?
     /// Set when a subtitle file has been parsed and needs a slot chosen.
     @Published var subtitleLoadRequest: SubtitleLoadRequest?
     /// nil = not yet checked; cached until Recheck (spec §3.1).
@@ -109,8 +112,10 @@ final class AppModel: ObservableObject {
     private func updateProcessingActivity() {
         // Downloads keep the assertion alive too: a long fetch is exactly
         // the kind of unattended work idle sleep would otherwise stall,
-        // even though it occupies no pipeline slot.
-        if isProcessing || downloads.contains(where: { !$0.state.isFailed }) {
+        // even though it occupies no pipeline slot. A brew install of
+        // yt-dlp counts for the same reason.
+        let isInstallingYtDlp = ytDlpInstallTask != nil && ytDlpInstallRequest?.phase.isFailed == false
+        if isProcessing || isInstallingYtDlp || downloads.contains(where: { !$0.state.isFailed }) {
             guard processingActivity == nil else { return }
             processingActivity = ProcessInfo.processInfo.beginActivity(
                 options: [.userInitiated, .idleSystemSleepDisabled],
@@ -1131,17 +1136,25 @@ final class AppModel: ObservableObject {
             presentDownloadError(MediaDownloadError.notAWebURL(text.trimmingCharacters(in: .whitespacesAndNewlines)))
             return
         }
-        startDownload(MediaDownload(pageURL: url))
+        startRemoteMediaDownload(pageURL: url)
+    }
+
+    /// One gate for every URL entry point (the ⌘L dialog and the sidebar
+    /// drop): a missing yt-dlp becomes an offer to install it in place, not
+    /// a dead-end error row.
+    private func startRemoteMediaDownload(pageURL: URL) {
+        guard MediaDownloadService.isAvailable else {
+            presentYtDlpOffer(pageURL: pageURL)
+            return
+        }
+        startDownload(MediaDownload(pageURL: pageURL))
     }
 
     /// Asks for a URL, pre-filling anything web-shaped already on the
     /// clipboard — pasting a link is the whole interaction, so requiring a
-    /// second ⌘V would be the only friction left.
+    /// second ⌘V would be the only friction left. Availability is checked
+    /// after Download, where a missing yt-dlp can become an install offer.
     func promptForRemoteMedia() {
-        guard MediaDownloadService.isAvailable else {
-            presentDownloadError(MediaDownloadError.toolMissing)
-            return
-        }
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
         field.placeholderString = "https://…"
         if let clipboard = NSPasteboard.general.string(forType: .string),
@@ -1181,6 +1194,100 @@ final class AppModel: ObservableObject {
         guard let existing = downloads.first(where: { $0.id == id }), existing.state.isFailed else { return }
         downloads.removeAll { $0.id == id }
         startDownload(MediaDownload(pageURL: existing.pageURL))
+    }
+
+    // MARK: yt-dlp install
+
+    /// Explains the missing tool and offers to install it. With Homebrew
+    /// present the offer is one click; without it, the manual path is the
+    /// only honest answer.
+    private func presentYtDlpOffer(pageURL: URL?) {
+        let alert = NSAlert()
+        alert.messageText = "yt-dlp is needed for web downloads"
+        if YtDlpInstaller.homebrewURL() != nil {
+            alert.informativeText =
+                "Cue fetches video pages with yt-dlp, which is not installed yet. Install it now with Homebrew? The download is small and your link starts fetching as soon as it finishes."
+            alert.addButton(withTitle: "Install yt-dlp")
+            alert.addButton(withTitle: "Not Now")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            beginYtDlpInstall(pageURL: pageURL)
+        } else {
+            alert.informativeText =
+                "Cue fetches video pages with yt-dlp, which is installed with Homebrew. Get Homebrew from brew.sh, run `brew install yt-dlp` in Terminal, then try the link again."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+    }
+
+    /// Starts (or retries) an in-app Homebrew install of yt-dlp. A retry
+    /// replaces a failed attempt; a request that is already running is left
+    /// alone so two entry points can't double-start brew.
+    func beginYtDlpInstall(pageURL: URL?) {
+        guard YtDlpInstaller.homebrewURL() != nil else {
+            presentDownloadError(YtDlpInstallError.homebrewMissing)
+            return
+        }
+        if var request = ytDlpInstallRequest {
+            guard request.phase.isFailed else { return }
+            request.phase = .running
+            request.detailLines = []
+            if let pageURL { request.pageURL = pageURL }
+            ytDlpInstallRequest = request
+        } else {
+            ytDlpInstallRequest = YtDlpInstallRequest(pageURL: pageURL)
+        }
+        ytDlpInstallTask?.cancel()
+        ytDlpInstallTask = Task { [weak self] in
+            await self?.runYtDlpInstall()
+        }
+        updateProcessingActivity()
+    }
+
+    func cancelYtDlpInstall() {
+        ytDlpInstallTask?.cancel()
+        ytDlpInstallTask = nil
+        ytDlpInstallRequest = nil
+        updateProcessingActivity()
+    }
+
+    private func runYtDlpInstall() async {
+        do {
+            try await YtDlpInstaller().install { [weak self] detail in
+                self?.appendYtDlpInstallDetail(detail)
+            }
+            guard !Task.isCancelled else { return }
+            let pending = ytDlpInstallRequest?.pageURL
+            ytDlpInstallTask = nil
+            ytDlpInstallRequest = nil
+            updateProcessingActivity()
+            // Refresh the setup guide's rows so its yt-dlp entry flips to
+            // passed without the user having to press Check Again.
+            runDiagnostics()
+            if let pending {
+                startDownload(MediaDownload(pageURL: pending))
+            }
+        } catch {
+            guard !(error is CancellationError), !Task.isCancelled else { return }
+            updateYtDlpInstallRequest { $0.phase = .failed(error.localizedDescription) }
+        }
+    }
+
+    private func appendYtDlpInstallDetail(_ line: String) {
+        updateYtDlpInstallRequest { request in
+            request.detailLines.append(line)
+            // The sheet shows a bounded tail; brew's full log outlives it in
+            // Terminal only when something goes wrong and we surface the
+            // stderr tail in the failure phase anyway.
+            if request.detailLines.count > 6 {
+                request.detailLines.removeFirst(request.detailLines.count - 6)
+            }
+        }
+    }
+
+    private func updateYtDlpInstallRequest(_ mutate: (inout YtDlpInstallRequest) -> Void) {
+        guard var request = ytDlpInstallRequest else { return }
+        mutate(&request)
+        ytDlpInstallRequest = request
     }
 
     private func startDownload(_ download: MediaDownload) {

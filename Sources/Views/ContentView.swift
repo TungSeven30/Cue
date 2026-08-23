@@ -24,6 +24,9 @@ struct ContentView: View {
             SubtitleSlotPickerView(request: request)
                 .environmentObject(model)
         }
+        .sheet(item: $model.ytDlpInstallRequest) { _ in
+            YtDlpInstallSheetView(model: model)
+        }
         .sheet(
             item: Binding(
                 get: { model.overridesEditorJobID.flatMap { id in model.jobs.first { $0.id == id } } },

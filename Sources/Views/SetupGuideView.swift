@@ -25,7 +25,7 @@ struct SetupGuideView: View {
             }
 
             Text(
-                "Cue works out of the box. The items below are optional engines and features. To add one, open Terminal (Applications → Utilities), paste its command, press Return, and wait for it to finish. Then come back and hit Check Again."
+                "Cue works out of the box. The items below are optional engines and features — yt-dlp can install itself right here; for the rest, open Terminal (Applications → Utilities), paste its command, press Return, and wait for it to finish. Then come back and hit Check Again."
             )
             .font(.callout)
             .foregroundStyle(.secondary)
@@ -133,6 +133,17 @@ struct SetupGuideView: View {
                             .padding(.vertical, 4)
                             .background(.background.secondary, in: RoundedRectangle(cornerRadius: 5))
                         copyButton(command)
+                        // yt-dlp is the one optional tool Cue can install
+                        // itself; every other row stays copy-and-paste.
+                        if diagnostic.id == "yt-dlp", YtDlpInstaller.homebrewURL() != nil {
+                            Button {
+                                model.beginYtDlpInstall(pageURL: nil)
+                            } label: {
+                                Label("Install", systemImage: "arrow.down.circle")
+                            }
+                            .font(.caption)
+                            .help("Install yt-dlp without leaving Cue")
+                        }
                         Spacer()
                     }
                 }

@@ -3,6 +3,14 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
+## Unreleased
+
+- Add from URL no longer dead-ends when **yt-dlp** is missing: Cue offers to
+  install it with Homebrew right in the app, shows brew's progress in a
+  sheet, and starts fetching your link automatically once it lands. Without
+  Homebrew you get exact manual instructions instead of a bare error. The
+  setup guide's yt-dlp row gained the same Install button.
+
 ## 2.4.0 — 2026-08-22
 
 - Added **Add from URL** (⌘L): paste or drop a video page link and Cue fetches

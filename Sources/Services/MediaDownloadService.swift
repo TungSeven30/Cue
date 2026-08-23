@@ -271,8 +271,9 @@ struct MediaDownloadService: Sendable {
 
 /// Holds the in-flight Process so the cancellation handler (which must be
 /// Sendable and runs concurrently) can terminate it. Mirrors the boxes in
-/// TranscriptionService and BurnInService.
-private final class DownloadProcessBox: @unchecked Sendable {
+/// TranscriptionService and BurnInService. Shared with YtDlpInstaller,
+/// which needs the same terminate-then-escalate semantics for brew.
+final class DownloadProcessBox: @unchecked Sendable {
     private let lock = NSLock()
     private var storedProcess: Process?
 

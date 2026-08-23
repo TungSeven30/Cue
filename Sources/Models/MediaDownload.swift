@@ -47,3 +47,27 @@ struct MediaDownload: Identifiable, Hashable {
         return nil
     }
 }
+
+/// The offer-to-install flow for a missing yt-dlp, presented as a sheet
+/// while Homebrew runs. `pageURL` remembers the fetch that triggered the
+/// install so it starts automatically once the tool is ready.
+struct YtDlpInstallRequest: Identifiable {
+    enum Phase: Equatable {
+        case running
+        case failed(String)
+
+        var isFailed: Bool {
+            if case .failed = self { return true }
+            return false
+        }
+    }
+
+    let id = UUID()
+    var pageURL: URL?
+    var phase: Phase = .running
+    var detailLines: [String] = []
+
+    init(pageURL: URL?) {
+        self.pageURL = pageURL
+    }
+}

@@ -12,8 +12,14 @@ enum TranslationProvider: Equatable, Sendable {
     case local
     /// OpenRouter's multi-provider gateway. Selected by the "openrouter/"
     /// model-name prefix; the rest of the name is the catalog id
-    /// (e.g. openrouter/qwen/qwen3.7-max).
+    /// (e.g. openrouter/qwen/qwen3.8-max).
     case openRouter
+    /// GroqCloud's OpenAI-compatible inference API. Selected by the "groq/"
+    /// model-name prefix (e.g. groq/openai/gpt-oss-120b).
+    case groq
+    /// Cerebras Inference's OpenAI-compatible API. Selected by the
+    /// "cerebras/" model-name prefix (e.g. cerebras/gpt-oss-120b).
+    case cerebras
 
     static func infer(from model: String) -> TranslationProvider {
         let normalized = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -29,6 +35,12 @@ enum TranslationProvider: Equatable, Sendable {
         if normalized.hasPrefix("openrouter/") {
             return .openRouter
         }
+        if normalized.hasPrefix("groq/") {
+            return .groq
+        }
+        if normalized.hasPrefix("cerebras/") {
+            return .cerebras
+        }
         return .openai
     }
 
@@ -39,6 +51,8 @@ enum TranslationProvider: Equatable, Sendable {
         case .google: return "Google"
         case .local: return "Local server"
         case .openRouter: return "OpenRouter"
+        case .groq: return "Groq"
+        case .cerebras: return "Cerebras"
         }
     }
 }
@@ -682,48 +696,56 @@ struct TranslationService: Sendable {
             // (an empty remainder is fine; LM Studio ignores the model field
             // when a single model is loaded).
             let wireModel = Self.removingRoutingPrefix("local/", from: model)
-            request.httpBody = try JSONEncoder().encode(
-                ChatCompletionsRequest(
-                    model: wireModel,
-                    messages: [
-                        .init(role: "system", content: systemPrompt),
-                        .init(role: "user", content: userText),
-                    ],
-                    response_format: .init(
-                        type: "json_schema",
-                        json_schema: .init(name: schemaName, strict: true, schema: schema)
-                    ),
-                    stream: false
-                )
+            request.httpBody = try Self.encodeChatCompletionsBody(
+                model: wireModel,
+                systemPrompt: systemPrompt,
+                userText: userText,
+                schemaName: schemaName,
+                schema: schema
             )
-        case .openRouter:
-            request = URLRequest(url: URL(string: "https://openrouter.ai/api/v1/chat/completions")!)
+        case .openRouter, .groq, .cerebras:
+            let url: URL
+            let prefix: String
+            let example: String
+            var extraHeaders: [(String, String)] = []
+            if provider == .openRouter {
+                url = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
+                prefix = "openrouter/"
+                example = "openrouter/qwen/qwen3.8-max"
+                extraHeaders = [
+                    // Attribution headers OpenRouter asks apps to send;
+                    // optional but they identify traffic in the dashboard.
+                    ("HTTP-Referer", "https://github.com/TungSeven30/Cue"),
+                    ("X-Title", "Cue"),
+                ]
+            } else if provider == .groq {
+                url = URL(string: "https://api.groq.com/openai/v1/chat/completions")!
+                prefix = "groq/"
+                example = "groq/openai/gpt-oss-120b"
+            } else {
+                url = URL(string: "https://api.cerebras.ai/v1/chat/completions")!
+                prefix = "cerebras/"
+                example = "cerebras/gpt-oss-120b"
+            }
+            request = URLRequest(url: url)
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-            // Attribution headers OpenRouter asks apps to send; optional but
-            // harmless and they identify traffic in the user's dashboard.
-            request.setValue("https://github.com/TungSeven30/Cue", forHTTPHeaderField: "HTTP-Referer")
-            request.setValue("Cue", forHTTPHeaderField: "X-Title")
-            // The "openrouter/" prefix is routing-only; the remainder is the
-            // catalog id the gateway expects on the wire.
-            let wireModel = Self.removingRoutingPrefix("openrouter/", from: model)
+            for (header, value) in extraHeaders {
+                request.setValue(value, forHTTPHeaderField: header)
+            }
+            // The routing prefix is Cue-only; the remainder is the id the
+            // provider expects on the wire.
+            let wireModel = Self.removingRoutingPrefix(prefix, from: model)
             guard !wireModel.isEmpty else {
                 throw TranslationServiceError.fatalAPIError(
-                    "Set an OpenRouter model id after the openrouter/ prefix (e.g. openrouter/qwen/qwen3.7-max), or pick one via Browse OpenRouter Models in Settings."
+                    "Set a \(provider.label) model id after the \(prefix) prefix (e.g. \(example))."
                 )
             }
-            request.httpBody = try JSONEncoder().encode(
-                ChatCompletionsRequest(
-                    model: wireModel,
-                    messages: [
-                        .init(role: "system", content: systemPrompt),
-                        .init(role: "user", content: userText),
-                    ],
-                    response_format: .init(
-                        type: "json_schema",
-                        json_schema: .init(name: schemaName, strict: true, schema: schema)
-                    ),
-                    stream: false
-                )
+            request.httpBody = try Self.encodeChatCompletionsBody(
+                model: wireModel,
+                systemPrompt: systemPrompt,
+                userText: userText,
+                schemaName: schemaName,
+                schema: schema
             )
         }
         request.httpMethod = "POST"
@@ -732,6 +754,29 @@ struct TranslationService: Sendable {
         // big local models on big chunks can exceed even the cloud 300s.
         request.timeoutInterval = provider == .local ? 600 : 300
         return request
+    }
+
+    private static func encodeChatCompletionsBody(
+        model: String,
+        systemPrompt: String,
+        userText: String,
+        schemaName: String,
+        schema: JSONValue
+    ) throws -> Data {
+        try JSONEncoder().encode(
+            ChatCompletionsRequest(
+                model: model,
+                messages: [
+                    .init(role: "system", content: systemPrompt),
+                    .init(role: "user", content: userText),
+                ],
+                response_format: .init(
+                    type: "json_schema",
+                    json_schema: .init(name: schemaName, strict: true, schema: schema)
+                ),
+                stream: false
+            )
+        )
     }
 
     private static func removingRoutingPrefix(_ prefix: String, from model: String) -> String {
@@ -778,7 +823,7 @@ struct TranslationService: Sendable {
                 )
             }
             return decoded.outputText
-        case .local, .openRouter:
+        case .local, .openRouter, .groq, .cerebras:
             let decoded = try JSONDecoder().decode(ChatCompletionsEnvelope.self, from: data)
             guard let choice = decoded.choices?.first else {
                 // Some local servers (LM Studio among them) report errors as a

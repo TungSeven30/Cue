@@ -10,6 +10,8 @@ struct OpenRouterProviderTests {
         #expect(TranslationProvider.infer(from: "claude-opus-5") == .anthropic)
         #expect(TranslationProvider.infer(from: "local/qwen3.6-35b") == .local)
         #expect(TranslationProvider.infer(from: "gpt-5.6-sol") == .openai)
+        #expect(TranslationProvider.infer(from: "groq/openai/gpt-oss-120b") == .groq)
+        #expect(TranslationProvider.infer(from: "cerebras/gpt-oss-120b") == .cerebras)
     }
 
     @Test func requestTargetsOpenRouterWithStrippedModel() throws {

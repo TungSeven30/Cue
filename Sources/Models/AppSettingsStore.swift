@@ -345,22 +345,30 @@ enum AppSettingPresets {
         SettingsPreset(label: "Vietnamese", value: "Vietnamese"),
     ]
 
-    // The provider (OpenAI, Anthropic, Google) is inferred from the model
-    // name; each provider uses its own API key from Settings.
+    // The provider (OpenAI, Anthropic, Google, OpenRouter, Groq, Cerebras)
+    // is inferred from the model name; each provider uses its own API key
+    // from Settings.
     static let translationModels: [SettingsPreset] = [
         SettingsPreset(label: "GPT-5.6 Sol", value: "gpt-5.6-sol"),
         SettingsPreset(label: "GPT-5.6 Terra", value: "gpt-5.6-terra"),
         SettingsPreset(label: "GPT-5.6 Luna", value: "gpt-5.6-luna"),
         SettingsPreset(label: "GPT-5.5", value: "gpt-5.5"),
+        SettingsPreset(label: "Claude Fable 5", value: "claude-fable-5"),
         SettingsPreset(label: "Claude Opus 5", value: "claude-opus-5"),
         SettingsPreset(label: "Claude Sonnet 5", value: "claude-sonnet-5"),
         SettingsPreset(label: "Claude Haiku 4.5", value: "claude-haiku-4-5"),
         SettingsPreset(label: "Gemini 3.1 Pro", value: "gemini-3.1-pro-preview"),
         SettingsPreset(label: "Gemini 3.6 Flash", value: "gemini-3.6-flash"),
         SettingsPreset(label: "Gemini 3.5 Flash-Lite", value: "gemini-3.5-flash-lite"),
+        SettingsPreset(label: "Groq: GPT-OSS 120B", value: "groq/openai/gpt-oss-120b"),
+        SettingsPreset(label: "Groq: GPT-OSS 20B", value: "groq/openai/gpt-oss-20b"),
+        SettingsPreset(label: "Groq: Qwen 3.8 27B", value: "groq/qwen/qwen3.8-27b"),
+        SettingsPreset(label: "Cerebras: GPT-OSS 120B", value: "cerebras/gpt-oss-120b"),
+        SettingsPreset(label: "Cerebras: Gemma 4 31B", value: "cerebras/gemma-4-31b"),
         SettingsPreset(label: "Local server (LM Studio / Ollama)", value: "local/"),
-        SettingsPreset(label: "OpenRouter: Qwen 3.7 Max", value: "openrouter/qwen/qwen3.7-max"),
-        SettingsPreset(label: "OpenRouter: Qwen 3.7 Plus", value: "openrouter/qwen/qwen3.7-plus"),
+        SettingsPreset(label: "OpenRouter: Qwen 3.8 Max", value: "openrouter/qwen/qwen3.8-max"),
+        SettingsPreset(label: "OpenRouter: Qwen 3.8 Flash", value: "openrouter/qwen/qwen3.8-flash"),
+        SettingsPreset(label: "OpenRouter: Qwen 3.7 Flash", value: "openrouter/qwen/qwen3.7-flash"),
     ]
 
     static let summaryModels: [SettingsPreset] =
@@ -403,13 +411,15 @@ final class AppSettingsStore: ObservableObject {
         }
     }
     /// The translation model. Despite the name (kept for stored-settings
-    /// compatibility) it can be an OpenAI, Anthropic, or Google model; the
-    /// provider is inferred from the model name.
+    /// compatibility) it can be an OpenAI, Anthropic, Google, OpenRouter,
+    /// Groq, or Cerebras model; the provider is inferred from the model name.
     @Published var openAIModel: String { didSet { save() } }
     @Published var openAIAPIKey: String { didSet { save() } }
     @Published var anthropicAPIKey: String { didSet { save() } }
     @Published var googleAPIKey: String { didSet { save() } }
     @Published var openRouterAPIKey: String { didSet { save() } }
+    @Published var groqAPIKey: String { didSet { save() } }
+    @Published var cerebrasAPIKey: String { didSet { save() } }
     @Published var secretPersistenceError: String? = nil
     /// Base URL of the OpenAI-compatible server used by `local/` models.
     @Published var localTranslationEndpoint: String { didSet { save() } }
@@ -503,6 +513,8 @@ final class AppSettingsStore: ObservableObject {
     private static let anthropicKeyAccount = "anthropicAPIKey"
     private static let googleKeyAccount = "googleAPIKey"
     private static let openRouterKeyAccount = "openRouterAPIKey"
+    private static let groqKeyAccount = "groqAPIKey"
+    private static let cerebrasKeyAccount = "cerebrasAPIKey"
     nonisolated static let mlxTurboModel = "mlx-community/whisper-large-v3-turbo"
     nonisolated static let fasterTurboModel = "large-v3-turbo"
     nonisolated static let qwen3DefaultModel = "Qwen/Qwen3-ASR-1.7B"
@@ -618,6 +630,12 @@ final class AppSettingsStore: ObservableObject {
         let resolvedOpenRouterKey = readSecret(Self.openRouterKeyAccount) ?? ""
         openRouterAPIKey = resolvedOpenRouterKey
         persistedOpenRouterKey = resolvedOpenRouterKey
+        let resolvedGroqKey = readSecret(Self.groqKeyAccount) ?? ""
+        groqAPIKey = resolvedGroqKey
+        persistedGroqKey = resolvedGroqKey
+        let resolvedCerebrasKey = readSecret(Self.cerebrasKeyAccount) ?? ""
+        cerebrasAPIKey = resolvedCerebrasKey
+        persistedCerebrasKey = resolvedCerebrasKey
 
         normalizeModelForSelectedBackend()
         normalizeQualityPresetForSelectedBackend()
@@ -632,6 +650,8 @@ final class AppSettingsStore: ObservableObject {
     private var persistedAnthropicKey = ""
     private var persistedGoogleKey = ""
     private var persistedOpenRouterKey = ""
+    private var persistedGroqKey = ""
+    private var persistedCerebrasKey = ""
 
     var currentTranslationProvider: TranslationProvider {
         TranslationProvider.infer(from: openAIModel)
@@ -673,7 +693,7 @@ final class AppSettingsStore: ObservableObject {
         switch provider {
         case .local:
             return !localTranslationEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case .openai, .anthropic, .google, .openRouter:
+        case .openai, .anthropic, .google, .openRouter, .groq, .cerebras:
             return !translationAPIKey(for: provider).isEmpty
         }
     }
@@ -692,6 +712,8 @@ final class AppSettingsStore: ObservableObject {
         case .anthropic: return anthropicAPIKey
         case .google: return googleAPIKey
         case .openRouter: return openRouterAPIKey
+        case .groq: return groqAPIKey
+        case .cerebras: return cerebrasAPIKey
         // Local servers need no API key.
         case .local: return ""
         }
@@ -766,6 +788,20 @@ final class AppSettingsStore: ObservableObject {
                 persistedGoogleKey = googleAPIKey
             } else {
                 secretPersistenceError = "The Google API key could not be saved to Keychain. Cue will retry; the key may be lost if the app quits first."
+            }
+        }
+        if groqAPIKey != persistedGroqKey {
+            if writeSecret(groqAPIKey, Self.groqKeyAccount) {
+                persistedGroqKey = groqAPIKey
+            } else {
+                secretPersistenceError = "The Groq API key could not be saved to Keychain. Cue will retry; the key may be lost if the app quits first."
+            }
+        }
+        if cerebrasAPIKey != persistedCerebrasKey {
+            if writeSecret(cerebrasAPIKey, Self.cerebrasKeyAccount) {
+                persistedCerebrasKey = cerebrasAPIKey
+            } else {
+                secretPersistenceError = "The Cerebras API key could not be saved to Keychain. Cue will retry; the key may be lost if the app quits first."
             }
         }
     }

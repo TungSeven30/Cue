@@ -136,6 +136,39 @@ struct AppSettingsStoreTests {
         #expect(store.isTranslationReady)
     }
 
+    @Test func groqAndCerebrasReadinessUsesTheirOwnKeys() {
+        let (defaults, name) = makeSuite()
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let store = makeStore(defaults: defaults)
+        store.openAIAPIKey = "sk-openai"
+        store.openAIModel = "groq/openai/gpt-oss-120b"
+        #expect(!store.isTranslationReady)
+        #expect(store.currentTranslationProvider == .groq)
+
+        store.groqAPIKey = "gsk-test"
+        #expect(store.isTranslationReady)
+
+        store.openAIModel = "cerebras/gpt-oss-120b"
+        #expect(!store.isTranslationReady)
+        #expect(store.currentTranslationProvider == .cerebras)
+
+        store.cerebrasAPIKey = "csk-test"
+        #expect(store.isTranslationReady)
+    }
+
+    @Test func translationPresetsIncludeLatestAndFastProviders() {
+        let values = Set(AppSettingPresets.translationModels.map(\.value))
+        #expect(values.contains("claude-fable-5"))
+        #expect(values.contains("openrouter/qwen/qwen3.8-max"))
+        #expect(values.contains("openrouter/qwen/qwen3.8-flash"))
+        #expect(values.contains("openrouter/qwen/qwen3.7-flash"))
+        #expect(values.contains("groq/openai/gpt-oss-120b"))
+        #expect(values.contains("groq/qwen/qwen3.8-27b"))
+        #expect(values.contains("cerebras/gpt-oss-120b"))
+        #expect(values.contains("cerebras/gemma-4-31b"))
+    }
+
     @Test func summaryModelCanDifferFromTranslationAndPersists() {
         let (defaults, name) = makeSuite()
         defer { defaults.removePersistentDomain(forName: name) }

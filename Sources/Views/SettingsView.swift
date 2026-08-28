@@ -147,12 +147,14 @@ struct SettingsView: View {
                     SecureField("Anthropic", text: $settings.anthropicAPIKey)
                     SecureField("Google", text: $settings.googleAPIKey)
                     SecureField("OpenRouter", text: $settings.openRouterAPIKey)
+                    SecureField("Groq", text: $settings.groqAPIKey)
+                    SecureField("Cerebras", text: $settings.cerebrasAPIKey)
                 }
             } header: {
                 Label("Translation", systemImage: "character.bubble")
             } footer: {
                 Text(
-                    "Use any OpenAI (gpt-…), Anthropic (claude-…), Google (gemini-…), or OpenRouter (openrouter/…) model — the provider and API key are chosen from the model name. Keys are stored in the Keychain. A local/… model needs no key — it talks to the OpenAI-compatible server at the Local server URL (LM Studio, Ollama)."
+                    "Use any OpenAI (gpt-…), Anthropic (claude-…), Google (gemini-…), OpenRouter (openrouter/…), Groq (groq/…), or Cerebras (cerebras/…) model — the provider and API key are chosen from the model name. Keys are stored in the Keychain. A local/… model needs no key — it talks to the OpenAI-compatible server at the Local server URL (LM Studio, Ollama)."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -412,6 +414,8 @@ struct SettingsView: View {
         case .google: return "Google model"
         case .local: return "Local server (LM Studio / Ollama)"
         case .openRouter: return "OpenRouter model"
+        case .groq: return "Groq model"
+        case .cerebras: return "Cerebras model"
         }
     }
 

@@ -183,7 +183,10 @@ final class AppModel: ObservableObject {
             self.settings.$localTranslationEndpoint.dropFirst().removeDuplicates().map { _ in () },
             self.settings.$openAIAPIKey.dropFirst().removeDuplicates().map { _ in () },
             self.settings.$anthropicAPIKey.dropFirst().removeDuplicates().map { _ in () },
-            self.settings.$googleAPIKey.dropFirst().removeDuplicates().map { _ in () }
+            self.settings.$googleAPIKey.dropFirst().removeDuplicates().map { _ in () },
+            self.settings.$openRouterAPIKey.dropFirst().removeDuplicates().map { _ in () },
+            self.settings.$groqAPIKey.dropFirst().removeDuplicates().map { _ in () },
+            self.settings.$cerebrasAPIKey.dropFirst().removeDuplicates().map { _ in () }
         )
         .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
         .sink { [weak self] _ in self?.runDiagnostics() }

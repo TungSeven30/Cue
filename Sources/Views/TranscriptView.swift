@@ -4,7 +4,7 @@ struct TranscriptView: View {
     let segments: [TranscriptionSegment]
     let warnings: [SubtitleQualityWarning]
     var activeSegmentID: Int? = nil
-    let onEdit: (TranscriptionSegment, String) -> Void
+    let onEdit: TranscriptSegmentCommit
     var onSeek: ((TranscriptionSegment) -> Void)? = nil
 
     @StateObject private var editSession = TranscriptEditSession()

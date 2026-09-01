@@ -253,7 +253,10 @@ struct DetailView: View {
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     ImportedSubtitleBanner(model: model, slot: .transcript)
-                    segmentList(segments: model.displayTranscriptSegments, onEdit: model.updateTranscriptSegment)
+                    segmentList(
+                        segments: model.displayTranscriptSegments,
+                        onEdit: { segment, text in model.updateTranscriptSegment(segment, text: text) }
+                    )
                 }
             }
         case .translation:
@@ -292,7 +295,10 @@ struct DetailView: View {
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     ImportedSubtitleBanner(model: model, slot: .translation)
-                    segmentList(segments: model.displayTranslatedSegments, onEdit: model.updateTranslatedSegment)
+                    segmentList(
+                        segments: model.displayTranslatedSegments,
+                        onEdit: { segment, text in model.updateTranslatedSegment(segment, text: text) }
+                    )
                 }
             }
         case .log:
@@ -305,7 +311,7 @@ struct DetailView: View {
 
     private func segmentList(
         segments: [TranscriptionSegment],
-        onEdit: @escaping (TranscriptionSegment, String) -> Void
+        onEdit: @escaping TranscriptSegmentCommit
     ) -> some View {
         ScrollViewReader { proxy in
             ScrollView {

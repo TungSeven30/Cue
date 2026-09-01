@@ -65,18 +65,22 @@ private final class TranscriptUndoBridge: NSObject, @unchecked Sendable {
         let text: String
     }
 
+    private weak var undoManager: UndoManager?
+
+    func bind(undoManager: UndoManager) {
+        self.undoManager = undoManager
+    }
+
     func registerSingle(
-        undoManager: UndoManager,
         action: SingleAction,
         commit: @escaping TranscriptSegmentCommit,
         actionName: String
     ) {
-        undoManager.registerUndo(withTarget: self) { bridge in
-            guard let bridge = bridge as? TranscriptUndoBridge else { return }
+        guard let undoManager else { return }
+        undoManager.registerUndo(withTarget: self) { target in
             MainActor.assumeIsolated {
                 commit(action.segment, action.applyText)
-                bridge.registerSingle(
-                    undoManager: undoManager,
+                target.registerSingle(
                     action: SingleAction(
                         segment: action.segment,
                         applyText: action.inverseApplyText,
@@ -91,18 +95,16 @@ private final class TranscriptUndoBridge: NSObject, @unchecked Sendable {
     }
 
     func registerBatch(
-        undoManager: UndoManager,
         action: BatchAction,
         inverse: BatchAction,
         commit: @escaping TranscriptSegmentCommit,
         actionName: String
     ) {
-        undoManager.registerUndo(withTarget: self) { bridge in
-            guard let bridge = bridge as? TranscriptUndoBridge else { return }
+        guard let undoManager else { return }
+        undoManager.registerUndo(withTarget: self) { target in
             MainActor.assumeIsolated {
-                bridge.applyBatch(action, commit: commit)
-                bridge.registerBatch(
-                    undoManager: undoManager,
+                target.applyBatch(action, commit: commit)
+                target.registerBatch(
                     action: inverse,
                     inverse: action,
                     commit: commit,
@@ -134,6 +136,10 @@ final class TranscriptEditSession: ObservableObject {
     private let undoBridge = TranscriptUndoBridge()
     private var editingBaselineText: String?
 
+    init() {
+        undoBridge.bind(undoManager: undoManager)
+    }
+
     /// Test hook: segment IDs currently rendered as TextEditor (at most one).
     var editorSegmentIDs: Set<Int> {
         editingSegmentID.map { [$0] } ?? []
@@ -151,7 +157,7 @@ final class TranscriptEditSession: ObservableObject {
     func endEditing(
         segment: TranscriptionSegment,
         finalText: String,
-        commit: TranscriptSegmentCommit
+        commit: @escaping TranscriptSegmentCommit
     ) {
         defer {
             editingSegmentID = nil
@@ -168,7 +174,7 @@ final class TranscriptEditSession: ObservableObject {
 
     func endEditingIfNeeded(
         segments: [TranscriptionSegment],
-        commit: TranscriptSegmentCommit
+        commit: @escaping TranscriptSegmentCommit
     ) {
         guard let editingSegmentID,
             let segment = segments.first(where: { $0.id == editingSegmentID })
@@ -179,7 +185,7 @@ final class TranscriptEditSession: ObservableObject {
     func applyLiveEdit(
         segment: TranscriptionSegment,
         newText: String,
-        commit: TranscriptSegmentCommit
+        commit: @escaping TranscriptSegmentCommit
     ) {
         guard segment.text != newText else { return }
         commit(segment, newText)
@@ -188,7 +194,7 @@ final class TranscriptEditSession: ObservableObject {
     func replaceAll(
         changes: [TranscriptTextChange],
         segments: [TranscriptionSegment],
-        commit: TranscriptSegmentCommit
+        commit: @escaping TranscriptSegmentCommit
     ) {
         guard !changes.isEmpty else { return }
         let segmentsByID = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
@@ -207,10 +213,9 @@ final class TranscriptEditSession: ObservableObject {
         segment: TranscriptionSegment,
         previousText: String,
         newText: String,
-        commit: TranscriptSegmentCommit
+        commit: @escaping TranscriptSegmentCommit
     ) {
         undoBridge.registerSingle(
-            undoManager: undoManager,
             action: TranscriptUndoBridge.SingleAction(
                 segment: segment,
                 applyText: previousText,
@@ -224,7 +229,7 @@ final class TranscriptEditSession: ObservableObject {
     private func registerBatchUndo(
         changes: [TranscriptTextChange],
         segmentsByID: [Int: TranscriptionSegment],
-        commit: TranscriptSegmentCommit
+        commit: @escaping TranscriptSegmentCommit
     ) {
         let undoApplications = changes.map {
             TranscriptUndoBridge.AppliedSegmentText(segmentID: $0.segmentID, text: $0.previousText)
@@ -234,7 +239,6 @@ final class TranscriptEditSession: ObservableObject {
         }
         let actionName = changes.count == 1 ? "Replace" : "Replace All"
         undoBridge.registerBatch(
-            undoManager: undoManager,
             action: TranscriptUndoBridge.BatchAction(applications: undoApplications, segmentsByID: segmentsByID),
             inverse: TranscriptUndoBridge.BatchAction(applications: redoApplications, segmentsByID: segmentsByID),
             commit: commit,

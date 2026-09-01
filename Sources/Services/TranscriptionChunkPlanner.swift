@@ -28,7 +28,8 @@ enum TranscriptionChunkPlanner {
     ) -> [TranscriptionSegment] {
         guard !batch.isEmpty else { return existing }
         let replaceFrom = batch.map(\.start).min() ?? 0
-        var merged = existing.filter { $0.end <= replaceFrom - 0.01 }
+        // Keep saved cues that end at the resume frontier; drop only cues that extend into the batch.
+        var merged = existing.filter { $0.end <= replaceFrom + 0.01 }
         merged.append(contentsOf: batch)
         return merged
     }

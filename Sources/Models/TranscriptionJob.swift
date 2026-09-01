@@ -337,6 +337,18 @@ extension JobSettingsSnapshot {
             resolved.temperature = params.temperature
             resolved.noSpeechThreshold = params.noSpeechThreshold
         }
+        if let backend = overrides.whisperBackend {
+            resolved.whisperBackend = backend
+        }
+        if let model = overrides.whisperModel {
+            resolved.whisperModel = model
+        }
+        if let source = overrides.translationSourceLanguage {
+            resolved.translationSourceLanguage = source
+        }
+        if let model = overrides.openAIModel {
+            resolved.openAIModel = model
+        }
         return resolved
     }
 

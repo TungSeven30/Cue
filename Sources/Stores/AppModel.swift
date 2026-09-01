@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import Combine
 import Foundation
+import SwiftUI
 import UniformTypeIdentifiers
 import UserNotifications
 
@@ -541,6 +542,108 @@ final class AppModel: ObservableObject {
                 ? "Cleared job-specific settings.\n"
                 : "Set job-specific settings.\n"
         }
+    }
+
+    // MARK: - Selected job card settings
+
+    /// Global defaults layered with the job's override bag — what the header
+    /// card displays and what the next run will resolve to.
+    func resolvedSettings(for job: TranscriptionJob) -> JobSettingsSnapshot {
+        JobSettingsSnapshot(settings: settings).applying(job.overrides)
+    }
+
+    var selectedJobResolvedSettings: JobSettingsSnapshot? {
+        currentJob.map { resolvedSettings(for: $0) }
+    }
+
+    /// Writes an explicit override on the selected job so later default
+    /// changes do not rewrite this film.
+    func updateSelectedJobOverrides(_ mutate: (inout JobSettingsOverrides) -> Void) {
+        guard let id = selectedJobID,
+            let job = currentJob,
+            !job.status.isRunning
+        else { return }
+        var overrides = job.overrides
+        mutate(&overrides)
+        setOverrides(overrides, for: id)
+    }
+
+    func jobCardBinding<T>(
+        get: (JobSettingsSnapshot) -> T,
+        setOverride: (inout JobSettingsOverrides, T, JobSettingsSnapshot) -> Void
+    ) -> Binding<T> {
+        Binding(
+            get: { [unowned self] in
+                guard let resolved = self.selectedJobResolvedSettings else {
+                    return get(JobSettingsSnapshot(settings: self.settings))
+                }
+                return get(resolved)
+            },
+            set: { [unowned self] newValue in
+                let baseline = self.selectedJobResolvedSettings
+                    ?? JobSettingsSnapshot(settings: self.settings)
+                self.updateSelectedJobOverrides { setOverride(&$0, newValue, baseline) }
+            }
+        )
+    }
+
+    var selectedJobTranscriptionValidationMessage: String? {
+        guard let resolved = selectedJobResolvedSettings else { return nil }
+        return AppSettingsStore.transcriptionValidationMessage(
+            backend: resolved.whisperBackend,
+            model: resolved.whisperModel
+        )
+    }
+
+    func repairSelectedJobTranscriptionModel() {
+        guard let resolved = selectedJobResolvedSettings else { return }
+        let repaired = AppSettingsStore.normalizedWhisperModel(
+            for: resolved.whisperBackend,
+            current: resolved.whisperModel,
+            force: true
+        )
+        updateSelectedJobOverrides {
+            $0.transcriptionPreset = .custom
+            $0.whisperBackend = resolved.whisperBackend
+            $0.whisperModel = repaired
+        }
+    }
+
+    var jobCardAutoTranslate: Binding<Bool> {
+        Binding(
+            get: { [unowned self] in
+                self.currentJob?.overrides.autoTranslate ?? self.settings.autoTranslateAfterTranscription
+            },
+            set: { [unowned self] newValue in
+                self.updateSelectedJobOverrides { $0.autoTranslate = newValue }
+            }
+        )
+    }
+
+    var jobCardGenerateSummary: Binding<Bool> {
+        Binding(
+            get: { [unowned self] in
+                self.currentJob?.overrides.generateSummary ?? self.settings.generateSummary
+            },
+            set: { [unowned self] newValue in
+                self.updateSelectedJobOverrides { $0.generateSummary = newValue }
+            }
+        )
+    }
+
+    var jobCardShowsIntroSummaryDetail: Bool {
+        currentJob?.overrides.generateSummary ?? settings.generateSummary
+    }
+
+    var jobCardSummaryDetail: Binding<SummaryDetail> {
+        Binding(
+            get: { [unowned self] in
+                self.currentJob?.overrides.summaryDetail ?? self.settings.summaryDetail
+            },
+            set: { [unowned self] newValue in
+                self.updateSelectedJobOverrides { $0.summaryDetail = newValue }
+            }
+        )
     }
 
     func deleteJob(_ id: UUID) {
@@ -2523,6 +2626,7 @@ final class AppModel: ObservableObject {
         let id = job.id
         let configurations = makeSummaryConfigurations()
 
+        let summaryDetail = job.overrides.summaryDetail ?? settings.summaryDetail
         isGeneratingSummary = true
         Task {
             do {
@@ -2531,7 +2635,7 @@ final class AppModel: ObservableObject {
                     language: language,
                     primary: configurations.primary,
                     fallback: configurations.fallback,
-                    detail: settings.summaryDetail
+                    detail: summaryDetail
                 )
                 updateJob(id) { job in
                     job.summary = result.summary
@@ -2560,12 +2664,15 @@ final class AppModel: ObservableObject {
         language: String,
         for id: UUID
     ) async -> String? {
-        guard settings.generateSummary, !segments.isEmpty else { return nil }
+        guard let job = jobs.first(where: { $0.id == id }) else { return nil }
+        let generateSummary = job.overrides.generateSummary ?? settings.generateSummary
+        guard generateSummary, !segments.isEmpty else { return nil }
         guard settings.isSummaryReady else {
             let reason = settings.modelReadinessReason(settings.resolvedSummaryModel)
             appendLog("Skipped the intro summary because \(reason).", to: id)
             return nil
         }
+        let summaryDetail = job.overrides.summaryDetail ?? settings.summaryDetail
         updateJob(id, debouncePersist: true) { job in
             job.progress = JobProgress(stage: job.progress.stage, detail: "Writing intro summary.", fraction: job.progress.fraction)
         }
@@ -2576,7 +2683,7 @@ final class AppModel: ObservableObject {
                 language: language,
                 primary: configurations.primary,
                 fallback: configurations.fallback,
-                detail: settings.summaryDetail
+                detail: summaryDetail
             )
             if result.usedFallback {
                 appendLog(

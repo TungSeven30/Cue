@@ -80,6 +80,12 @@ struct JobSettingsOverridesTests {
         o.transcriptionQualityPreset = .movieDialogue
         o.translationTargetLanguage = "Vietnamese"
         o.autoTranslate = true
+        o.translationSourceLanguage = "ja"
+        o.openAIModel = "gpt-5.5"
+        o.generateSummary = true
+        o.summaryDetail = .detailed
+        o.whisperBackend = .qwen3ASR
+        o.whisperModel = AppSettingsStore.qwen3DefaultModel
         let data = try JSONEncoder().encode(o)
         let back = try JSONDecoder().decode(JobSettingsOverrides.self, from: data)
         #expect(back == o)
@@ -216,6 +222,25 @@ struct SnapshotResolutionTests {
     // A translation run must not rewrite the record of which settings
     // produced the transcript, or a later skip check would trust a
     // transcript the current model never made.
+    @Test func directBackendAndModelOverridesWinAfterPreset() throws {
+        var o = JobSettingsOverrides()
+        o.transcriptionPreset = .builtIn
+        o.whisperBackend = .mlxWhisper
+        o.whisperModel = AppSettingsStore.mlxTurboModel
+        let resolved = try makeSnapshot().applying(o)
+        #expect(resolved.whisperBackend == .mlxWhisper)
+        #expect(resolved.whisperModel == AppSettingsStore.mlxTurboModel)
+    }
+
+    @Test func translationAndSummaryOverridesWin() throws {
+        var o = JobSettingsOverrides()
+        o.translationSourceLanguage = "ja"
+        o.openAIModel = "claude-sonnet-4"
+        let resolved = try makeSnapshot().applying(o)
+        #expect(resolved.translationSourceLanguage == "ja")
+        #expect(resolved.openAIModel == "claude-sonnet-4")
+    }
+
     @Test func updatingTranslationFieldsPreservesTranscriptionIdentity() throws {
         let original = try makeSnapshot()
         var o = JobSettingsOverrides()

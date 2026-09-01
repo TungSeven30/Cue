@@ -1606,11 +1606,29 @@ final class AppModel: ObservableObject {
             return
         }
 
+        let canResumeTranscription =
+            !force
+            && jobs[index].importedTranscriptSource == nil
+            && jobs[index].transcriptSegments.isEmpty
+            && !jobs[index].partialTranscriptSegments.isEmpty
+            && jobs[index].sourceFingerprint == currentFingerprint
+            && jobs[index].settings.transcriptionIdentity == resolved.transcriptionIdentity
+
         jobs[index].status = .transcribing
-        jobs[index].progress = JobProgress(stage: .preflight, detail: "Starting transcription.", fraction: 0)
-        jobs[index].translatedSegments = []
-        jobs[index].partialTranslatedSegments = []
-        jobs[index].partialTranscriptSegments = []
+        jobs[index].progress = JobProgress(
+            stage: .preflight,
+            detail: canResumeTranscription ? "Resuming transcription." : "Starting transcription.",
+            fraction: 0
+        )
+        if canResumeTranscription {
+            jobs[index].translatedSegments = []
+            // Keep partialTranslatedSegments so progressive translation can resume.
+        } else {
+            jobs[index].translatedSegments = []
+            jobs[index].partialTranslatedSegments = []
+            jobs[index].partialTranscriptSegments = []
+            jobs[index].transcriptionResumeThrough = 0
+        }
         // The imported files no longer describe this job's contents, so write-
         // back must stop pointing at them — and any write already queued for
         // them must be dropped too, exactly as startTranslationNow does for
@@ -1619,7 +1637,11 @@ final class AppModel: ObservableObject {
         cancelSubtitleSync(jobID: jobID, slot: .translation)
         jobs[index].importedTranscriptSource = nil
         jobs[index].importedTranslationSource = nil
-        jobs[index].transcriptionStartedAt = Date()
+        if canResumeTranscription {
+            jobs[index].transcriptionStartedAt = jobs[index].transcriptionStartedAt ?? Date()
+        } else {
+            jobs[index].transcriptionStartedAt = Date()
+        }
         jobs[index].transcriptionFinishedAt = nil
         jobs[index].translationStartedAt = nil
         jobs[index].finishedAt = nil
@@ -1628,7 +1650,18 @@ final class AppModel: ObservableObject {
         if let validationMessage {
             jobs[index].log += "Adjusted transcription settings: \(validationMessage)\n"
         }
-        appendLog("Starting transcription with \(resolved.whisperBackend.label) and model \(resolved.whisperModel).", to: jobID)
+        if canResumeTranscription {
+            appendLog(
+                "Resuming transcription from \(Int(jobs[index].transcriptionResumeThrough / 60)) minutes with \(resolved.whisperBackend.label) and model \(resolved.whisperModel).",
+                to: jobID
+            )
+        } else {
+            appendLog("Starting transcription with \(resolved.whisperBackend.label) and model \(resolved.whisperModel).", to: jobID)
+        }
+
+        let resumeThrough = jobs[index].transcriptionResumeThrough
+        let existingPartialSegments = jobs[index].partialTranscriptSegments
+        let resumeMergesPartials = canResumeTranscription
 
         // A translating job gets a driver up front, so streamed batches can be
         // translated behind the transcription frontier. A local server is the
@@ -1694,7 +1727,10 @@ final class AppModel: ObservableObject {
         gpuTask = Task {
             do {
                 let result = try await transcriptionService.transcribe(
-                    videoURL: videoURL, settings: resolved,
+                    videoURL: videoURL,
+                    settings: resolved,
+                    resumeThrough: resumeThrough,
+                    existingPartialSegments: existingPartialSegments,
                     progress: { [weak self] progress in
                         self?.updateProgress(progress, for: jobID)
                     },
@@ -1706,9 +1742,21 @@ final class AppModel: ObservableObject {
                         // stale ones on a completed job forever.
                         guard self.jobs.first(where: { $0.id == jobID })?.status == .transcribing else { return }
                         self.updateJob(jobID, debouncePersist: true) { job in
-                            job.partialTranscriptSegments += batch
+                            if resumeMergesPartials {
+                                job.partialTranscriptSegments = TranscriptionChunkPlanner.mergePartialSegments(
+                                    existing: job.partialTranscriptSegments,
+                                    batch: batch
+                                )
+                            } else {
+                                job.partialTranscriptSegments += batch
+                            }
                         }
                         self.drivers[jobID]?.ingest(batch)
+                    },
+                    onChunkComplete: { [weak self] chunkEnd in
+                        self?.updateJob(jobID, debouncePersist: true) { job in
+                            job.transcriptionResumeThrough = max(job.transcriptionResumeThrough, chunkEnd)
+                        }
                     },
                     onMetrics: { [weak self] metrics in
                         self?.appendLog(metrics.logSummary, to: jobID)
@@ -2562,6 +2610,7 @@ final class AppModel: ObservableObject {
             job.transcriptSegments = result.segments
             // The cleaned transcript supersedes the streamed preview.
             job.partialTranscriptSegments = []
+            job.transcriptionResumeThrough = 0
             job.translatedSegments = []
             job.summary = summary
             job.status = .transcriptionComplete

@@ -33,7 +33,7 @@ struct AppModelSubtitleImportTests {
 
         var mediaURL: URL { baseURL.appendingPathComponent("movie.mp4") }
 
-        func cleanUp() {
+        @MainActor func cleanUp() {
             model.cancelActiveJob()
             model.flushPendingWork()
             UserDefaults.standard.removePersistentDomain(forName: suiteName)

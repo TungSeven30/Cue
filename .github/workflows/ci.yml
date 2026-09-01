@@ -20,6 +20,9 @@ jobs:
           python3 script/audit_dependencies.py --output .build/audit/dependency-audit.json
           python3 script/generate_sbom.py --version 0.0.0-ci --output .build/audit/cue-sbom.cdx.json
 
+      - name: Python test dependencies
+        run: python3 -m pip install --disable-pip-version-check -r script/requirements-ci.txt
+
       - name: Swift and Python tests
         run: script/run_tests.sh
 

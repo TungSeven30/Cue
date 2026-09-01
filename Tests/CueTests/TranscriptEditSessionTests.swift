@@ -11,7 +11,7 @@ struct TranscriptEditSessionTests {
             TranscriptionSegment(id: 2, start: 1, end: 2, text: "hello again"),
             TranscriptionSegment(id: 3, start: 2, end: 3, text: "goodbye"),
         ]
-        let commit: (TranscriptionSegment, String) -> Void = { segment, text in
+        let commit: TranscriptSegmentCommit = { segment, text in
             guard let index = segments.firstIndex(where: { $0.id == segment.id }) else { return }
             segments[index].text = text
         }
@@ -81,7 +81,7 @@ struct TranscriptEditSessionTests {
         var segments = [
             TranscriptionSegment(id: 1, start: 0, end: 1, text: "Original"),
         ]
-        let commit: (TranscriptionSegment, String) -> Void = { segment, text in
+        let commit: TranscriptSegmentCommit = { segment, text in
             segments[0].text = text
         }
 

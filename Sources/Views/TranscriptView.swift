@@ -74,7 +74,6 @@ struct TranscriptView: View {
                 }
             }
         }
-        .environment(\.undoManager, editSession.undoManager)
         .onChange(of: focusedSegmentID) { oldValue, newValue in
             guard let oldValue, oldValue != newValue,
                 let segment = segments.first(where: { $0.id == oldValue })
@@ -123,6 +122,7 @@ private struct SegmentEditorRow: View {
     let onLiveEdit: (String) -> Void
     let onEndEditing: () -> Void
     var onSeek: ((TranscriptionSegment) -> Void)? = nil
+    @State private var draftText = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -196,15 +196,21 @@ private struct SegmentEditorRow: View {
                 .contentShape(Rectangle())
                 .onTapGesture(perform: onBeginEditing)
         case .editingTextEditor:
-            TextEditor(
-                text: Binding(
-                    get: { segment.text },
-                    set: onLiveEdit
-                )
-            )
-            .focused(focusedSegmentID, equals: segment.id)
-            .scrollContentBackground(.hidden)
-            .onDisappear(perform: onEndEditing)
+            TextEditor(text: $draftText)
+                .focused(focusedSegmentID, equals: segment.id)
+                .scrollContentBackground(.hidden)
+                .onAppear {
+                    draftText = segment.text
+                }
+                .onChange(of: draftText) { _, newText in
+                    onLiveEdit(newText)
+                }
+                .onChange(of: segment.text) { _, newText in
+                    if draftText != newText {
+                        draftText = newText
+                    }
+                }
+                .onDisappear(perform: onEndEditing)
         }
     }
 

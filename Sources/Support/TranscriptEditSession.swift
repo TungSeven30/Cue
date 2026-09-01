@@ -44,6 +44,84 @@ enum TranscriptReplaceAll {
     }
 }
 
+typealias TranscriptSegmentCommit = @MainActor @Sendable (TranscriptionSegment, String) -> Void
+
+/// Nonisolated token for `UndoManager.registerUndo`. Undo/redo callbacks hop back
+/// to the main actor before touching UI state or registering the inverse action.
+private final class TranscriptUndoBridge: NSObject, @unchecked Sendable {
+    struct SingleAction: Sendable {
+        let segment: TranscriptionSegment
+        let applyText: String
+        let inverseApplyText: String
+    }
+
+    struct BatchAction: Sendable {
+        let applications: [AppliedSegmentText]
+        let segmentsByID: [Int: TranscriptionSegment]
+    }
+
+    struct AppliedSegmentText: Sendable {
+        let segmentID: Int
+        let text: String
+    }
+
+    func registerSingle(
+        undoManager: UndoManager,
+        action: SingleAction,
+        commit: @escaping TranscriptSegmentCommit,
+        actionName: String
+    ) {
+        undoManager.registerUndo(withTarget: self) { bridge in
+            guard let bridge = bridge as? TranscriptUndoBridge else { return }
+            MainActor.assumeIsolated {
+                commit(action.segment, action.applyText)
+                bridge.registerSingle(
+                    undoManager: undoManager,
+                    action: SingleAction(
+                        segment: action.segment,
+                        applyText: action.inverseApplyText,
+                        inverseApplyText: action.applyText
+                    ),
+                    commit: commit,
+                    actionName: actionName
+                )
+            }
+        }
+        undoManager.setActionName(actionName)
+    }
+
+    func registerBatch(
+        undoManager: UndoManager,
+        action: BatchAction,
+        inverse: BatchAction,
+        commit: @escaping TranscriptSegmentCommit,
+        actionName: String
+    ) {
+        undoManager.registerUndo(withTarget: self) { bridge in
+            guard let bridge = bridge as? TranscriptUndoBridge else { return }
+            MainActor.assumeIsolated {
+                bridge.applyBatch(action, commit: commit)
+                bridge.registerBatch(
+                    undoManager: undoManager,
+                    action: inverse,
+                    inverse: action,
+                    commit: commit,
+                    actionName: actionName
+                )
+            }
+        }
+        undoManager.setActionName(actionName)
+    }
+
+    @MainActor
+    private func applyBatch(_ action: BatchAction, commit: TranscriptSegmentCommit) {
+        for application in action.applications {
+            guard let segment = action.segmentsByID[application.segmentID] else { continue }
+            commit(segment, application.text)
+        }
+    }
+}
+
 /// Tracks which cue row is promoted to a TextEditor and registers AppKit undo
 /// for typing sessions and Replace All. Timing edits can register through the
 /// same undo manager later.
@@ -53,6 +131,7 @@ final class TranscriptEditSession: ObservableObject {
 
     let undoManager = UndoManager()
 
+    private let undoBridge = TranscriptUndoBridge()
     private var editingBaselineText: String?
 
     /// Test hook: segment IDs currently rendered as TextEditor (at most one).
@@ -72,7 +151,7 @@ final class TranscriptEditSession: ObservableObject {
     func endEditing(
         segment: TranscriptionSegment,
         finalText: String,
-        commit: (TranscriptionSegment, String) -> Void
+        commit: TranscriptSegmentCommit
     ) {
         defer {
             editingSegmentID = nil
@@ -89,7 +168,7 @@ final class TranscriptEditSession: ObservableObject {
 
     func endEditingIfNeeded(
         segments: [TranscriptionSegment],
-        commit: (TranscriptionSegment, String) -> Void
+        commit: TranscriptSegmentCommit
     ) {
         guard let editingSegmentID,
             let segment = segments.first(where: { $0.id == editingSegmentID })
@@ -100,7 +179,7 @@ final class TranscriptEditSession: ObservableObject {
     func applyLiveEdit(
         segment: TranscriptionSegment,
         newText: String,
-        commit: (TranscriptionSegment, String) -> Void
+        commit: TranscriptSegmentCommit
     ) {
         guard segment.text != newText else { return }
         commit(segment, newText)
@@ -109,7 +188,7 @@ final class TranscriptEditSession: ObservableObject {
     func replaceAll(
         changes: [TranscriptTextChange],
         segments: [TranscriptionSegment],
-        commit: (TranscriptionSegment, String) -> Void
+        commit: TranscriptSegmentCommit
     ) {
         guard !changes.isEmpty else { return }
         let segmentsByID = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
@@ -117,8 +196,7 @@ final class TranscriptEditSession: ObservableObject {
             guard let segment = segmentsByID[change.segmentID] else { continue }
             commit(segment, change.newText)
         }
-        registerBatchUndo(changes: changes, segments: segments, commit: commit)
-        undoManager.setActionName(changes.count == 1 ? "Replace" : "Replace All")
+        registerBatchUndo(changes: changes, segmentsByID: segmentsByID, commit: commit)
     }
 
     func undo() {
@@ -129,39 +207,38 @@ final class TranscriptEditSession: ObservableObject {
         segment: TranscriptionSegment,
         previousText: String,
         newText: String,
-        commit: (TranscriptionSegment, String) -> Void
+        commit: TranscriptSegmentCommit
     ) {
-        undoManager.registerUndo(withTarget: self) { session in
-            commit(segment, previousText)
-            session.registerTextUndo(
+        undoBridge.registerSingle(
+            undoManager: undoManager,
+            action: TranscriptUndoBridge.SingleAction(
                 segment: segment,
-                previousText: newText,
-                newText: previousText,
-                commit: commit
-            )
-        }
-        undoManager.setActionName("Edit Subtitle")
+                applyText: previousText,
+                inverseApplyText: newText
+            ),
+            commit: commit,
+            actionName: "Edit Subtitle"
+        )
     }
 
     private func registerBatchUndo(
         changes: [TranscriptTextChange],
-        segments: [TranscriptionSegment],
-        commit: (TranscriptionSegment, String) -> Void
+        segmentsByID: [Int: TranscriptionSegment],
+        commit: TranscriptSegmentCommit
     ) {
-        let segmentsByID = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
-        undoManager.registerUndo(withTarget: self) { session in
-            for change in changes {
-                guard let segment = segmentsByID[change.segmentID] else { continue }
-                commit(segment, change.previousText)
-            }
-            let inverse = changes.map {
-                TranscriptTextChange(
-                    segmentID: $0.segmentID,
-                    previousText: $0.newText,
-                    newText: $0.previousText
-                )
-            }
-            session.registerBatchUndo(changes: inverse, segments: segments, commit: commit)
+        let undoApplications = changes.map {
+            TranscriptUndoBridge.AppliedSegmentText(segmentID: $0.segmentID, text: $0.previousText)
         }
+        let redoApplications = changes.map {
+            TranscriptUndoBridge.AppliedSegmentText(segmentID: $0.segmentID, text: $0.newText)
+        }
+        let actionName = changes.count == 1 ? "Replace" : "Replace All"
+        undoBridge.registerBatch(
+            undoManager: undoManager,
+            action: TranscriptUndoBridge.BatchAction(applications: undoApplications, segmentsByID: segmentsByID),
+            inverse: TranscriptUndoBridge.BatchAction(applications: redoApplications, segmentsByID: segmentsByID),
+            commit: commit,
+            actionName: actionName
+        )
     }
 }

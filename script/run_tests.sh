@@ -31,9 +31,9 @@ fi
 # With a full Xcode install, plain `swift test` works — prefer it.
 if xcrun --sdk macosx --show-sdk-platform-path >/dev/null 2>&1; then
   if [[ "${CUE_ENABLE_CODE_COVERAGE:-0}" == "1" ]]; then
-    exec swift test --enable-code-coverage "$@"
+    exec swift test --no-parallel --enable-code-coverage "$@"
   fi
-  exec swift test "$@"
+  exec swift test --no-parallel "$@"
 fi
 
 BUILD_OPTIONS=(--build-tests)

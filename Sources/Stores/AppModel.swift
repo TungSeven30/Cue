@@ -569,8 +569,8 @@ final class AppModel: ObservableObject {
     }
 
     func jobCardBinding<T>(
-        get: (JobSettingsSnapshot) -> T,
-        setOverride: (inout JobSettingsOverrides, T, JobSettingsSnapshot) -> Void
+        get: @escaping (JobSettingsSnapshot) -> T,
+        setOverride: @escaping (inout JobSettingsOverrides, T, JobSettingsSnapshot) -> Void
     ) -> Binding<T> {
         Binding(
             get: { [unowned self] in

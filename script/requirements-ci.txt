@@ -1,0 +1,2 @@
+# Pinned Python packages for script/test_*.py (Qwen chunk-planning path in transcribe.py).
+numpy==2.2.6

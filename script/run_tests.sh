@@ -17,6 +17,7 @@ cd "$ROOT_DIR"
 SWIFT_TEST_PARALLEL=()
 if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
   SWIFT_TEST_PARALLEL=(--no-parallel)
+  echo "GitHub Actions: swift test ${SWIFT_TEST_PARALLEL[*]}"
 fi
 
 # The Python helper is shipped in two forms. Run its behavioral tests and the

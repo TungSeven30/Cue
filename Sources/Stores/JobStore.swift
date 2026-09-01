@@ -160,7 +160,7 @@ final class JobStore {
         jobID: UUID,
         to url: URL,
         on queue: DispatchQueue,
-        failureInjector: FailureInjector
+        failureInjector: @escaping FailureInjector
     ) {
         queue.async {
             persistJob(encoded: encoded, jobID: jobID, to: url, failureInjector: failureInjector)
@@ -188,7 +188,7 @@ final class JobStore {
         id: UUID,
         on queue: DispatchQueue,
         fileManager: SendableFileManager,
-        failureInjector: FailureInjector
+        failureInjector: @escaping FailureInjector
     ) {
         queue.async {
             deleteJobFile(at: url, id: id, fileManager: fileManager, failureInjector: failureInjector)

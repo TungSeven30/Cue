@@ -18,12 +18,18 @@ private actor EmptyImportDiagnostics: EnvironmentDiagnosing {
 /// assertion runs — deterministic, and never touches the network for real.
 private struct HangingHTTPClient: HTTPClient {
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-        try await Task.sleep(for: .seconds(60))
+        // Poll in short intervals so cancelActiveJob() can unwind promptly on CI
+        // runners instead of holding cooperative thread-pool slots for 60s each.
+        for _ in 0 ..< 600 {
+            try Task.checkCancellation()
+            try await Task.sleep(for: .milliseconds(100))
+        }
         throw URLError(.cancelled)
     }
 }
 
 @MainActor
+@Suite(.serialized)
 struct AppModelSubtitleImportTests {
     @MainActor
     struct Fixture {

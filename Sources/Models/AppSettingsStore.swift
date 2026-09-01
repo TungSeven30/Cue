@@ -819,22 +819,26 @@ final class AppSettingsStore: ObservableObject {
     }
 
     var transcriptionValidationMessage: String? {
-        let model = whisperModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch whisperBackend {
+        Self.transcriptionValidationMessage(backend: whisperBackend, model: whisperModel)
+    }
+
+    static func transcriptionValidationMessage(backend: WhisperBackend, model: String) -> String? {
+        let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch backend {
         case .fasterWhisper:
-            return model.hasPrefix("mlx-community/") || model.hasPrefix("Qwen/") || model.hasPrefix("ggml-")
+            return trimmedModel.hasPrefix("mlx-community/") || trimmedModel.hasPrefix("Qwen/") || trimmedModel.hasPrefix("ggml-")
                 ? "Faster Whisper needs a Faster Whisper model such as \(Self.fasterTurboModel)."
                 : nil
         case .mlxWhisper:
-            return model.hasPrefix("mlx-community/")
+            return trimmedModel.hasPrefix("mlx-community/")
                 ? nil
                 : "MLX Whisper works best with an MLX model such as \(Self.mlxTurboModel)."
         case .qwen3ASR:
-            return model.hasPrefix("Qwen/Qwen3-ASR")
+            return trimmedModel.hasPrefix("Qwen/Qwen3-ASR")
                 ? nil
                 : "Qwen3 ASR needs a Qwen3 model such as \(Self.qwen3DefaultModel)."
         case .native:
-            return model.hasPrefix("ggml-")
+            return trimmedModel.hasPrefix("ggml-")
                 ? nil
                 : "The built-in engine needs a GGML model such as \(ModelDownloader.defaultModel)."
         case .auto:
@@ -843,7 +847,44 @@ final class AppSettingsStore: ObservableObject {
     }
 
     func repairTranscriptionModelForBackend() {
-        normalizeModelForSelectedBackend(force: true)
+        whisperModel = Self.normalizedWhisperModel(
+            for: whisperBackend,
+            current: whisperModel,
+            force: true
+        )
+    }
+
+    static func normalizedWhisperModel(
+        for backend: WhisperBackend,
+        current: String,
+        force: Bool = false
+    ) -> String {
+        let trimmedModel = current.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch backend {
+        case .auto, .mlxWhisper:
+            if force || trimmedModel.isEmpty || trimmedModel == Self.fasterTurboModel || trimmedModel.hasPrefix("Qwen/") || trimmedModel.hasPrefix("ggml-") {
+                return Self.mlxTurboModel
+            }
+            return trimmedModel
+        case .fasterWhisper:
+            if force || trimmedModel.isEmpty || trimmedModel.hasPrefix("mlx-community/whisper-") || trimmedModel.hasPrefix("Qwen/")
+                || trimmedModel.hasPrefix("ggml-")
+            {
+                return Self.fasterTurboModel
+            }
+            return trimmedModel
+        case .qwen3ASR:
+            if force || !trimmedModel.hasPrefix("Qwen/Qwen3-ASR") {
+                return Self.qwen3DefaultModel
+            }
+            return trimmedModel
+        case .native:
+            if force || !trimmedModel.hasPrefix("ggml-") {
+                return ModelDownloader.defaultModel
+            }
+            return trimmedModel
+        }
     }
 
     private func applyTranscriptionPreset() {
@@ -882,28 +923,11 @@ final class AppSettingsStore: ObservableObject {
     }
 
     private func normalizeModelForSelectedBackend(force: Bool = false) {
-        let trimmedModel = whisperModel.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        switch whisperBackend {
-        case .auto, .mlxWhisper:
-            if force || trimmedModel.isEmpty || trimmedModel == Self.fasterTurboModel || trimmedModel.hasPrefix("Qwen/") || trimmedModel.hasPrefix("ggml-") {
-                whisperModel = Self.mlxTurboModel
-            }
-        case .fasterWhisper:
-            if force || trimmedModel.isEmpty || trimmedModel.hasPrefix("mlx-community/whisper-") || trimmedModel.hasPrefix("Qwen/")
-                || trimmedModel.hasPrefix("ggml-")
-            {
-                whisperModel = Self.fasterTurboModel
-            }
-        case .qwen3ASR:
-            if force || !trimmedModel.hasPrefix("Qwen/Qwen3-ASR") {
-                whisperModel = Self.qwen3DefaultModel
-            }
-        case .native:
-            if force || !trimmedModel.hasPrefix("ggml-") {
-                whisperModel = ModelDownloader.defaultModel
-            }
-        }
+        whisperModel = Self.normalizedWhisperModel(
+            for: whisperBackend,
+            current: whisperModel,
+            force: force
+        )
     }
 
     private func normalizeQualityPresetForSelectedBackend() {

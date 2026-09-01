@@ -19,16 +19,28 @@ struct JobSettingsOverrides: Codable, Hashable {
     var qwenContext: String?
     var transcriptionPreset: TranscriptionPreset?
     var transcriptionQualityPreset: TranscriptionQualityPreset?
+    var whisperBackend: WhisperBackend?
+    var whisperModel: String?
+    var translationSourceLanguage: String?
     var translationTargetLanguage: String?
+    var openAIModel: String?
     var autoTranslate: Bool?
+    var generateSummary: Bool?
+    var summaryDetail: SummaryDetail?
 
     var isEmpty: Bool {
         sourceLanguage == nil
             && qwenContext == nil
             && transcriptionPreset == nil
             && transcriptionQualityPreset == nil
+            && whisperBackend == nil
+            && whisperModel == nil
+            && translationSourceLanguage == nil
             && translationTargetLanguage == nil
+            && openAIModel == nil
             && autoTranslate == nil
+            && generateSummary == nil
+            && summaryDetail == nil
     }
 
     init() {}
@@ -41,7 +53,13 @@ struct JobSettingsOverrides: Codable, Hashable {
         qwenContext = try container.decodeIfPresent(String.self, forKey: .qwenContext)
         transcriptionPreset = (try? container.decodeIfPresent(TranscriptionPreset.self, forKey: .transcriptionPreset)) ?? nil
         transcriptionQualityPreset = (try? container.decodeIfPresent(TranscriptionQualityPreset.self, forKey: .transcriptionQualityPreset)) ?? nil
+        whisperBackend = (try? container.decodeIfPresent(WhisperBackend.self, forKey: .whisperBackend)) ?? nil
+        whisperModel = try container.decodeIfPresent(String.self, forKey: .whisperModel)
+        translationSourceLanguage = try container.decodeIfPresent(String.self, forKey: .translationSourceLanguage)
         translationTargetLanguage = try container.decodeIfPresent(String.self, forKey: .translationTargetLanguage)
+        openAIModel = try container.decodeIfPresent(String.self, forKey: .openAIModel)
         autoTranslate = try container.decodeIfPresent(Bool.self, forKey: .autoTranslate)
+        generateSummary = try container.decodeIfPresent(Bool.self, forKey: .generateSummary)
+        summaryDetail = (try? container.decodeIfPresent(SummaryDetail.self, forKey: .summaryDetail)) ?? nil
     }
 }

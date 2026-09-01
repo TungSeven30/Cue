@@ -32,15 +32,21 @@ actor WhisperCppEngine {
         let onProgress: @Sendable (Double) -> Void
         let onSegments: @Sendable ([TranscriptionSegment]) -> Void
         let isCancelled: @Sendable () -> Bool
+        let timeOffset: Double
+        let startingID: Int
 
         init(
             onProgress: @escaping @Sendable (Double) -> Void,
             onSegments: @escaping @Sendable ([TranscriptionSegment]) -> Void,
-            isCancelled: @escaping @Sendable () -> Bool
+            isCancelled: @escaping @Sendable () -> Bool,
+            timeOffset: Double,
+            startingID: Int
         ) {
             self.onProgress = onProgress
             self.onSegments = onSegments
             self.isCancelled = isCancelled
+            self.timeOffset = timeOffset
+            self.startingID = startingID
         }
     }
 
@@ -76,25 +82,105 @@ actor WhisperCppEngine {
     ///   withTaskCancellationHandler, or an atomic) — NOT `Task.isCancelled`,
     ///   which has no current task in that context and would silently never
     ///   cancel.
+    /// - Parameter resumeThrough: Skip speech chunks ending at or before this
+    ///   second boundary. Mid-chunk crashes re-run the interrupted chunk.
+    /// - Parameter onChunkComplete: Fires on the caller's executor after each
+    ///   chunk finishes, carrying that chunk's end time in seconds.
     func transcribe(
         wavURL: URL,
         modelURL: URL,
         language: String,
         beamSize: Int,
         noSpeechThreshold: Double,
+        resumeThrough: Double = 0,
+        startingSegmentID: Int = 1,
         onProgress: @escaping @Sendable (Double) -> Void,
         onSegments: @escaping @Sendable ([TranscriptionSegment]) -> Void = { _ in },
+        onChunkComplete: @escaping @Sendable (Double) -> Void = { _ in },
         isCancelled: @escaping @Sendable () -> Bool
     ) throws -> Result {
         let samples = try Self.loadPCM16AsFloat(wavURL)
+        let sampleRate = 16_000
+        let totalSeconds = Double(samples.count) / Double(sampleRate)
+        let planned = TranscriptionChunkPlanner.planSpeechChunks(samples: samples, sampleRate: sampleRate)
+        let pending = TranscriptionChunkPlanner.pendingChunks(planned, resumeThrough: resumeThrough)
+        guard !pending.isEmpty else {
+            return Result(segments: [])
+        }
 
         _ = Self.metalShaderPathConfigured
-        let contextParams = whisper_context_default_params()  // Metal on by default
+        let contextParams = whisper_context_default_params()
         guard let context = whisper_init_from_file_with_params(modelURL.path, contextParams) else {
             throw WhisperCppError.modelLoadFailed(modelURL.lastPathComponent)
         }
         defer { whisper_free(context) }
 
+        if pending.count == 1, pending[0].start <= 0.01, pending[0].end >= totalSeconds - 0.01, resumeThrough <= 0 {
+            let segments = try Self.runInference(
+                context: context,
+                samples: samples,
+                sampleRate: sampleRate,
+                language: language,
+                beamSize: beamSize,
+                noSpeechThreshold: noSpeechThreshold,
+                timeOffset: 0,
+                startingID: 1,
+                onProgress: onProgress,
+                onSegments: onSegments,
+                isCancelled: isCancelled
+            )
+            onChunkComplete(totalSeconds)
+            return Result(segments: segments)
+        }
+
+        var collected: [TranscriptionSegment] = []
+        var nextID = startingSegmentID
+        let completedBefore = planned.filter { $0.end <= resumeThrough + 0.01 }.count
+        for (index, chunk) in pending.enumerated() {
+            if isCancelled() { throw CancellationError() }
+            let firstSample = max(0, Int(chunk.start * Double(sampleRate)))
+            let lastSample = min(samples.count, Int(chunk.end * Double(sampleRate)))
+            guard lastSample > firstSample else { continue }
+            let slice = Array(samples[firstSample..<lastSample])
+            let chunkProgress: @Sendable (Double) -> Void = { fraction in
+                let overall = Double(completedBefore + index) + fraction
+                onProgress(min(1, overall / Double(max(1, planned.count))))
+            }
+            let batch = try Self.runInference(
+                context: context,
+                samples: slice,
+                sampleRate: sampleRate,
+                language: language,
+                beamSize: beamSize,
+                noSpeechThreshold: noSpeechThreshold,
+                timeOffset: chunk.start,
+                startingID: nextID,
+                onProgress: chunkProgress,
+                onSegments: { segments in
+                    onSegments(segments)
+                },
+                isCancelled: isCancelled
+            )
+            collected.append(contentsOf: batch)
+            nextID += batch.count
+            onChunkComplete(chunk.end)
+        }
+        return Result(segments: collected)
+    }
+
+    private static func runInference(
+        context: OpaquePointer,
+        samples: [Float],
+        sampleRate: Int,
+        language: String,
+        beamSize: Int,
+        noSpeechThreshold: Double,
+        timeOffset: Double,
+        startingID: Int,
+        onProgress: @escaping @Sendable (Double) -> Void,
+        onSegments: @escaping @Sendable ([TranscriptionSegment]) -> Void,
+        isCancelled: @escaping @Sendable () -> Bool
+    ) throws -> [TranscriptionSegment] {
         var params = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH)
         params.beam_search.beam_size = Int32(beamSize)
         params.no_speech_thold = Float(noSpeechThreshold)
@@ -104,7 +190,13 @@ actor WhisperCppEngine {
         params.print_progress = false
         params.no_context = true  // match condition_on_previous_text=False
 
-        let box = CallbackBox(onProgress: onProgress, onSegments: onSegments, isCancelled: isCancelled)
+        let box = CallbackBox(
+            onProgress: onProgress,
+            onSegments: onSegments,
+            isCancelled: isCancelled,
+            timeOffset: timeOffset,
+            startingID: startingID
+        )
         let userData = Unmanaged.passUnretained(box).toOpaque()
         params.progress_callback = { _, _, progress, userData in
             guard let userData else { return }
@@ -119,12 +211,18 @@ actor WhisperCppEngine {
             let first = max(0, total - Int(nNew))
             var batch: [TranscriptionSegment] = []
             for index in first..<total {
+                let mapped = WhisperCppEngine.mapSegment(
+                    index: box.startingID - 1 + index,
+                    t0: whisper_full_get_segment_t0(ctx, Int32(index)),
+                    t1: whisper_full_get_segment_t1(ctx, Int32(index)),
+                    text: String(cString: whisper_full_get_segment_text(ctx, Int32(index)))
+                )
                 batch.append(
-                    WhisperCppEngine.mapSegment(
-                        index: index,
-                        t0: whisper_full_get_segment_t0(ctx, Int32(index)),
-                        t1: whisper_full_get_segment_t1(ctx, Int32(index)),
-                        text: String(cString: whisper_full_get_segment_text(ctx, Int32(index)))
+                    TranscriptionSegment(
+                        id: mapped.id,
+                        start: mapped.start + box.timeOffset,
+                        end: mapped.end + box.timeOffset,
+                        text: mapped.text
                     ))
             }
             if !batch.isEmpty { box.onSegments(batch) }
@@ -155,15 +253,20 @@ actor WhisperCppEngine {
         }
 
         let count = Int(whisper_full_n_segments(context))
-        let segments = (0..<count).map { i in
-            Self.mapSegment(
-                index: i,
+        return (0..<count).map { i in
+            let mapped = Self.mapSegment(
+                index: startingID - 1 + i,
                 t0: whisper_full_get_segment_t0(context, Int32(i)),
                 t1: whisper_full_get_segment_t1(context, Int32(i)),
                 text: String(cString: whisper_full_get_segment_text(context, Int32(i)))
             )
+            return TranscriptionSegment(
+                id: mapped.id,
+                start: mapped.start + timeOffset,
+                end: mapped.end + timeOffset,
+                text: mapped.text
+            )
         }
-        return Result(segments: segments)
     }
 
     /// Reads a 16-bit mono PCM WAV into normalized Float32 samples, walking

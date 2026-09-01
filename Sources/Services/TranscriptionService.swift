@@ -79,8 +79,11 @@ struct TranscriptionService {
     func transcribe(
         videoURL: URL,
         settings: JobSettingsSnapshot,
+        resumeThrough: Double = 0,
+        existingPartialSegments: [TranscriptionSegment] = [],
         progress: @escaping @MainActor (JobProgress) -> Void,
         onSegments: (@MainActor ([TranscriptionSegment]) -> Void)? = nil,
+        onChunkComplete: (@MainActor (Double) -> Void)? = nil,
         onMetrics: (@MainActor (TranscriptionMetrics) -> Void)? = nil
     ) async throws -> TranscriptionResult {
         let resolved = Self.resolveDispatch(backend: settings.whisperBackend, model: settings.whisperModel)
@@ -103,7 +106,15 @@ struct TranscriptionService {
         )
 
         if resolved.backend == .native {
-            return try await transcribeNatively(videoURL: videoURL, snapshot: snapshot, progress: progress, onSegments: onSegments)
+            return try await transcribeNatively(
+                videoURL: videoURL,
+                snapshot: snapshot,
+                resumeThrough: resumeThrough,
+                existingPartialSegments: existingPartialSegments,
+                progress: progress,
+                onSegments: onSegments,
+                onChunkComplete: onChunkComplete
+            )
         }
 
         let scriptURL = try BackendScriptWriter.ensureScript()
@@ -182,6 +193,10 @@ struct TranscriptionService {
                     "\(snapshot.noSpeechThreshold)",
                     "--stream-segments",
                     "true",
+                    "--resume-through-seconds",
+                    String(format: "%.3f", resumeThrough),
+                    "--starting-segment-id",
+                    "\(existingPartialSegments.map(\.id).max().map { $0 + 1 } ?? 1)",
                 ] + finalAudioArguments
             processBox.process = process
 
@@ -198,6 +213,8 @@ struct TranscriptionService {
                         case .segments(let batch):
                             let cleaned = TranscriptionPostProcessor.cleanWindow(batch, settings: snapshot)
                             if !cleaned.isEmpty { onSegments?(cleaned) }
+                        case .chunkComplete(let through):
+                            onChunkComplete?(through)
                         case .metrics(let metrics):
                             onMetrics?(metrics)
                         }
@@ -249,7 +266,11 @@ struct TranscriptionService {
 
             let payload = try Self.decodePayload(from: stdoutData)
             let cleanedSegments = TranscriptionPostProcessor.clean(payload.segments, settings: snapshot)
-            return TranscriptionResult(backend: payload.backend, segments: cleanedSegments)
+            let combined = TranscriptionChunkPlanner.combinedSegments(
+                partials: existingPartialSegments,
+                newlyCollected: cleanedSegments
+            )
+            return TranscriptionResult(backend: payload.backend, segments: combined)
         } onCancel: {
             processBox.terminate()
         }
@@ -265,8 +286,11 @@ struct TranscriptionService {
     private func transcribeNatively(
         videoURL: URL,
         snapshot: TranscriptionSettingsSnapshot,
+        resumeThrough: Double,
+        existingPartialSegments: [TranscriptionSegment],
         progress: @escaping @MainActor (JobProgress) -> Void,
-        onSegments: (@MainActor ([TranscriptionSegment]) -> Void)? = nil
+        onSegments: (@MainActor ([TranscriptionSegment]) -> Void)? = nil,
+        onChunkComplete: (@MainActor (Double) -> Void)? = nil
     ) async throws -> TranscriptionResult {
         let cachedWav = try AudioCache.cachedAudioURL(for: videoURL, preprocess: false)
         let cachedWavSize = (try? FileManager.default.attributesOfItem(atPath: cachedWav.path)[.size] as? UInt64) ?? 0
@@ -316,12 +340,15 @@ struct TranscriptionService {
             }
             try Task.checkCancellation()
             progress(JobProgress(stage: .transcribing, detail: "Transcribing with the built-in engine.", fraction: 0.2))
+            let startingSegmentID = existingPartialSegments.map(\.id).max().map { $0 + 1 } ?? 1
             let result = try await WhisperCppEngine().transcribe(
                 wavURL: cachedWav,
                 modelURL: modelURL,
                 language: snapshot.sourceLanguage,
                 beamSize: snapshot.beamSize,
                 noSpeechThreshold: snapshot.noSpeechThreshold,
+                resumeThrough: resumeThrough,
+                startingSegmentID: startingSegmentID,
                 onProgress: { fraction in
                     // Inference 0→1 mapped into the 0.2–0.92 transcribing
                     // band, matching the Python helpers' fraction range.
@@ -344,6 +371,11 @@ struct TranscriptionService {
                         MainActor.assumeIsolated { onSegments?(cleaned) }
                     }
                 },
+                onChunkComplete: { chunkEnd in
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { onChunkComplete?(chunkEnd) }
+                    }
+                },
                 isCancelled: { cancelFlag.withLock { $0 } }
             )
             // A cancel landing after whisper_full's last abort poll would
@@ -351,7 +383,11 @@ struct TranscriptionService {
             // after its subprocess exits.
             try Task.checkCancellation()
             let cleanedSegments = TranscriptionPostProcessor.clean(result.segments, settings: snapshot)
-            return TranscriptionResult(backend: WhisperBackend.native.rawValue, segments: cleanedSegments)
+            let combined = TranscriptionChunkPlanner.combinedSegments(
+                partials: existingPartialSegments,
+                newlyCollected: cleanedSegments
+            )
+            return TranscriptionResult(backend: WhisperBackend.native.rawValue, segments: combined)
         } onCancel: {
             cancelFlag.withLock { $0 = true }
         }
@@ -704,11 +740,17 @@ enum TranscriptionPostProcessor {
 enum TranscriptionStreamEvent: Equatable {
     case progress(JobProgress)
     case segments([TranscriptionSegment])
+    case chunkComplete(Double)
     case metrics(TranscriptionMetrics)
 
     private struct SegmentsEnvelope: Decodable {
         let event: String
         let segments: [TranscriptionSegment]
+    }
+
+    private struct ChunkCompleteEnvelope: Decodable {
+        let event: String
+        let through: Double
     }
 
     private struct ProgressEnvelope: Decodable {
@@ -726,6 +768,9 @@ enum TranscriptionStreamEvent: Equatable {
         guard line.hasPrefix("{"), let data = line.data(using: .utf8) else { return nil }
         if let envelope = try? JSONDecoder().decode(SegmentsEnvelope.self, from: data), envelope.event == "segments" {
             return .segments(envelope.segments)
+        }
+        if let envelope = try? JSONDecoder().decode(ChunkCompleteEnvelope.self, from: data), envelope.event == "chunk_complete" {
+            return .chunkComplete(envelope.through)
         }
         if let envelope = try? JSONDecoder().decode(MetricsEnvelope.self, from: data), envelope.event == "metrics" {
             return .metrics(envelope.metrics)

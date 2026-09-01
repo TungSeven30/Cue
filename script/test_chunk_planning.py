@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from transcribe import plan_speech_chunks  # noqa: E402
+from transcribe import pending_speech_chunks, plan_speech_chunks  # noqa: E402
 
 
 RATE = 16_000
@@ -62,6 +62,14 @@ class SpeechChunkPlanningTests(unittest.TestCase):
 
     def test_no_silence_keeps_one_chunk(self):
         self.assertEqual(len(plan_speech_chunks(build(tone(400)), RATE)), 1)
+
+    def test_pending_speech_chunks_skips_completed(self):
+        chunks = [(0.0, 2400.0), (2400.0, 4800.0), (4800.0, 7200.0)]
+        self.assertEqual(
+            pending_speech_chunks(chunks, 2400.0),
+            [(2400.0, 4800.0), (4800.0, 7200.0)],
+        )
+        self.assertEqual(pending_speech_chunks(chunks, 0.0), chunks)
 
 
 if __name__ == "__main__":

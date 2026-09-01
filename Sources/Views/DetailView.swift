@@ -523,12 +523,33 @@ private struct HeaderCard: View {
 
 private struct RunOptionsRow: View {
     @ObservedObject var model: AppModel
+    @Environment(\.openSettings) private var openSettings
+
+    private var resolvedBackend: WhisperBackend {
+        model.selectedJobResolvedSettings?.whisperBackend ?? model.settings.whisperBackend
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Run options")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Defaults…") {
+                    openSettings()
+                }
+                .buttonStyle(.borderless)
+                .help("Edit app-wide default settings")
+            }
+
             HStack(alignment: .bottom, spacing: 20) {
                 field(title: "Preset") {
-                    Picker("Preset", selection: $model.settings.transcriptionPreset) {
+                    Picker("Preset", selection: model.jobCardBinding(get: \.transcriptionPreset) { overrides, value, _ in
+                        overrides.transcriptionPreset = value
+                        overrides.whisperBackend = nil
+                        overrides.whisperModel = nil
+                    }) {
                         ForEach(TranscriptionPreset.allCases) { preset in
                             Text(preset.label).tag(preset)
                         }
@@ -539,8 +560,10 @@ private struct RunOptionsRow: View {
                 }
 
                 field(title: "Quality") {
-                    Picker("Quality", selection: $model.settings.transcriptionQualityPreset) {
-                        ForEach(TranscriptionQualityPreset.available(for: model.settings.whisperBackend)) { preset in
+                    Picker("Quality", selection: model.jobCardBinding(get: \.transcriptionQualityPreset) { overrides, value, _ in
+                        overrides.transcriptionQualityPreset = value
+                    }) {
+                        ForEach(TranscriptionQualityPreset.available(for: resolvedBackend)) { preset in
                             Text(preset.label).tag(preset)
                         }
                     }
@@ -553,24 +576,39 @@ private struct RunOptionsRow: View {
                     presetMenu(
                         "Language",
                         presets: AppSettingPresets.transcriptionLanguages,
-                        selection: $model.settings.sourceLanguage
+                        selection: model.jobCardBinding(get: \.sourceLanguage) { overrides, value, _ in
+                            overrides.sourceLanguage = value
+                        }
                     )
                     .frame(width: 130)
                 }
             }
 
-            if model.settings.whisperBackend == .qwen3ASR {
+            if resolvedBackend == .qwen3ASR {
                 field(title: "Qwen names & terms") {
-                    TextField("Character names, places, vocabulary", text: $model.settings.qwenContext)
-                        .textFieldStyle(.roundedBorder)
-                        .help("Space-separated terms supplied to Qwen's context prompt")
+                    TextField(
+                        "Character names, places, vocabulary",
+                        text: model.jobCardBinding(get: \.qwenContext) { overrides, value, _ in
+                            overrides.qwenContext = value.isEmpty ? nil : value
+                        }
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .help("Space-separated terms supplied to Qwen's context prompt")
                 }
             }
 
             if model.settings.showAdvancedControls {
                 HStack(alignment: .bottom, spacing: 20) {
                     field(title: "Backend") {
-                        Picker("Backend", selection: $model.settings.whisperBackend) {
+                        Picker("Backend", selection: model.jobCardBinding(get: \.whisperBackend) { overrides, value, resolved in
+                            overrides.transcriptionPreset = .custom
+                            overrides.whisperBackend = value
+                            overrides.whisperModel = AppSettingsStore.normalizedWhisperModel(
+                                for: value,
+                                current: resolved.whisperModel,
+                                force: true
+                            )
+                        }) {
                             ForEach(WhisperBackend.allCases) { backend in
                                 Text(backend.label).tag(backend)
                             }
@@ -580,18 +618,21 @@ private struct RunOptionsRow: View {
                         .frame(width: 150)
                     }
 
-                    field(title: model.settings.whisperBackend == .qwen3ASR ? "Qwen model" : "Whisper model") {
+                    field(title: resolvedBackend == .qwen3ASR ? "Qwen model" : "Whisper model") {
                         presetMenu(
-                            model.settings.whisperBackend == .qwen3ASR ? "Qwen model" : "Whisper model",
-                            presets: AppSettingPresets.whisperModels(for: model.settings.whisperBackend),
-                            selection: $model.settings.whisperModel
+                            resolvedBackend == .qwen3ASR ? "Qwen model" : "Whisper model",
+                            presets: AppSettingPresets.whisperModels(for: resolvedBackend),
+                            selection: model.jobCardBinding(get: \.whisperModel) { overrides, value, _ in
+                                overrides.transcriptionPreset = .custom
+                                overrides.whisperModel = value
+                            }
                         )
                         .frame(minWidth: 220)
                     }
 
-                    if let message = model.settings.transcriptionValidationMessage {
+                    if let message = model.selectedJobTranscriptionValidationMessage {
                         Button("Repair") {
-                            model.settings.repairTranscriptionModelForBackend()
+                            model.repairSelectedJobTranscriptionModel()
                         }
                         .help(message)
                     }
@@ -603,7 +644,9 @@ private struct RunOptionsRow: View {
                     presetMenu(
                         "Translate from",
                         presets: AppSettingPresets.translationSourceLanguages,
-                        selection: $model.settings.translationSourceLanguage
+                        selection: model.jobCardBinding(get: \.translationSourceLanguage) { overrides, value, _ in
+                            overrides.translationSourceLanguage = value
+                        }
                     )
                     .frame(width: 150)
                 }
@@ -612,7 +655,9 @@ private struct RunOptionsRow: View {
                     presetMenu(
                         "Translate to",
                         presets: AppSettingPresets.translationTargetLanguages,
-                        selection: $model.settings.translationTargetLanguage
+                        selection: model.jobCardBinding(get: \.translationTargetLanguage) { overrides, value, _ in
+                            overrides.translationTargetLanguage = value
+                        }
                     )
                     .frame(width: 150)
                 }
@@ -621,20 +666,22 @@ private struct RunOptionsRow: View {
                     presetMenu(
                         "LLM",
                         presets: AppSettingPresets.translationModels,
-                        selection: $model.settings.openAIModel
+                        selection: model.jobCardBinding(get: \.openAIModel) { overrides, value, _ in
+                            overrides.openAIModel = value
+                        }
                     )
                     .frame(width: 170)
                 }
             }
 
             HStack(spacing: 14) {
-                Toggle("Auto-translate", isOn: $model.settings.autoTranslateAfterTranscription)
+                Toggle("Auto-translate", isOn: model.jobCardAutoTranslate)
                     .toggleStyle(.checkbox)
-                Toggle("Intro summary", isOn: $model.settings.generateSummary)
+                Toggle("Intro summary", isOn: model.jobCardGenerateSummary)
                     .toggleStyle(.checkbox)
                     .help("Generate a spoiler-free intro from the subtitles, shown at the start of exported SRT/VTT files")
-                if model.settings.generateSummary {
-                    Picker("", selection: $model.settings.summaryDetail) {
+                if model.jobCardShowsIntroSummaryDetail {
+                    Picker("", selection: model.jobCardSummaryDetail) {
                         ForEach(SummaryDetail.allCases) { detail in
                             Text(detail.label).tag(detail)
                         }
@@ -646,13 +693,15 @@ private struct RunOptionsRow: View {
                 }
                 Toggle("Advanced", isOn: $model.settings.showAdvancedControls)
                     .toggleStyle(.checkbox)
-                Text("\(model.settings.translationSourceLanguage) → \(model.settings.translationTargetLanguage)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if let resolved = model.selectedJobResolvedSettings {
+                    Text("\(resolved.translationSourceLanguage) → \(resolved.translationTargetLanguage)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
             }
         }
-        .disabled(model.isSelectedJobRunning)
+        .disabled(model.currentJob == nil || model.isSelectedJobRunning)
         .opacity(model.isSelectedJobRunning ? 0.55 : 1)
     }
 

@@ -348,12 +348,21 @@ def plan_speech_chunks(
     return chunks
 
 
+def pending_speech_chunks(chunks, resume_through):
+    """Drop speech chunks fully covered by a saved resume frontier."""
+    if resume_through <= 0:
+        return chunks
+    return [(start, end) for start, end in chunks if end > resume_through + 0.01]
+
+
 def load_with_qwen3(
     audio_path: Path,
     model: str,
     language: str,
     stream_segments: bool = False,
     context: str = "",
+    resume_through: float = 0.0,
+    starting_id: int = 1,
 ):
     import mlx_qwen3_asr as qwen3
     import numpy as np
@@ -384,6 +393,7 @@ def load_with_qwen3(
             planned = plan_speech_chunks(samples, sample_rate)
             if len(planned) > 1:
                 chunks = planned
+        chunks = pending_speech_chunks(chunks, resume_through)
     planning_seconds = time.perf_counter() - planning_started
 
     model_started = time.perf_counter()
@@ -400,9 +410,10 @@ def load_with_qwen3(
     model_load_seconds = time.perf_counter() - model_started
 
     all_segments = []
-    next_id = 1
+    next_id = max(1, starting_id)
     inference_seconds = 0.0
     normalization_seconds = 0.0
+    total_chunks = len(chunks)
     for chunk_index, (chunk_start, chunk_end) in enumerate(chunks):
         if samples is None:
             audio_input = str(audio_path)
@@ -411,8 +422,8 @@ def load_with_qwen3(
             last = int((chunk_end if chunk_end is not None else len(samples) / sample_rate) * sample_rate)
             chunk_samples = samples[first:last].astype(np.float32) / 32768.0
             audio_input = chunk_samples if sample_rate == 16000 else (chunk_samples, sample_rate)
-        fraction = 0.2 + 0.7 * (chunk_index / max(1, len(chunks)))
-        emit("transcribing", f"Transcribing chunk {chunk_index + 1} of {len(chunks)}.", fraction)
+        fraction = 0.2 + 0.7 * (chunk_index / max(1, total_chunks))
+        emit("transcribing", f"Transcribing chunk {chunk_index + 1} of {total_chunks}.", fraction)
         inference_started = time.perf_counter()
         result = call_with_supported_kwargs(
             transcribe_call,
@@ -447,6 +458,11 @@ def load_with_qwen3(
         normalization_seconds += time.perf_counter() - normalization_started
         if stream_segments and batch:
             print(json.dumps({"event": "segments", "segments": batch}), file=sys.stderr, flush=True)
+        if stream_segments:
+            resolved_end = chunk_end if chunk_end is not None else (
+                len(samples) / float(sample_rate) if samples is not None else chunk_start
+            )
+            print(json.dumps({"event": "chunk_complete", "through": resolved_end}), file=sys.stderr, flush=True)
 
     emit("transcribing", "Normalizing transcript segments.", 0.92)
     segments = all_segments
@@ -551,6 +567,8 @@ def main() -> int:
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--no-speech-threshold", type=float, default=0.6)
     parser.add_argument("--stream-segments", default="false")
+    parser.add_argument("--resume-through-seconds", type=float, default=0.0)
+    parser.add_argument("--starting-segment-id", type=int, default=1)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     program_started = time.perf_counter()
@@ -600,6 +618,8 @@ def main() -> int:
                         args.language,
                         bool_arg(args.stream_segments),
                         args.qwen_context,
+                        args.resume_through_seconds,
+                        max(1, args.starting_segment_id),
                     )
                 else:
                     used_backend, segments = load_with_faster_whisper(

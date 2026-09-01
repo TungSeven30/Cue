@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import Combine
 import Foundation
+import SwiftUI
 import UniformTypeIdentifiers
 import UserNotifications
 
@@ -541,6 +542,108 @@ final class AppModel: ObservableObject {
                 ? "Cleared job-specific settings.\n"
                 : "Set job-specific settings.\n"
         }
+    }
+
+    // MARK: - Selected job card settings
+
+    /// Global defaults layered with the job's override bag — what the header
+    /// card displays and what the next run will resolve to.
+    func resolvedSettings(for job: TranscriptionJob) -> JobSettingsSnapshot {
+        JobSettingsSnapshot(settings: settings).applying(job.overrides)
+    }
+
+    var selectedJobResolvedSettings: JobSettingsSnapshot? {
+        currentJob.map { resolvedSettings(for: $0) }
+    }
+
+    /// Writes an explicit override on the selected job so later default
+    /// changes do not rewrite this film.
+    func updateSelectedJobOverrides(_ mutate: (inout JobSettingsOverrides) -> Void) {
+        guard let id = selectedJobID,
+            let job = currentJob,
+            !job.status.isRunning
+        else { return }
+        var overrides = job.overrides
+        mutate(&overrides)
+        setOverrides(overrides, for: id)
+    }
+
+    func jobCardBinding<T>(
+        get: (JobSettingsSnapshot) -> T,
+        setOverride: (inout JobSettingsOverrides, T, JobSettingsSnapshot) -> Void
+    ) -> Binding<T> {
+        Binding(
+            get: { [unowned self] in
+                guard let resolved = self.selectedJobResolvedSettings else {
+                    return get(JobSettingsSnapshot(settings: self.settings))
+                }
+                return get(resolved)
+            },
+            set: { [unowned self] newValue in
+                let baseline = self.selectedJobResolvedSettings
+                    ?? JobSettingsSnapshot(settings: self.settings)
+                self.updateSelectedJobOverrides { setOverride(&$0, newValue, baseline) }
+            }
+        )
+    }
+
+    var selectedJobTranscriptionValidationMessage: String? {
+        guard let resolved = selectedJobResolvedSettings else { return nil }
+        return AppSettingsStore.transcriptionValidationMessage(
+            backend: resolved.whisperBackend,
+            model: resolved.whisperModel
+        )
+    }
+
+    func repairSelectedJobTranscriptionModel() {
+        guard let resolved = selectedJobResolvedSettings else { return }
+        let repaired = AppSettingsStore.normalizedWhisperModel(
+            for: resolved.whisperBackend,
+            current: resolved.whisperModel,
+            force: true
+        )
+        updateSelectedJobOverrides {
+            $0.transcriptionPreset = .custom
+            $0.whisperBackend = resolved.whisperBackend
+            $0.whisperModel = repaired
+        }
+    }
+
+    var jobCardAutoTranslate: Binding<Bool> {
+        Binding(
+            get: { [unowned self] in
+                self.currentJob?.overrides.autoTranslate ?? self.settings.autoTranslateAfterTranscription
+            },
+            set: { [unowned self] newValue in
+                self.updateSelectedJobOverrides { $0.autoTranslate = newValue }
+            }
+        )
+    }
+
+    var jobCardGenerateSummary: Binding<Bool> {
+        Binding(
+            get: { [unowned self] in
+                self.currentJob?.overrides.generateSummary ?? self.settings.generateSummary
+            },
+            set: { [unowned self] newValue in
+                self.updateSelectedJobOverrides { $0.generateSummary = newValue }
+            }
+        )
+    }
+
+    var jobCardShowsIntroSummaryDetail: Bool {
+        currentJob?.overrides.generateSummary ?? settings.generateSummary
+    }
+
+    var jobCardSummaryDetail: Binding<SummaryDetail> {
+        Binding(
+            get: { [unowned self] in
+                self.currentJob?.overrides.summaryDetail ?? self.settings.summaryDetail
+            },
+            set: { [unowned self] newValue in
+                self.updateSelectedJobOverrides { $0.summaryDetail = newValue }
+            }
+        )
     }
 
     func deleteJob(_ id: UUID) {
@@ -1503,11 +1606,29 @@ final class AppModel: ObservableObject {
             return
         }
 
+        let canResumeTranscription =
+            !force
+            && jobs[index].importedTranscriptSource == nil
+            && jobs[index].transcriptSegments.isEmpty
+            && !jobs[index].partialTranscriptSegments.isEmpty
+            && jobs[index].sourceFingerprint == currentFingerprint
+            && jobs[index].settings.transcriptionIdentity == resolved.transcriptionIdentity
+
         jobs[index].status = .transcribing
-        jobs[index].progress = JobProgress(stage: .preflight, detail: "Starting transcription.", fraction: 0)
-        jobs[index].translatedSegments = []
-        jobs[index].partialTranslatedSegments = []
-        jobs[index].partialTranscriptSegments = []
+        jobs[index].progress = JobProgress(
+            stage: .preflight,
+            detail: canResumeTranscription ? "Resuming transcription." : "Starting transcription.",
+            fraction: 0
+        )
+        if canResumeTranscription {
+            jobs[index].translatedSegments = []
+            // Keep partialTranslatedSegments so progressive translation can resume.
+        } else {
+            jobs[index].translatedSegments = []
+            jobs[index].partialTranslatedSegments = []
+            jobs[index].partialTranscriptSegments = []
+            jobs[index].transcriptionResumeThrough = 0
+        }
         // The imported files no longer describe this job's contents, so write-
         // back must stop pointing at them — and any write already queued for
         // them must be dropped too, exactly as startTranslationNow does for
@@ -1516,7 +1637,11 @@ final class AppModel: ObservableObject {
         cancelSubtitleSync(jobID: jobID, slot: .translation)
         jobs[index].importedTranscriptSource = nil
         jobs[index].importedTranslationSource = nil
-        jobs[index].transcriptionStartedAt = Date()
+        if canResumeTranscription {
+            jobs[index].transcriptionStartedAt = jobs[index].transcriptionStartedAt ?? Date()
+        } else {
+            jobs[index].transcriptionStartedAt = Date()
+        }
         jobs[index].transcriptionFinishedAt = nil
         jobs[index].translationStartedAt = nil
         jobs[index].finishedAt = nil
@@ -1525,7 +1650,18 @@ final class AppModel: ObservableObject {
         if let validationMessage {
             jobs[index].log += "Adjusted transcription settings: \(validationMessage)\n"
         }
-        appendLog("Starting transcription with \(resolved.whisperBackend.label) and model \(resolved.whisperModel).", to: jobID)
+        if canResumeTranscription {
+            appendLog(
+                "Resuming transcription from \(Int(jobs[index].transcriptionResumeThrough / 60)) minutes with \(resolved.whisperBackend.label) and model \(resolved.whisperModel).",
+                to: jobID
+            )
+        } else {
+            appendLog("Starting transcription with \(resolved.whisperBackend.label) and model \(resolved.whisperModel).", to: jobID)
+        }
+
+        let resumeThrough = jobs[index].transcriptionResumeThrough
+        let existingPartialSegments = jobs[index].partialTranscriptSegments
+        let resumeMergesPartials = canResumeTranscription
 
         // A translating job gets a driver up front, so streamed batches can be
         // translated behind the transcription frontier. A local server is the
@@ -1591,7 +1727,10 @@ final class AppModel: ObservableObject {
         gpuTask = Task {
             do {
                 let result = try await transcriptionService.transcribe(
-                    videoURL: videoURL, settings: resolved,
+                    videoURL: videoURL,
+                    settings: resolved,
+                    resumeThrough: resumeThrough,
+                    existingPartialSegments: existingPartialSegments,
                     progress: { [weak self] progress in
                         self?.updateProgress(progress, for: jobID)
                     },
@@ -1603,9 +1742,21 @@ final class AppModel: ObservableObject {
                         // stale ones on a completed job forever.
                         guard self.jobs.first(where: { $0.id == jobID })?.status == .transcribing else { return }
                         self.updateJob(jobID, debouncePersist: true) { job in
-                            job.partialTranscriptSegments += batch
+                            if resumeMergesPartials {
+                                job.partialTranscriptSegments = TranscriptionChunkPlanner.mergePartialSegments(
+                                    existing: job.partialTranscriptSegments,
+                                    batch: batch
+                                )
+                            } else {
+                                job.partialTranscriptSegments += batch
+                            }
                         }
                         self.drivers[jobID]?.ingest(batch)
+                    },
+                    onChunkComplete: { [weak self] chunkEnd in
+                        self?.updateJob(jobID, debouncePersist: true) { job in
+                            job.transcriptionResumeThrough = max(job.transcriptionResumeThrough, chunkEnd)
+                        }
                     },
                     onMetrics: { [weak self] metrics in
                         self?.appendLog(metrics.logSummary, to: jobID)
@@ -2459,6 +2610,7 @@ final class AppModel: ObservableObject {
             job.transcriptSegments = result.segments
             // The cleaned transcript supersedes the streamed preview.
             job.partialTranscriptSegments = []
+            job.transcriptionResumeThrough = 0
             job.translatedSegments = []
             job.summary = summary
             job.status = .transcriptionComplete
@@ -2523,6 +2675,7 @@ final class AppModel: ObservableObject {
         let id = job.id
         let configurations = makeSummaryConfigurations()
 
+        let summaryDetail = job.overrides.summaryDetail ?? settings.summaryDetail
         isGeneratingSummary = true
         Task {
             do {
@@ -2531,7 +2684,7 @@ final class AppModel: ObservableObject {
                     language: language,
                     primary: configurations.primary,
                     fallback: configurations.fallback,
-                    detail: settings.summaryDetail
+                    detail: summaryDetail
                 )
                 updateJob(id) { job in
                     job.summary = result.summary
@@ -2560,12 +2713,15 @@ final class AppModel: ObservableObject {
         language: String,
         for id: UUID
     ) async -> String? {
-        guard settings.generateSummary, !segments.isEmpty else { return nil }
+        guard let job = jobs.first(where: { $0.id == id }) else { return nil }
+        let generateSummary = job.overrides.generateSummary ?? settings.generateSummary
+        guard generateSummary, !segments.isEmpty else { return nil }
         guard settings.isSummaryReady else {
             let reason = settings.modelReadinessReason(settings.resolvedSummaryModel)
             appendLog("Skipped the intro summary because \(reason).", to: id)
             return nil
         }
+        let summaryDetail = job.overrides.summaryDetail ?? settings.summaryDetail
         updateJob(id, debouncePersist: true) { job in
             job.progress = JobProgress(stage: job.progress.stage, detail: "Writing intro summary.", fraction: job.progress.fraction)
         }
@@ -2576,7 +2732,7 @@ final class AppModel: ObservableObject {
                 language: language,
                 primary: configurations.primary,
                 fallback: configurations.fallback,
-                detail: settings.summaryDetail
+                detail: summaryDetail
             )
             if result.usedFallback {
                 appendLog(

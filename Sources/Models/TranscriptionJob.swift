@@ -79,6 +79,9 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
     var translatedSegments: [TranscriptionSegment]
     var partialTranslatedSegments: [TranscriptionSegment]
     var partialTranscriptSegments: [TranscriptionSegment]
+    /// End time in seconds of the last fully transcribed speech chunk. Used to
+    /// skip finished ranges on resume without re-running whisper on them.
+    var transcriptionResumeThrough: Double
     var transcriptionStartedAt: Date?
     var transcriptionFinishedAt: Date?
     var translationStartedAt: Date?
@@ -126,6 +129,7 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         self.translatedSegments = []
         self.partialTranslatedSegments = []
         self.partialTranscriptSegments = []
+        self.transcriptionResumeThrough = 0
         self.transcriptionStartedAt = nil
         self.transcriptionFinishedAt = nil
         self.translationStartedAt = nil
@@ -154,6 +158,7 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         translatedSegments = try container.decode([TranscriptionSegment].self, forKey: .translatedSegments)
         partialTranslatedSegments = try container.decodeIfPresent([TranscriptionSegment].self, forKey: .partialTranslatedSegments) ?? []
         partialTranscriptSegments = try container.decodeIfPresent([TranscriptionSegment].self, forKey: .partialTranscriptSegments) ?? []
+        transcriptionResumeThrough = try container.decodeIfPresent(Double.self, forKey: .transcriptionResumeThrough) ?? 0
         transcriptionStartedAt = try container.decodeIfPresent(Date.self, forKey: .transcriptionStartedAt)
         transcriptionFinishedAt = try container.decodeIfPresent(Date.self, forKey: .transcriptionFinishedAt)
         translationStartedAt = try container.decodeIfPresent(Date.self, forKey: .translationStartedAt)
@@ -336,6 +341,18 @@ extension JobSettingsSnapshot {
             resolved.bestOf = params.bestOf
             resolved.temperature = params.temperature
             resolved.noSpeechThreshold = params.noSpeechThreshold
+        }
+        if let backend = overrides.whisperBackend {
+            resolved.whisperBackend = backend
+        }
+        if let model = overrides.whisperModel {
+            resolved.whisperModel = model
+        }
+        if let source = overrides.translationSourceLanguage {
+            resolved.translationSourceLanguage = source
+        }
+        if let model = overrides.openAIModel {
+            resolved.openAIModel = model
         }
         return resolved
     }

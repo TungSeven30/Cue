@@ -25,6 +25,7 @@ private struct HangingHTTPClient: HTTPClient {
 
 @MainActor
 struct AppModelSubtitleImportTests {
+    @MainActor
     struct Fixture {
         let model: AppModel
         let baseURL: URL

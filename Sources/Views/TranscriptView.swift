@@ -33,12 +33,12 @@ struct TranscriptView: View {
                 Toggle("Warnings", isOn: $warningsOnly)
                     .toggleStyle(.checkbox)
                     .disabled(warnings.isEmpty)
-                TextField("Search", text: $searchText)
+                TextField("Search cues…", text: $searchText)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 220)
-                TextField("Replace", text: $replacementText)
+                    .frame(width: 200)
+                TextField("Replace with…", text: $replacementText)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 180)
+                    .frame(width: 170)
                 Button("Replace All") {
                     replaceAll(in: filtered)
                 }
@@ -100,6 +100,7 @@ private struct SegmentEditorRow: View {
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(.quaternary, in: Capsule())
+                    .accessibilityLabel("Cue \(segment.id)")
 
                 if let onSeek {
                     Button {
@@ -112,11 +113,13 @@ private struct SegmentEditorRow: View {
                     }
                     .buttonStyle(.plain)
                     .help("Jump the video to this segment")
+                    .accessibilityLabel("Seek video to cue \(segment.id), from \(formatted(segment.start)) to \(formatted(segment.end))")
                 } else {
                     Label("\(formatted(segment.start)) – \(formatted(segment.end))", systemImage: "clock")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                         .labelStyle(.titleAndIcon)
+                        .accessibilityLabel("Timestamp \(formatted(segment.start)) to \(formatted(segment.end))")
                 }
 
                 Spacer()
@@ -126,6 +129,7 @@ private struct SegmentEditorRow: View {
                         .font(.caption)
                         .foregroundStyle(.orange)
                         .lineLimit(1)
+                        .accessibilityLabel("Warning: \(warnings.map(\.message).joined(separator: ", "))")
                 }
             }
 
@@ -140,6 +144,7 @@ private struct SegmentEditorRow: View {
             .frame(minHeight: 46)
             .padding(8)
             .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+            .accessibilityLabel("Subtitle text for cue \(segment.id)")
         }
         .padding(12)
         .background(

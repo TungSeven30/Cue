@@ -43,13 +43,13 @@ struct BurnInOptionsView: View {
             .scrollContentBackground(.hidden)
 
             HStack {
-                Text("Re-encodes the whole video — takes a while.")
+                Text("Re-encodes video with embedded subtitles.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button("Export…") { chooseDestinationAndStart() }
+                Button("Burn In Video…") { chooseDestinationAndStart() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
                     .disabled(model.burnInPreflight?.available != true || !model.canBurnIn)

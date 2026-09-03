@@ -741,9 +741,51 @@ struct SidebarView: View {
 
     @ViewBuilder
     private var emptyPlaceholder: some View {
-        Text(model.jobs.isEmpty ? "No jobs yet" : "No jobs match")
-            .font(.callout)
-            .foregroundStyle(.secondary)
+        if model.jobs.isEmpty {
+            VStack(spacing: 8) {
+                Image(systemName: "film.stack")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                Text("No Jobs Yet")
+                    .font(.subheadline.weight(.medium))
+                Text("Drag media files here or click Add Files below.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.vertical, 24)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity)
+        } else {
+            VStack(spacing: 8) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                Text("No Matching Jobs")
+                    .font(.subheadline.weight(.medium))
+                Text(sidebarFilterEmptyText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button("Clear Filters") {
+                    searchText = ""
+                    statusFilterRaw = JobStatusFilter.all.rawValue
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+            }
+            .padding(.vertical, 20)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var sidebarFilterEmptyText: String {
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return "No jobs matching “\(trimmed)”."
+        }
+        return "No \(statusFilter.label.lowercased()) jobs found."
     }
 
     @ViewBuilder
@@ -1169,5 +1211,7 @@ private struct JobRow: View, Equatable {
             }
         }
         .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title), \(statusText)")
     }
 }

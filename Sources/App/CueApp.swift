@@ -50,12 +50,12 @@ struct CueApp: App {
                 .keyboardShortcut(.return, modifiers: [.command])
                 .disabled(!model.canPerformPrimaryAction)
 
-                Button("Add Files...") {
+                Button("Add Files…") {
                     model.selectVideo()
                 }
                 .keyboardShortcut("o")
 
-                Button("Add from URL...") {
+                Button("Add from URL…") {
                     model.promptForRemoteMedia()
                 }
                 .keyboardShortcut("l")
@@ -114,13 +114,13 @@ struct CueApp: App {
                 }
                 .disabled(model.translatedSegments.isEmpty)
 
-                Button("Export...") {
+                Button("Export…") {
                     model.isShowingExportSheet = true
                 }
                 .keyboardShortcut("e")
                 .disabled(model.transcriptSegments.isEmpty)
 
-                Button("Export Log...") {
+                Button("Export Log…") {
                     model.exportLog()
                 }
                 .disabled(model.currentJob == nil)

@@ -18,15 +18,19 @@ struct YtDlpInstallSheetView: View {
 
             switch model.ytDlpInstallRequest?.phase {
             case .failed(let message):
-                Label {
-                    Text(message)
-                        .textSelection(.enabled)
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 8) {
+                    Label {
+                        Text(message)
+                            .textSelection(.enabled)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                    }
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                    CopyFeedbackButton(text: message, helpText: "Copy error to clipboard")
                 }
-                .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
             default:
                 HStack(spacing: 8) {
                     ProgressView()
@@ -63,7 +67,7 @@ struct YtDlpInstallSheetView: View {
             HStack {
                 Spacer()
                 if model.ytDlpInstallRequest?.phase.isFailed == true {
-                    Button("Try Again") {
+                    Button("Retry Install") {
                         model.beginYtDlpInstall(pageURL: model.ytDlpInstallRequest?.pageURL)
                     }
                     .keyboardShortcut(.defaultAction)

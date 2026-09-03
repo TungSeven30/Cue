@@ -3,7 +3,22 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
-## Unreleased
+## 2.5.0 — 2026-09-02
+
+- Added **shimmering skeleton loading states** for transcription and translation,
+  giving immediate visual confirmation with live progress details while models
+  load and audio is processed.
+- Added a **welcome onboarding workspace** highlighting privacy, on-device Metal
+  acceleration, and multi-language translation, with clear next actions and format
+  guides.
+- Upgraded empty states across the sidebar and model browser with clear
+  descriptions and single-click reset filters.
+- Added **completion badges** and **actionable error recovery banners** with
+  retry options, system setup links, and one-click error copying.
+- Added instant **copy confirmation micro-feedback** (green checkmark) in the run
+  log, setup guide, and diagnostic popover.
+- Added **⌘1 / ⌘2 / ⌘3 keyboard shortcuts** to switch between Transcript,
+  Translation, and Log tabs, plus comprehensive VoiceOver accessibility labels.
 
 - Add from URL no longer dead-ends when **yt-dlp** is missing: Cue offers to
   install it with Homebrew right in the app, shows brew's progress in a

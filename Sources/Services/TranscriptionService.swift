@@ -171,10 +171,11 @@ struct TranscriptionService {
                     scriptURL.path,
                     videoURL.path,
                     "--json",
-                    "--language",
-                    snapshot.sourceLanguage,
-                    "--qwen-context",
-                    snapshot.qwenContext,
+                    // `--opt=value` form: argparse treats a separate value
+                    // starting with "-" as a flag, and both of these are typed
+                    // by the user.
+                    "--language=\(snapshot.sourceLanguage)",
+                    "--qwen-context=\(snapshot.qwenContext)",
                     "--model",
                     snapshot.whisperModel,
                     "--backend",
@@ -265,12 +266,12 @@ struct TranscriptionService {
             }
 
             let payload = try Self.decodePayload(from: stdoutData)
-            let cleanedSegments = TranscriptionPostProcessor.clean(payload.segments, settings: snapshot)
-            let combined = TranscriptionChunkPlanner.combinedSegments(
+            let segments = TranscriptionPostProcessor.cleanResumed(
                 partials: existingPartialSegments,
-                newlyCollected: cleanedSegments
+                newlyCollected: payload.segments,
+                settings: snapshot
             )
-            return TranscriptionResult(backend: payload.backend, segments: combined)
+            return TranscriptionResult(backend: payload.backend, segments: segments)
         } onCancel: {
             processBox.terminate()
         }
@@ -382,12 +383,12 @@ struct TranscriptionService {
             // otherwise report success; re-check like the Python path does
             // after its subprocess exits.
             try Task.checkCancellation()
-            let cleanedSegments = TranscriptionPostProcessor.clean(result.segments, settings: snapshot)
-            let combined = TranscriptionChunkPlanner.combinedSegments(
+            let segments = TranscriptionPostProcessor.cleanResumed(
                 partials: existingPartialSegments,
-                newlyCollected: cleanedSegments
+                newlyCollected: result.segments,
+                settings: snapshot
             )
-            return TranscriptionResult(backend: WhisperBackend.native.rawValue, segments: combined)
+            return TranscriptionResult(backend: WhisperBackend.native.rawValue, segments: segments)
         } onCancel: {
             cancelFlag.withLock { $0 = true }
         }
@@ -469,6 +470,24 @@ enum TranscriptionPostProcessor {
         cleaned = repairLongDurations(cleaned)
 
         return renumber(cleaned)
+    }
+
+    /// Final pass for a run that may have resumed from saved partials. The
+    /// partials (streamed, window-cleaned, carrying their streamed ids) and
+    /// the newly transcribed raw segments are merged on the time axis first,
+    /// then cleaned as one transcript: the cross-segment passes (dedupe,
+    /// merge) see the whole file, and ids are renumbered once from 1 —
+    /// cleaning the new half alone would restart its ids at 1 and collide
+    /// with the saved half, breaking translation lookups and SRT numbering.
+    static func cleanResumed(
+        partials: [TranscriptionSegment],
+        newlyCollected: [TranscriptionSegment],
+        settings: TranscriptionSettingsSnapshot
+    ) -> [TranscriptionSegment] {
+        clean(
+            TranscriptionChunkPlanner.combinedSegments(partials: partials, newlyCollected: newlyCollected),
+            settings: settings
+        )
     }
 
     /// Window-local subset of `clean` for streamed batches: deterministic,

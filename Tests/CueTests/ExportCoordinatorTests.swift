@@ -84,4 +84,39 @@ struct ExportCoordinatorTests {
         #expect(written == ["movie.vi.srt"], "The protected path must not be rewritten")
         #expect(try String(contentsOf: protectedURL, encoding: .utf8) == originalContents)
     }
+
+    // An existing sidecar was not written by this run — it may be the user's
+    // own edit — so the first re-export preserves it as .bak and later runs
+    // leave that backup untouched.
+    @MainActor @Test func sidecarExportBacksUpAnExistingFileOnce() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cue-backup-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let mediaURL = dir.appendingPathComponent("movie.mp4")
+        try Data("media".utf8).write(to: mediaURL)
+        let existing = dir.appendingPathComponent("movie.vi.srt")
+        try Data("user edit".utf8).write(to: existing)
+
+        let suiteName = "cue-backup-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+        let settings = AppSettingsStore(defaults: defaults, readSecret: { _ in nil }, writeSecret: { _, _ in true })
+
+        var job = TranscriptionJob(sourceURL: mediaURL, settings: settings)
+        job.settings.translationTargetLanguage = "Vietnamese"
+        job.translatedSegments = segments
+        let options = ExportCoordinator.SidecarOptions(
+            includeOriginal: false, includeTranslation: true, includeBilingual: false)
+
+        _ = try ExportCoordinator().writeSidecars(job: job, options: options)
+        let backup = dir.appendingPathComponent("movie.vi.srt.bak")
+        #expect(try String(contentsOf: backup, encoding: .utf8) == "user edit")
+        #expect(try String(contentsOf: existing, encoding: .utf8).contains("Hello"))
+
+        // A second run must not replace the backup with Cue's own first output.
+        _ = try ExportCoordinator().writeSidecars(job: job, options: options)
+        #expect(try String(contentsOf: backup, encoding: .utf8) == "user edit")
+    }
 }

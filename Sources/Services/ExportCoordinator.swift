@@ -115,11 +115,24 @@ struct ExportCoordinator {
     ) throws {
         let url = folder.appendingPathComponent(name)
         guard !protectedPaths.contains(url.standardizedFileURL.path) else { return }
+        try Self.backUpExistingFile(at: url)
         try SubtitleWriter.writeSRT(
             segments: Self.applyingIntro(segments, format: .srt, summary: summary),
             to: url
         )
         written.append(name)
+    }
+
+    /// A sidecar already on disk was not written by this run: it may be the
+    /// user's hand-edited copy of an earlier export, or a subtitle they made
+    /// themselves. Keep the first such file as `.bak` so an automatic
+    /// re-export can never destroy it; later runs leave that backup alone.
+    static func backUpExistingFile(at url: URL) throws {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        let backupURL = url.appendingPathExtension("bak")
+        guard !fileManager.fileExists(atPath: backupURL.path) else { return }
+        try fileManager.copyItem(at: url, to: backupURL)
     }
 
     static func normalizedURL(_ url: URL, expectedExtension: String) -> URL {

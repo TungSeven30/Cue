@@ -42,14 +42,36 @@ struct JobSettingsOverridesView: View {
                         Text(preset.label).tag(TranscriptionQualityPreset?.some(preset))
                     }
                 }
+                Picker("Translate from", selection: $overrides.translationSourceLanguage) {
+                    Text("Inherit (\(globalTranslationSourceLabel))").tag(String?.none)
+                    ForEach(AppSettingPresets.translationSourceLanguages) { preset in
+                        Text(preset.label).tag(String?.some(preset.value))
+                    }
+                }
                 Picker("Translate to", selection: $overrides.translationTargetLanguage) {
                     Text("Inherit (\(globalTargetLabel))").tag(String?.none)
                     ForEach(AppSettingPresets.translationTargetLanguages) { preset in
                         Text(preset.label).tag(String?.some(preset.value))
                     }
                 }
+                Picker("Translation LLM", selection: $overrides.openAIModel) {
+                    Text("Inherit (\(globalModelLabel))").tag(String?.none)
+                    ForEach(AppSettingPresets.translationModels) { preset in
+                        Text(preset.label).tag(String?.some(preset.value))
+                    }
+                    if let model = overrides.openAIModel,
+                        !AppSettingPresets.translationModels.contains(where: { $0.value == model })
+                    {
+                        Text(model).tag(String?.some(model))
+                    }
+                }
                 Picker("Auto-translate", selection: $overrides.autoTranslate) {
                     Text("Inherit (\(settings.autoTranslateAfterTranscription ? "On" : "Off"))").tag(Bool?.none)
+                    Text("On").tag(Bool?.some(true))
+                    Text("Off").tag(Bool?.some(false))
+                }
+                Picker("Intro summary", selection: $overrides.generateSummary) {
+                    Text("Inherit (\(settings.generateSummary ? "On" : "Off"))").tag(Bool?.none)
                     Text("On").tag(Bool?.some(true))
                     Text("Off").tag(Bool?.some(false))
                 }
@@ -83,5 +105,18 @@ struct JobSettingsOverridesView: View {
     private var globalTargetLabel: String {
         AppSettingPresets.translationTargetLanguages.first { $0.value == settings.translationTargetLanguage }?.label
             ?? settings.translationTargetLanguage
+    }
+
+    private var globalTranslationSourceLabel: String {
+        AppSettingPresets.translationSourceLanguages.first { $0.value == settings.translationSourceLanguage }?.label
+            ?? settings.translationSourceLanguage
+    }
+
+    private var globalModelLabel: String {
+        if TranslationProvider.infer(from: settings.openAIModel) == .local {
+            return "Local server"
+        }
+        return AppSettingPresets.translationModels.first { $0.value == settings.openAIModel }?.label
+            ?? settings.openAIModel
     }
 }

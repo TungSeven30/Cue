@@ -73,6 +73,7 @@ struct CLIArguments: Equatable {
             }
             if let equals = token.firstIndex(of: "=") {
                 let name = String(token[token.startIndex..<equals])
+                guard knownOptions.contains(name) else { throw CLIArgumentError.unknownOption(name) }
                 options[name] = String(token[token.index(after: equals)...])
                 continue
             }
@@ -80,6 +81,10 @@ struct CLIArguments: Equatable {
                 flags.insert(token)
                 continue
             }
+            // A typo must fail loudly: an unattended `--pareset bestAccuracy`
+            // that silently ran with defaults is the worst outcome for the
+            // cron and agent runs this CLI exists for.
+            guard knownOptions.contains(token) else { throw CLIArgumentError.unknownOption(token) }
             guard index < rest.count else { throw CLIArgumentError.missingValue(token) }
             options[token] = rest[index]
             index += 1
@@ -90,6 +95,14 @@ struct CLIArguments: Equatable {
 
     static let knownBooleanFlags: Set<String> = [
         "--json", "--quiet", "--summary", "--bilingual", "--burn-in", "--help", "--version",
+    ]
+
+    /// Every value-taking option any command reads. Kept in one place so the
+    /// parser and the help text cannot drift apart silently.
+    static let knownOptions: Set<String> = [
+        "--output-dir", "--format", "--language", "--preset", "--quality", "--backend", "--model",
+        "--translation-model", "--qwen-context", "--to", "--from", "--parallelism", "--detail",
+        "--document", "--text-size", "--output",
     ]
 
     func flag(_ name: String) -> Bool { flags.contains(name) }

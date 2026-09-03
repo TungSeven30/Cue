@@ -545,11 +545,14 @@ private struct RunOptionsRow: View {
 
             HStack(alignment: .bottom, spacing: 20) {
                 field(title: "Preset") {
-                    Picker("Preset", selection: model.jobCardBinding(get: \.transcriptionPreset) { overrides, value, _ in
-                        overrides.transcriptionPreset = value
-                        overrides.whisperBackend = nil
-                        overrides.whisperModel = nil
-                    }) {
+                    Picker(
+                        "Preset",
+                        selection: model.jobCardBinding(get: \.transcriptionPreset) { overrides, value, _ in
+                            overrides.transcriptionPreset = value
+                            overrides.whisperBackend = nil
+                            overrides.whisperModel = nil
+                        }
+                    ) {
                         ForEach(TranscriptionPreset.allCases) { preset in
                             Text(preset.label).tag(preset)
                         }
@@ -560,9 +563,12 @@ private struct RunOptionsRow: View {
                 }
 
                 field(title: "Quality") {
-                    Picker("Quality", selection: model.jobCardBinding(get: \.transcriptionQualityPreset) { overrides, value, _ in
-                        overrides.transcriptionQualityPreset = value
-                    }) {
+                    Picker(
+                        "Quality",
+                        selection: model.jobCardBinding(get: \.transcriptionQualityPreset) { overrides, value, _ in
+                            overrides.transcriptionQualityPreset = value
+                        }
+                    ) {
                         ForEach(TranscriptionQualityPreset.available(for: resolvedBackend)) { preset in
                             Text(preset.label).tag(preset)
                         }
@@ -600,15 +606,18 @@ private struct RunOptionsRow: View {
             if model.settings.showAdvancedControls {
                 HStack(alignment: .bottom, spacing: 20) {
                     field(title: "Backend") {
-                        Picker("Backend", selection: model.jobCardBinding(get: \.whisperBackend) { overrides, value, resolved in
-                            overrides.transcriptionPreset = .custom
-                            overrides.whisperBackend = value
-                            overrides.whisperModel = AppSettingsStore.normalizedWhisperModel(
-                                for: value,
-                                current: resolved.whisperModel,
-                                force: true
-                            )
-                        }) {
+                        Picker(
+                            "Backend",
+                            selection: model.jobCardBinding(get: \.whisperBackend) { overrides, value, resolved in
+                                overrides.transcriptionPreset = .custom
+                                overrides.whisperBackend = value
+                                overrides.whisperModel = AppSettingsStore.normalizedWhisperModel(
+                                    for: value,
+                                    current: resolved.whisperModel,
+                                    force: true
+                                )
+                            }
+                        ) {
                             ForEach(WhisperBackend.allCases) { backend in
                                 Text(backend.label).tag(backend)
                             }

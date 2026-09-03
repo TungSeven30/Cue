@@ -93,4 +93,32 @@ struct CLIArgumentsTests {
             #expect(CueCommandLine.usageText.contains(command.rawValue), "\(command.rawValue) is missing from the help text")
         }
     }
+
+    // A misspelled option must not run the job with defaults: unattended
+    // batch and agent runs would never notice.
+    @Test func unknownOptionIsRejected() {
+        #expect(throws: CLIArgumentError.unknownOption("--pareset")) {
+            _ = try CLIArguments.parse(["transcribe", "clip.mkv", "--pareset", "bestAccuracy"])
+        }
+        #expect(throws: CLIArgumentError.unknownOption("--langauge")) {
+            _ = try CLIArguments.parse(["transcribe", "clip.mkv", "--langauge=ja"])
+        }
+    }
+
+    // Every option the help text advertises must actually parse.
+    @Test func usageTextOptionsAreAllKnown() {
+        let advertised = CueCommandLine.usageText
+            .split(separator: "\n")
+            .compactMap { line -> String? in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard trimmed.hasPrefix("--") else { return nil }
+                return String(trimmed.split(separator: " ").first ?? "")
+            }
+        #expect(!advertised.isEmpty)
+        for option in advertised {
+            #expect(
+                CLIArguments.knownOptions.contains(option) || CLIArguments.knownBooleanFlags.contains(option),
+                "\(option) is documented but the parser rejects it")
+        }
+    }
 }

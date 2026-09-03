@@ -152,7 +152,7 @@ final class AppModel: ObservableObject {
         // Debounced edits and queued background writes must reach the disk
         // before the process exits, or the last ~400ms of changes are lost.
         NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
-            .sink { [weak self] _ in self?.flushPendingWork() }
+            .sink { [weak self] _ in self?.prepareForTermination() }
             .store(in: &cancellables)
         Publishers.Merge(
             NotificationCenter.default.publisher(for: JobStore.persistenceDidFail),
@@ -194,6 +194,23 @@ final class AppModel: ObservableObject {
         .store(in: &cancellables)
         runDiagnostics()
         syncWatchFolders()
+        Self.current = self
+        // Files opened through the Dock icon or Finder's Open With can arrive
+        // before this model exists; the delegate parks them until now.
+        OpenFileRequests.register { [weak self] urls in
+            self?.addMedia(urls: urls)
+        }
+    }
+
+    /// The live model, for the app delegate's quit confirmation. Weak so a
+    /// test fixture's model never outlives its test.
+    private(set) weak static var current: AppModel?
+
+    /// Anything a quit would interrupt: pipeline work, a fetch, or an install.
+    var hasActiveWork: Bool {
+        isProcessing
+            || downloads.contains { !$0.state.isFailed }
+            || (ytDlpInstallTask != nil && ytDlpInstallRequest?.phase.isFailed == false)
     }
 
     /// Writes every pending job mutation to disk synchronously. Called on
@@ -201,6 +218,29 @@ final class AppModel: ObservableObject {
     func flushPendingWork() {
         flushSubtitleSync()
         jobRepository.flush()
+    }
+
+    /// Stops every child process this instance owns, then flushes. Without
+    /// this, yt-dlp, ffmpeg, and the Python helper outlive the app as
+    /// orphans; the interrupted jobs are stamped canceled on the next launch.
+    private func prepareForTermination() {
+        _ = pipeline.cancelAll()
+        for task in downloadTasks.values {
+            task.cancel()
+        }
+        ytDlpInstallTask?.cancel()
+        flushPendingWork()
+    }
+
+    /// Asks for notification permission while the user is looking at the app
+    /// (starting a job), not the first time a job finishes in the background
+    /// — by then the prompt appears behind another app and is usually missed.
+    private func requestNotificationAuthorizationIfNeeded() {
+        guard Bundle.main.bundleIdentifier != nil, Bundle.main.bundleURL.pathExtension == "app" else { return }
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            guard settings.authorizationStatus == .notDetermined else { return }
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        }
     }
 
     var currentJob: TranscriptionJob? {
@@ -569,8 +609,8 @@ final class AppModel: ObservableObject {
     }
 
     func jobCardBinding<T>(
-        get: (JobSettingsSnapshot) -> T,
-        setOverride: (inout JobSettingsOverrides, T, JobSettingsSnapshot) -> Void
+        get: @escaping (JobSettingsSnapshot) -> T,
+        setOverride: @escaping (inout JobSettingsOverrides, T, JobSettingsSnapshot) -> Void
     ) -> Binding<T> {
         Binding(
             get: { [unowned self] in
@@ -580,7 +620,8 @@ final class AppModel: ObservableObject {
                 return get(resolved)
             },
             set: { [unowned self] newValue in
-                let baseline = self.selectedJobResolvedSettings
+                let baseline =
+                    self.selectedJobResolvedSettings
                     ?? JobSettingsSnapshot(settings: self.settings)
                 self.updateSelectedJobOverrides { setOverride(&$0, newValue, baseline) }
             }
@@ -1156,16 +1197,24 @@ final class AppModel: ObservableObject {
             // (spec §2.3 rule 4): canceled or manual jobs block too.
             return self.watchLedger.fingerprints.union(self.jobs.map(\.sourceFingerprint))
         }
+        service.ledgerPathsUnderFolder = { [weak self] folderPath in
+            guard let self else { return [] }
+            let prefix = folderPath.hasSuffix("/") ? folderPath : folderPath + "/"
+            return self.watchLedger.fingerprints
+                .map(WatchFolderLedger.path(fromFingerprint:))
+                .filter { $0.hasPrefix(prefix) }
+        }
         service.onScanCompleted = { [weak self] folderPath, existingPaths in
             // Prune only entries under the folder that was actually scanned:
             // other folders' histories must survive untouched. A subfolder
-            // that's transiently unreadable/unmounted drops out of
-            // existingPaths too, so also keep any entry whose file is still
-            // actually on disk — otherwise it gets pruned and re-ingested as
-            // a duplicate the moment the subfolder becomes readable again.
+            // that's transiently unreadable/unmounted drops out of the
+            // enumeration too, so the scan re-verified every ledger entry
+            // under this folder on disk (off the main thread) and folded the
+            // survivors into existingPaths — otherwise they would be pruned
+            // and re-ingested as duplicates the moment the subfolder came back.
             let prefix = folderPath.hasSuffix("/") ? folderPath : folderPath + "/"
             self?.watchLedger.prune(fileExists: { path in
-                !path.hasPrefix(prefix) || existingPaths.contains(path) || FileManager.default.fileExists(atPath: path)
+                !path.hasPrefix(prefix) || existingPaths.contains(path)
             })
         }
         service.onFilesReady = { [weak self] urls in
@@ -1563,13 +1612,17 @@ final class AppModel: ObservableObject {
         let jobID = jobs[index].id
         let videoURL = jobs[index].sourceURL
 
-        let validationMessage = settings.transcriptionValidationMessage
-        if validationMessage != nil {
-            settings.repairTranscriptionModelForBackend()
-        }
-
         let currentFingerprint = TranscriptionJob.fingerprint(for: videoURL)
-        let resolved = JobSettingsSnapshot(settings: settings).applying(jobs[index].overrides)
+        var resolved = JobSettingsSnapshot(settings: settings).applying(jobs[index].overrides)
+        // Validate the pairing this job will actually run with (globals plus
+        // its overrides) and repair the run's copy only: starting one job
+        // must not rewrite the app-wide defaults behind the user's back.
+        let validationMessage = AppSettingsStore.transcriptionValidationMessage(
+            backend: resolved.whisperBackend, model: resolved.whisperModel)
+        if validationMessage != nil {
+            resolved.whisperModel = AppSettingsStore.normalizedWhisperModel(
+                for: resolved.whisperBackend, current: resolved.whisperModel, force: true)
+        }
         // Per-job autoTranslate wins over the global toggle (spec §0.3).
         let autoTranslate = jobs[index].overrides.autoTranslate ?? settings.autoTranslateAfterTranscription
 
@@ -1722,6 +1775,7 @@ final class AppModel: ObservableObject {
             )
         }
 
+        requestNotificationAuthorizationIfNeeded()
         gpuJobID = jobID
         updateProcessingActivity()
         gpuTask = Task {
@@ -1836,7 +1890,13 @@ final class AppModel: ObservableObject {
                         } catch is CancellationError {
                             self.markCanceled(jobID)
                         } catch {
-                            self.markFailed(jobID, message: "Translation failed: \(error.localizedDescription)")
+                            // A request torn down by Stop can surface as a
+                            // network error before the cancellation check.
+                            if Task.isCancelled {
+                                self.markCanceled(jobID)
+                            } else {
+                                self.markFailed(jobID, message: "Translation failed: \(error.localizedDescription)")
+                            }
                         }
                         self.endStreamingSession(for: jobID)
                         self.notifyJobFinished(jobID)
@@ -1889,11 +1949,30 @@ final class AppModel: ObservableObject {
     private func startTranslationNow(at index: Int) {
         let jobID = jobs[index].id
         let segments = jobs[index].transcriptSegments
-        let existingTranslations =
-            jobs[index].partialTranslatedSegments.isEmpty
-            ? jobs[index].translatedSegments
-            : jobs[index].partialTranslatedSegments
         let resolved = JobSettingsSnapshot(settings: settings).applying(jobs[index].overrides)
+        // What this run starts from, all of it only for the *same* target
+        // language (partials in another language must not be stitched in):
+        // an interrupted run resumes from its saved partials; a translation
+        // that covers only part of the transcript (an imported file with fewer
+        // cues) is kept and the gaps are filled; a translation that already
+        // covers every cue is redone in full — seeding from it made every
+        // re-run a silent no-op.
+        let sameTarget =
+            jobs[index].settings.translationTargetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+            == resolved.translationTargetLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !sameTarget {
+            jobs[index].partialTranslatedSegments = []
+        }
+        let existingTranslations: [TranscriptionSegment]
+        if !sameTarget {
+            existingTranslations = []
+        } else if !jobs[index].partialTranslatedSegments.isEmpty {
+            existingTranslations = jobs[index].partialTranslatedSegments
+        } else {
+            let covered = Set(jobs[index].translatedSegments.map(\.id))
+            let coversEveryCue = segments.allSatisfy { covered.contains($0.id) }
+            existingTranslations = coversEveryCue ? [] : jobs[index].translatedSegments
+        }
         jobs[index].status = .translating
         jobs[index].progress = JobProgress(stage: .translating, detail: "Starting translation.", fraction: 0)
         // This run replaces translatedSegments with machine output, so the
@@ -1920,6 +1999,7 @@ final class AppModel: ObservableObject {
             to: jobID
         )
 
+        requestNotificationAuthorizationIfNeeded()
         translationJobID = jobID
         updateProcessingActivity()
         translationTask = Task {
@@ -2804,9 +2884,14 @@ final class AppModel: ObservableObject {
                 fraction: fraction
             )
         }
+        let line = "\(composed.stage.label): \(composed.detail)\n"
         updateJob(id, debouncePersist: true) { job in
             job.progress = composed
-            job.log += "\(composed.stage.label): \(composed.detail)\n"
+            // Progress ticks repeat the same detail dozens of times per
+            // chunk; one line per distinct message keeps the log readable.
+            if !job.log.hasSuffix(line) {
+                job.log += line
+            }
         }
     }
 

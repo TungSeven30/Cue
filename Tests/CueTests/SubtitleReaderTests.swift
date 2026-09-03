@@ -256,4 +256,15 @@ struct SubtitleReaderTests {
             Issue.record("unexpected error type: \(error)")
         }
     }
+
+    // Double("inf") and Double("nan") parse; a cue carrying them would trap in
+    // the SRT formatter and make the job's JSON unencodable.
+    @Test func rejectsNonFiniteAndAbsurdTimestamps() {
+        #expect(SubtitleReader.parseTimestamp("00:00:inf") == nil)
+        #expect(SubtitleReader.parseTimestamp("00:nan:00,000") == nil)
+        #expect(SubtitleReader.parseTimestamp("00:00:1e400") == nil)
+        #expect(SubtitleReader.parseTimestamp("999999999:00:00,000") == nil)
+        #expect(SubtitleReader.parseTimestamp("00:00:-05,000") == nil)
+        #expect(SubtitleReader.parseTimestamp("99:59:59,999") != nil)
+    }
 }

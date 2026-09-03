@@ -158,9 +158,6 @@ private struct SegmentEditorRow: View {
     }
 
     private func formatted(_ seconds: Double) -> String {
-        let hours = Int(seconds / 3600)
-        let minutes = Int((seconds.truncatingRemainder(dividingBy: 3600)) / 60)
-        let seconds = Int(seconds) % 60
-        return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+        SubtitleWriter.formatDisplayTimestamp(seconds)
     }
 }

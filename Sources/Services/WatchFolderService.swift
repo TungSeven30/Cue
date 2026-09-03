@@ -22,6 +22,13 @@ final class WatchFolderService: ObservableObject {
     var blockedFingerprints: () -> Set<String> = { [] }
     /// Called with files that passed every scan rule.
     var onFilesReady: ([URL]) -> Void = { _ in }
+    /// Ledger entries under the watched folder whose files the scan should
+    /// re-verify on disk (off the main thread) before they count as gone.
+    var ledgerPathsUnderFolder: (_ folderPath: String) -> [String] = { _ in [] }
+    /// A scan in flight; a request arriving meanwhile runs one more pass
+    /// afterwards instead of enumerating the same folder twice at once.
+    private var isScanning = false
+    private var rescanRequested = false
     /// Lets the ledger prune entries for files that vanished. Reports the
     /// folder that was scanned so the caller can scope pruning to it —
     /// entries for other folders must survive a folder switch.
@@ -83,7 +90,7 @@ final class WatchFolderService: ObservableObject {
     /// Snapshot of every media file under the folder, at any depth. `nil`
     /// when the folder itself is unreadable (unmounted volume), so callers
     /// can distinguish "gone" from "empty".
-    static func observeMediaFiles(underPath path: String) -> [FileObservation]? {
+    nonisolated static func observeMediaFiles(underPath path: String) -> [FileObservation]? {
         let folderURL = URL(fileURLWithPath: path, isDirectory: true)
         var probeIsDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &probeIsDirectory), probeIsDirectory.boolValue else {
@@ -107,7 +114,41 @@ final class WatchFolderService: ObservableObject {
 
     func scan() {
         guard let watchedPath else { return }
-        guard let observations = Self.observeMediaFiles(underPath: watchedPath) else {
+        guard !isScanning else {
+            rescanRequested = true
+            return
+        }
+        isScanning = true
+        let ledgerPaths = ledgerPathsUnderFolder(watchedPath)
+        Task { [weak self] in
+            // Enumerating a large or network-mounted folder and stat-ing the
+            // ledger's entries can take seconds; both stay off the main
+            // thread so the sidebar never freezes on the rescan timer.
+            let snapshot = await Task.detached(priority: .utility) {
+                let observations = Self.observeMediaFiles(underPath: watchedPath)
+                let stillPresent = ledgerPaths.filter { FileManager.default.fileExists(atPath: $0) }
+                return (observations: observations, stillPresent: stillPresent)
+            }.value
+            guard let self else { return }
+            self.isScanning = false
+            // Stopped or re-pointed while enumerating: the result is stale,
+            // but a queued rescan request still belongs to the new folder.
+            if self.watchedPath == watchedPath {
+                self.apply(
+                    observations: snapshot.observations,
+                    stillPresentLedgerPaths: snapshot.stillPresent,
+                    folderPath: watchedPath
+                )
+            }
+            if self.rescanRequested {
+                self.rescanRequested = false
+                self.scan()
+            }
+        }
+    }
+
+    private func apply(observations: [FileObservation]?, stillPresentLedgerPaths: [String], folderPath: String) {
+        guard let observations else {
             // Do not spin or tear down: the folder may be a briefly
             // unmounted volume. The timer keeps trying; Settings shows this.
             lastError = "The watch folder could not be read."
@@ -120,7 +161,7 @@ final class WatchFolderService: ObservableObject {
             now: Date(),
             blockedFingerprints: blockedFingerprints()
         )
-        onScanCompleted(watchedPath, Set(observations.map(\.path)))
+        onScanCompleted(folderPath, Set(observations.map(\.path)).union(stillPresentLedgerPaths))
         if !ready.isEmpty {
             onFilesReady(ready.map { URL(fileURLWithPath: $0.path) })
         }

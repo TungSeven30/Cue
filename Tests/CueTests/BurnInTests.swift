@@ -38,6 +38,16 @@ struct BurnInArgumentTests {
         }
     }
 
+    // The default macOS volume format is case-insensitive.
+    @Test func outputGuardIsCaseInsensitive() {
+        #expect(throws: BurnInService.BurnInError.self) {
+            try BurnInService.validateOutput(
+                source: URL(fileURLWithPath: "/v/Movie.mp4"),
+                output: URL(fileURLWithPath: "/v/movie.MP4")
+            )
+        }
+    }
+
     @Test func outputGuardAcceptsDistinctPath() throws {
         try BurnInService.validateOutput(
             source: URL(fileURLWithPath: "/v/movie.mp4"),

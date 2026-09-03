@@ -455,18 +455,13 @@ struct SidebarView: View {
     /// menu races the menu teardown re-activating this app, which leaves
     /// Finder's window behind ours — indistinguishable from a dead button.
     private func revealInFinder(_ url: URL) {
-        NSLog("reveal: requested %@", url.path)
         DispatchQueue.main.async {
             if FileManager.default.fileExists(atPath: url.path) {
-                NSLog("reveal: file exists, revealing")
                 NSWorkspace.shared.activateFileViewerSelecting([url])
             } else if FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path) {
                 // The file moved or was deleted; its folder is still useful.
-                NSLog("reveal: file missing, opening parent")
-                let opened = NSWorkspace.shared.open(url.deletingLastPathComponent())
-                NSLog("reveal: open(parent) -> %d", opened ? 1 : 0)
+                NSWorkspace.shared.open(url.deletingLastPathComponent())
             } else {
-                NSLog("reveal: nothing exists at %@", url.path)
                 NSSound.beep()
             }
         }
@@ -1158,10 +1153,13 @@ private struct JobRow: View, Equatable {
             }
             if canRetry {
                 Button(action: onRetry) {
-                    Image(systemName: "arrow.clockwise")
-                        .help("Retry this failed job")
+                    Label("Retry", systemImage: "arrow.clockwise")
+                        .labelStyle(.iconOnly)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
+                .help("Retry this failed job")
             }
             if hasOverrides {
                 Image(systemName: "slider.horizontal.3")

@@ -63,4 +63,13 @@ struct SubtitleWriterTests {
         #expect(contents.contains("01:01:01.000 --> 01:01:02.500"))
         #expect(SubtitleExportFormat.vtt.fileExtension == "vtt")
     }
+
+    // Int(Double) traps on NaN/infinity; one bad cue must never crash export.
+    @Test func timestampFormattersNeverTrapOnBadValues() {
+        #expect(SubtitleWriter.formatSRTTimestamp(.infinity) == "99:59:59,999")
+        #expect(SubtitleWriter.formatSRTTimestamp(.nan) == "00:00:00,000")
+        #expect(SubtitleWriter.formatSRTTimestamp(-3) == "00:00:00,000")
+        #expect(SubtitleWriter.formatDisplayTimestamp(.nan) == "00:00:00")
+        #expect(SubtitleWriter.formatDisplayTimestamp(-.infinity) == "00:00:00")
+    }
 }

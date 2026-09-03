@@ -57,11 +57,15 @@ enum AudioCache {
             )
         else { return }
 
-        // Safe to sweep unconditionally: the app runs one extraction at a time
-        // (AppModel's serial GPU slot), so no in-flight temp file can exist
-        // when prune runs.
+        // Only stale leftovers are swept: the GUI runs one extraction at a
+        // time, but the CLI shares this cache from its own process, so a
+        // partial younger than an hour may still be in flight elsewhere.
+        let staleBefore = Date(timeIntervalSinceNow: -3600)
         for url in entries where url.lastPathComponent.contains(".partial-") {
-            try? fileManager.removeItem(at: url)
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if (modified ?? .distantPast) < staleBefore {
+                try? fileManager.removeItem(at: url)
+            }
         }
 
         let wavs: [(url: URL, size: UInt64, mtime: Date)] = entries.compactMap { url in

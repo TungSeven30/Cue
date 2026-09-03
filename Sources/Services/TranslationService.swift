@@ -100,6 +100,13 @@ private struct TranslationChunkResult {
     let segments: [TranslatedSegment]
 }
 
+/// Carries a 429's `Retry-After` alongside the classified error so the retry
+/// loop can wait the requested time; unwrapped before any other handling.
+private struct RetryAfterHint: Error {
+    let error: TranslationServiceError
+    let seconds: TimeInterval
+}
+
 /// Secrets and prompt for a translation run, passed separately from the
 /// persisted JobSettingsSnapshot so keys never reach a job file on disk.
 struct TranslationCredentials: Sendable {
@@ -266,6 +273,10 @@ struct TranslationService: Sendable {
             untranslated > 0
             ? "Translation complete. \(untranslated) segment(s) kept their original text."
             : "Translation complete."
+        // A Stop that landed while the last responses were in flight never
+        // surfaced as a CancellationError; re-check like the transcription
+        // services do, or a canceled job would be stamped complete.
+        try Task.checkCancellation()
         progress(JobProgress(stage: .complete, detail: completionDetail, fraction: 1.0))
 
         return segments.map { segment in
@@ -314,7 +325,8 @@ struct TranslationService: Sendable {
         context: [TranslationContextPair]
     ) async throws -> [TranslatedSegment] {
         var lastError: Error?
-        for attempt in 1...3 {
+        let maxAttempts = 4
+        for attempt in 1...maxAttempts {
             do {
                 return try await translateChunk(
                     segments,
@@ -329,6 +341,16 @@ struct TranslationService: Sendable {
                     localEndpoint: localEndpoint,
                     context: context
                 )
+            } catch let hint as RetryAfterHint {
+                // A 429 that named its own wait: honor it (bounded) instead of
+                // guessing, so a rate-limited batch recovers rather than fails.
+                lastError = hint.error
+                if Task.isCancelled {
+                    throw CancellationError()
+                }
+                if attempt < maxAttempts {
+                    try await Task.sleep(nanoseconds: UInt64(min(hint.seconds, 30) * 1_000_000_000))
+                }
             } catch {
                 // Retrying cannot fix a rejected key or unknown model; surface
                 // it immediately instead of burning the remaining attempts.
@@ -347,8 +369,10 @@ struct TranslationService: Sendable {
                 if case TranslationServiceError.responseTooLarge = error {
                     break
                 }
-                if attempt < 3 {
-                    try await Task.sleep(nanoseconds: UInt64(attempt) * 700_000_000)
+                if attempt < maxAttempts {
+                    // 1s, 2s, 4s: enough for a provider hiccup or a short
+                    // rate-limit window without stalling the queue.
+                    try await Task.sleep(nanoseconds: UInt64(pow(2.0, Double(attempt - 1)) * 1_000_000_000))
                 }
             }
         }
@@ -472,6 +496,7 @@ struct TranslationService: Sendable {
             userText: "Subtitles:\n\(subtitleText)",
             schemaName: "movie_intro_summary",
             schema: Self.summarySchema,
+            maxOutputTokens: 2_048,
             localEndpoint: localEndpoint
         )
 
@@ -590,7 +615,11 @@ struct TranslationService: Sendable {
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {
-            throw Self.classifyAPIError(provider: provider, data: data, statusCode: httpResponse.statusCode, model: model)
+            let classified = Self.classifyAPIError(provider: provider, data: data, statusCode: httpResponse.statusCode, model: model)
+            if httpResponse.statusCode == 429, let seconds = Self.retryAfterSeconds(from: httpResponse) {
+                throw RetryAfterHint(error: classified, seconds: seconds)
+            }
+            throw classified
         }
 
         let rawText = try Self.extractOutputText(provider: provider, data: data)
@@ -619,8 +648,10 @@ struct TranslationService: Sendable {
         userText: String,
         schemaName: String = "subtitle_translation",
         schema: JSONValue = TranslationSchema.segments,
+        maxOutputTokens: Int? = nil,
         localEndpoint: String
     ) throws -> URLRequest {
+        let outputBudget = maxOutputTokens ?? Self.outputTokenBudget(forUserText: userText)
         var request: URLRequest
         switch provider {
         case .openai:
@@ -651,14 +682,18 @@ struct TranslationService: Sendable {
             request.httpBody = try JSONEncoder().encode(
                 AnthropicRequest(
                     model: model,
-                    max_tokens: 16000,
+                    max_tokens: outputBudget,
                     system: systemPrompt,
                     messages: [.init(role: "user", content: userText)],
                     output_config: .init(format: .init(type: "json_schema", schema: schema))
                 )
             )
         case .google:
-            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent"
+            // The endpoint already names the "models/" collection; an id
+            // pasted from Google's docs as "models/gemini-…" must not become
+            // "models/models/gemini-…".
+            let modelID = Self.removingRoutingPrefix("models/", from: model)
+            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(modelID):generateContent"
             guard let url = URL(string: endpoint) else {
                 throw TranslationServiceError.fatalAPIError("The Gemini model name \"\(model)\" is not a valid model id.")
             }
@@ -686,7 +721,10 @@ struct TranslationService: Sendable {
                 base += "/v1"
             }
             let joined = base + "/chat/completions"
-            guard !base.isEmpty, let url = URL(string: joined), url.scheme != nil, url.host != nil else {
+            guard !base.isEmpty, let url = URL(string: joined),
+                let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+                url.host != nil
+            else {
                 throw TranslationServiceError.fatalAPIError(
                     "The local server URL \"\(localEndpoint)\" is not a valid URL. Set it in Settings (e.g. http://localhost:1234/v1).")
             }
@@ -701,7 +739,8 @@ struct TranslationService: Sendable {
                 systemPrompt: systemPrompt,
                 userText: userText,
                 schemaName: schemaName,
-                schema: schema
+                schema: schema,
+                maxTokens: outputBudget
             )
         case .openRouter, .groq, .cerebras:
             let url: URL
@@ -745,7 +784,8 @@ struct TranslationService: Sendable {
                 systemPrompt: systemPrompt,
                 userText: userText,
                 schemaName: schemaName,
-                schema: schema
+                schema: schema,
+                maxTokens: outputBudget
             )
         }
         request.httpMethod = "POST"
@@ -761,7 +801,8 @@ struct TranslationService: Sendable {
         systemPrompt: String,
         userText: String,
         schemaName: String,
-        schema: JSONValue
+        schema: JSONValue,
+        maxTokens: Int
     ) throws -> Data {
         try JSONEncoder().encode(
             ChatCompletionsRequest(
@@ -774,6 +815,7 @@ struct TranslationService: Sendable {
                     type: "json_schema",
                     json_schema: .init(name: schemaName, strict: true, schema: schema)
                 ),
+                max_tokens: maxTokens,
                 stream: false
             )
         )
@@ -858,6 +900,35 @@ struct TranslationService: Sendable {
             }
             return content
         }
+    }
+
+    /// `Retry-After` as seconds. Providers send either a delay or an HTTP
+    /// date; only positive, finite values count. Internal for tests.
+    static func retryAfterSeconds(from response: HTTPURLResponse) -> TimeInterval? {
+        guard let raw = response.value(forHTTPHeaderField: "Retry-After")?.trimmingCharacters(in: .whitespaces),
+            !raw.isEmpty
+        else { return nil }
+        if let seconds = TimeInterval(raw) {
+            return seconds.isFinite && seconds > 0 ? seconds : nil
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        guard let date = formatter.date(from: raw) else { return nil }
+        let delay = date.timeIntervalSinceNow
+        return delay > 0 ? delay : nil
+    }
+
+    /// Output budget for one request. Chat Completions providers default to a
+    /// small `max_tokens` (Groq: about 1k) when it is omitted, which truncates
+    /// every Balanced/Faster chunk and forces a split, while OpenRouter
+    /// reserves the model's full maximum against the account balance. Three
+    /// times the input estimate covers expansive target languages plus JSON
+    /// overhead; the ceiling matches Anthropic's request limit here.
+    static func outputTokenBudget(forUserText userText: String) -> Int {
+        let estimate = TranslationBatchPlanner.estimatedTokens(in: userText)
+        return min(16_000, max(1_024, estimate * 3))
     }
 
     /// Turns a provider error response into a single actionable sentence
@@ -1190,6 +1261,7 @@ private struct ChatCompletionsRequest: Encodable {
     let model: String
     let messages: [Message]
     let response_format: ResponseFormat
+    let max_tokens: Int
     let stream: Bool
 }
 

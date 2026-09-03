@@ -16,15 +16,30 @@ enum CueCommandLine {
         let tokens = Array(CommandLine.arguments.dropFirst())
         guard let first = tokens.first, CLICommand.named(first) != nil else { return }
 
-        Task { @MainActor in
+        let run = Task { @MainActor in
             let code = await execute(tokens)
             exit(code)
         }
+        // Ctrl-C cancels the stage so its cleanup runs — child processes are
+        // terminated, staging folders and partial outputs removed — and the
+        // run exits 130 through the normal path. A second Ctrl-C exits at
+        // once for anything that refuses to unwind.
+        signal(SIGINT, SIG_IGN)
+        let interrupts = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+        interrupts.setEventHandler {
+            if run.isCancelled {
+                exit(130)
+            }
+            run.cancel()
+        }
+        interrupts.resume()
         // Services the CLI calls are @MainActor, so the main thread has to
         // keep servicing the main queue instead of blocking on a semaphore
         // the way the packaged self-test does. dispatchMain never returns;
         // the Task above ends the process.
-        dispatchMain()
+        withExtendedLifetime(interrupts) {
+            dispatchMain()
+        }
     }
 
     @MainActor

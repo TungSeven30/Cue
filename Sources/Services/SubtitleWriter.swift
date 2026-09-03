@@ -184,17 +184,26 @@ enum SubtitleWriter {
     }
 
     static func formatDisplayTimestamp(_ seconds: Double) -> String {
-        let hours = Int(seconds / 3600)
-        let minutes = Int((seconds.truncatingRemainder(dividingBy: 3600)) / 60)
-        let wholeSeconds = Int(seconds) % 60
+        let clamped = clampedTimestamp(seconds)
+        let hours = Int(clamped / 3600)
+        let minutes = Int((clamped.truncatingRemainder(dividingBy: 3600)) / 60)
+        let wholeSeconds = Int(clamped) % 60
         return String(format: "%02d:%02d:%02d", hours, minutes, wholeSeconds)
+    }
+
+    /// `Int(_:)` traps on NaN, infinity, and out-of-range doubles; a single
+    /// bad cue must never take the app down, so clamp to a range every
+    /// player accepts (0 to just under 100 hours).
+    static func clampedTimestamp(_ seconds: Double) -> Double {
+        guard !seconds.isNaN else { return 0 }
+        return min(max(0, seconds), 359_999.999)
     }
 
     static func formatSRTTimestamp(_ seconds: Double) -> String {
         // Round to whole milliseconds first so values like 1.0599 become
         // 00:00:01,060 instead of truncating to ,059, and let the carry
         // roll into seconds naturally.
-        let totalMilliseconds = max(0, Int((seconds * 1000).rounded()))
+        let totalMilliseconds = Int((clampedTimestamp(seconds) * 1000).rounded())
         let milliseconds = totalMilliseconds % 1000
         let totalSeconds = totalMilliseconds / 1000
         let hours = totalSeconds / 3600

@@ -28,7 +28,10 @@ enum TranscriptionChunkPlanner {
     ) -> [TranscriptionSegment] {
         guard !batch.isEmpty else { return existing }
         let replaceFrom = batch.map(\.start).min() ?? 0
-        var merged = existing.filter { $0.end <= replaceFrom - 0.01 }
+        // Keep saved cues that end exactly at the resume frontier (a chunk
+        // boundary is a cue boundary); drop only cues that reach into the
+        // range the batch re-transcribed.
+        var merged = existing.filter { $0.end <= replaceFrom + 0.01 }
         merged.append(contentsOf: batch)
         return merged
     }
@@ -87,7 +90,11 @@ enum TranscriptionChunkPlanner {
         let sorted = rms.sorted()
         let percentileIndex = Int(Double(sorted.count - 1) * 0.95)
         let reference = sorted[max(0, min(percentileIndex, sorted.count - 1))]
-        let threshold = max(1.0, 0.1 * Double(reference))
+        // Samples are normalized to [-1, 1] here, while the Python helper
+        // works on raw int16 values: its floor of 1.0 becomes 1/32768 in
+        // these units. A floor of 1.0 would call every frame silent and cut
+        // in the middle of speech.
+        let threshold = max(1.0 / 32_768.0, 0.1 * Double(reference))
         let frameSeconds = Double(frame) / Double(sampleRate)
 
         var candidates: [Double] = []

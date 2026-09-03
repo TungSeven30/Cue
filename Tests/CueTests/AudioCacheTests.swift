@@ -81,7 +81,22 @@ struct AudioCacheTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let partial = dir.appendingPathComponent("abc.wav.partial-XYZ")
         try Data(count: 10).write(to: partial)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: -7_200)], ofItemAtPath: partial.path)
         AudioCache.prune(directory: dir, maxBytes: 10_000, keeping: nil)
         #expect(!FileManager.default.fileExists(atPath: partial.path))
+    }
+
+    // A fresh partial may belong to an extraction running in another Cue
+    // process (the CLI beside the GUI); sweeping it would fail that run.
+    @Test func pruneKeepsFreshPartialFiles() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("partial-fresh-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let partial = dir.appendingPathComponent("abc.wav.partial-XYZ")
+        try Data(count: 10).write(to: partial)
+        AudioCache.prune(directory: dir, maxBytes: 10_000, keeping: nil)
+        #expect(FileManager.default.fileExists(atPath: partial.path))
     }
 }

@@ -54,7 +54,18 @@ struct BurnInService {
     }
 
     static func validateOutput(source: URL, output: URL) throws {
-        if source.standardizedFileURL.path == output.standardizedFileURL.path {
+        let sourcePath = source.standardizedFileURL.path
+        let outputPath = output.standardizedFileURL.path
+        // APFS is case-insensitive by default, so "Movie.mp4" and "movie.mp4"
+        // are one file; a plain string compare would let ffmpeg read and
+        // overwrite the same inode.
+        if sourcePath.compare(outputPath, options: .caseInsensitive) == .orderedSame {
+            throw BurnInError.outputWouldReplaceSource
+        }
+        if let sourceID = try? source.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier,
+            let outputID = try? output.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier,
+            sourceID.isEqual(outputID)
+        {
             throw BurnInError.outputWouldReplaceSource
         }
     }

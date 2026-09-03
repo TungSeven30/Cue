@@ -131,6 +131,21 @@ struct JobStoreTests {
         #expect(store.startupError?.contains("Existing jobs may be hidden") == true)
     }
 
+    @Test(.timeLimit(.minutes(1)))
+    func failedSaveAndFlushReturnsWithoutDeadlock() throws {
+        defer { cleanUp() }
+        let job = try makeJob(status: .idle)
+        let store = JobStore(baseURL: baseURL) { operation, _ in
+            if case .write = operation { throw InjectedFailure() }
+        }
+
+        store.saveJob(job)
+        store.flush()
+
+        let jobURL = baseURL.appendingPathComponent("Cue/jobs/\(job.id.uuidString).json")
+        #expect(!FileManager.default.fileExists(atPath: jobURL.path))
+    }
+
     @Test func failedSaveLeavesNoPartialJobFile() throws {
         defer { cleanUp() }
         let job = try makeJob(status: .idle)

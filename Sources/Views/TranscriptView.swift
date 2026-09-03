@@ -4,8 +4,11 @@ struct TranscriptView: View {
     let segments: [TranscriptionSegment]
     let warnings: [SubtitleQualityWarning]
     var activeSegmentID: Int? = nil
-    let onEdit: (TranscriptionSegment, String) -> Void
+    let onEdit: TranscriptSegmentCommit
     var onSeek: ((TranscriptionSegment) -> Void)? = nil
+
+    @StateObject private var editSession = TranscriptEditSession()
+    @FocusState private var focusedSegmentID: Int?
     @State private var searchText = ""
     @State private var replacementText = ""
     @State private var warningsOnly = false
@@ -15,6 +18,7 @@ struct TranscriptView: View {
         // transcripts O(n^2) to draw.
         let warningsBySegment = Dictionary(grouping: warnings, by: \.segmentID)
         let filtered = filteredSegments(warningsBySegment: warningsBySegment)
+        let replaceMatchCount = TranscriptReplaceAll.matchCount(in: filtered, query: searchText)
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Text("^[\(filtered.count) segment](inflect: true)")
@@ -38,11 +42,11 @@ struct TranscriptView: View {
                     .frame(width: 200)
                 TextField("Replace with…", text: $replacementText)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 170)
-                Button("Replace All") {
+                    .frame(width: 180)
+                Button(replaceAllButtonTitle(matchCount: replaceMatchCount)) {
                     replaceAll(in: filtered)
                 }
-                .disabled(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(replaceMatchCount == 0)
             }
 
             LazyVStack(alignment: .leading, spacing: 8) {
@@ -51,12 +55,38 @@ struct TranscriptView: View {
                         segment: segment,
                         warnings: warningsBySegment[segment.id] ?? [],
                         isActive: segment.id == activeSegmentID,
-                        onEdit: onEdit,
+                        rowKind: editSession.rowKind(for: segment.id),
+                        focusedSegmentID: $focusedSegmentID,
+                        onBeginEditing: {
+                            editSession.endEditingIfNeeded(segments: segments, commit: onEdit)
+                            editSession.beginEditing(segmentID: segment.id, text: segment.text)
+                            focusedSegmentID = segment.id
+                        },
+                        onLiveEdit: { newText in
+                            editSession.applyLiveEdit(segment: segment, newText: newText, commit: onEdit)
+                        },
+                        onEndEditing: {
+                            editSession.endEditing(segment: segment, finalText: segment.text, commit: onEdit)
+                        },
                         onSeek: onSeek
                     )
                     .id(segment.id)
                 }
             }
+        }
+        .onChange(of: focusedSegmentID) { oldValue, newValue in
+            guard let oldValue, oldValue != newValue,
+                let segment = segments.first(where: { $0.id == oldValue })
+            else { return }
+            editSession.endEditing(segment: segment, finalText: segment.text, commit: onEdit)
+        }
+    }
+
+    private func replaceAllButtonTitle(matchCount: Int) -> String {
+        switch matchCount {
+        case 0: "Replace All"
+        case 1: "Replace 1"
+        default: "Replace \(matchCount)"
         }
     }
 
@@ -70,16 +100,15 @@ struct TranscriptView: View {
     }
 
     private func replaceAll(in filtered: [TranscriptionSegment]) {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return }
-        for segment in filtered where segment.text.localizedCaseInsensitiveContains(query) {
-            let updated = segment.text.replacingOccurrences(
-                of: query,
-                with: replacementText,
-                options: [.caseInsensitive, .literal]
-            )
-            onEdit(segment, updated)
-        }
+        let changes = TranscriptReplaceAll.plannedChanges(
+            in: filtered,
+            query: searchText,
+            replacement: replacementText
+        )
+        guard !changes.isEmpty else { return }
+        editSession.endEditingIfNeeded(segments: segments, commit: onEdit)
+        focusedSegmentID = nil
+        editSession.replaceAll(changes: changes, segments: segments, commit: onEdit)
     }
 }
 
@@ -87,8 +116,13 @@ private struct SegmentEditorRow: View {
     let segment: TranscriptionSegment
     let warnings: [SubtitleQualityWarning]
     var isActive: Bool = false
-    let onEdit: (TranscriptionSegment, String) -> Void
+    let rowKind: TranscriptSegmentRowKind
+    var focusedSegmentID: FocusState<Int?>.Binding
+    let onBeginEditing: () -> Void
+    let onLiveEdit: (String) -> Void
+    let onEndEditing: () -> Void
     var onSeek: ((TranscriptionSegment) -> Void)? = nil
+    @State private var draftText = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -133,18 +167,12 @@ private struct SegmentEditorRow: View {
                 }
             }
 
-            TextEditor(
-                text: Binding(
-                    get: { segment.text },
-                    set: { onEdit(segment, $0) }
-                )
-            )
-            .font(.body)
-            .scrollContentBackground(.hidden)
-            .frame(minHeight: 46)
-            .padding(8)
-            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
-            .accessibilityLabel("Subtitle text for cue \(segment.id)")
+            cueText
+                .font(.body)
+                .padding(8)
+                .frame(maxWidth: .infinity, minHeight: 46, alignment: .topLeading)
+                .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityLabel("Subtitle text for cue \(segment.id)")
         }
         .padding(12)
         .background(
@@ -155,6 +183,35 @@ private struct SegmentEditorRow: View {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(borderColor, lineWidth: isActive ? 1.5 : 1)
         )
+    }
+
+    @ViewBuilder
+    private var cueText: some View {
+        switch rowKind {
+        case .idleText:
+            Text(segment.text.isEmpty ? " " : segment.text)
+                .foregroundStyle(segment.text.isEmpty ? .secondary : .primary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onBeginEditing)
+        case .editingTextEditor:
+            TextEditor(text: $draftText)
+                .focused(focusedSegmentID, equals: segment.id)
+                .scrollContentBackground(.hidden)
+                .onAppear {
+                    draftText = segment.text
+                }
+                .onChange(of: draftText) { _, newText in
+                    onLiveEdit(newText)
+                }
+                .onChange(of: segment.text) { _, newText in
+                    if draftText != newText {
+                        draftText = newText
+                    }
+                }
+                .onDisappear(perform: onEndEditing)
+        }
     }
 
     private var borderColor: Color {

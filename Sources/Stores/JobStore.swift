@@ -116,44 +116,103 @@ final class JobStore {
         return job
     }
 
-    /// Saves one job. Encoding and writing happen off the main thread; calls
-    /// for the same job are serialized by the queue, last write wins.
+    /// Saves one job. Writes happen off the main thread; calls for the same job
+    /// are serialized by the queue, last write wins. Encoding stays on the main
+    /// actor so the IO queue only receives Sendable snapshots.
     func saveJob(_ job: TranscriptionJob) {
         let url = fileURL(for: job.id)
-        let failureInjector = self.failureInjector
-        ioQueue.async {
-            do {
-                let data = try Self.makeEncoder().encode(job)
-                try failureInjector(.write, url)
-                try data.write(to: url, options: .atomic)
-            } catch {
-                Self.reportFailure(
-                    "Could not save job \(job.id.uuidString): \(error.localizedDescription). Its latest state is still in memory."
-                )
-            }
+        let encoded: Data
+        do {
+            encoded = try Self.makeEncoder().encode(job)
+        } catch {
+            Self.reportFailure(
+                "Could not encode job \(job.id.uuidString): \(error.localizedDescription). Its latest state is still in memory."
+            )
+            return
         }
+        Self.enqueuePersist(
+            encoded: encoded,
+            jobID: job.id,
+            to: url,
+            on: ioQueue,
+            failureInjector: failureInjector
+        )
     }
 
     /// Blocks until every write enqueued so far has hit the disk. Called on
     /// app termination so debounced edits and final job states are not lost.
     func flush() {
-        ioQueue.sync {}
+        Self.waitForIOQueue(ioQueue)
     }
 
     func deleteJob(_ id: UUID) {
-        let url = fileURL(for: id)
-        let fileManager = SendableFileManager(self.fileManager)
-        let failureInjector = self.failureInjector
-        ioQueue.async {
-            do {
-                if fileManager.value.fileExists(atPath: url.path) {
-                    try failureInjector(.remove, url)
-                    try fileManager.value.removeItem(at: url)
-                }
-            } catch {
-                Self.reportFailure("Could not delete job history \(id.uuidString): \(error.localizedDescription)")
-            }
+        Self.enqueueDelete(
+            at: fileURL(for: id),
+            id: id,
+            on: ioQueue,
+            fileManager: SendableFileManager(fileManager),
+            failureInjector: failureInjector
+        )
+    }
+
+    private nonisolated static func enqueuePersist(
+        encoded: Data,
+        jobID: UUID,
+        to url: URL,
+        on queue: DispatchQueue,
+        failureInjector: @escaping FailureInjector
+    ) {
+        queue.async {
+            persistJob(encoded: encoded, jobID: jobID, to: url, failureInjector: failureInjector)
         }
+    }
+
+    private nonisolated static func persistJob(
+        encoded: Data,
+        jobID: UUID,
+        to url: URL,
+        failureInjector: FailureInjector
+    ) {
+        do {
+            try failureInjector(.write, url)
+            try encoded.write(to: url, options: .atomic)
+        } catch {
+            reportFailure(
+                "Could not save job \(jobID.uuidString): \(error.localizedDescription). Its latest state is still in memory."
+            )
+        }
+    }
+
+    private nonisolated static func enqueueDelete(
+        at url: URL,
+        id: UUID,
+        on queue: DispatchQueue,
+        fileManager: SendableFileManager,
+        failureInjector: @escaping FailureInjector
+    ) {
+        queue.async {
+            deleteJobFile(at: url, id: id, fileManager: fileManager, failureInjector: failureInjector)
+        }
+    }
+
+    private nonisolated static func deleteJobFile(
+        at url: URL,
+        id: UUID,
+        fileManager: SendableFileManager,
+        failureInjector: FailureInjector
+    ) {
+        do {
+            if fileManager.value.fileExists(atPath: url.path) {
+                try failureInjector(.remove, url)
+                try fileManager.value.removeItem(at: url)
+            }
+        } catch {
+            reportFailure("Could not delete job history \(id.uuidString): \(error.localizedDescription)")
+        }
+    }
+
+    private nonisolated static func waitForIOQueue(_ queue: DispatchQueue) {
+        queue.sync {}
     }
 
     private func fileURL(for id: UUID) -> URL {

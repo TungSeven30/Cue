@@ -156,8 +156,16 @@ enum SubtitleReader {
             seconds = seconds * 60 + value
         }
         guard let last = Double(pieces[pieces.count - 1]) else { return nil }
-        return seconds * 60 + last
+        let total = seconds * 60 + last
+        // Double("inf") and Double("nan") parse successfully. A non-finite or
+        // absurd value would trap in the SRT formatter's Int conversion and
+        // make the job's JSON unencodable, so the cue is rejected instead.
+        guard total.isFinite, total >= 0, total < maximumTimestampSeconds else { return nil }
+        return total
     }
+
+    /// 100 hours: longer than any real media, short enough to reject junk.
+    static let maximumTimestampSeconds: Double = 100 * 3600
 }
 
 /// A manual Load Subtitles… failure is shown in a dialog, so the default

@@ -104,7 +104,7 @@ struct ContentView: View {
                 Button(role: .destructive) {
                     model.cancelActiveJob()
                 } label: {
-                    Label("Cancel", systemImage: "stop.fill")
+                    Label("Stop", systemImage: "stop.fill")
                 }
                 .help("Stop all running jobs and pause the queue")
             }

@@ -3,13 +3,61 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
-## Unreleased
+## 2.5.0 — 2026-09-02
+
+- Added **shimmering skeleton loading states** for transcription and translation,
+  giving immediate visual confirmation with live progress details while models
+  load and audio is processed.
+- Added a **welcome onboarding workspace** highlighting privacy, on-device Metal
+  acceleration, and multi-language translation, with clear next actions and format
+  guides.
+- Upgraded empty states across the sidebar and model browser with clear
+  descriptions and single-click reset filters.
+- Added **completion badges** and **actionable error recovery banners** with
+  retry options, system setup links, and one-click error copying.
+- Added instant **copy confirmation micro-feedback** (green checkmark) in the run
+  log, setup guide, and diagnostic popover.
+- Added **⌘1 / ⌘2 / ⌘3 keyboard shortcuts** to switch between Transcript,
+  Translation, and Log tabs, plus comprehensive VoiceOver accessibility labels.
 
 - Add from URL no longer dead-ends when **yt-dlp** is missing: Cue offers to
   install it with Homebrew right in the app, shows brew's progress in a
   sheet, and starts fetching your link automatically once it lands. Without
   Homebrew you get exact manual instructions instead of a bare error. The
   setup guide's yt-dlp row gained the same Install button.
+- Fixed a build break in the job card's settings bindings that kept the
+  current source from compiling under Swift 6 toolchains.
+- Resume-from-chunks fixes for the built-in engine: silence detection now
+  works on the engine's normalized audio (chunk cuts land in real pauses
+  instead of mid-sentence), a saved cue ending exactly on a chunk boundary is
+  no longer dropped on resume, and a resumed transcript is cleaned as one
+  document so cue ids stay unique — duplicate ids broke translation lookups
+  and SRT numbering.
+- A subtitle file with a malformed timestamp (`inf`, `nan`, or an absurd
+  value) is now rejected instead of crashing export and silently making the
+  job unsaveable.
+- Stopping a job during its final translation requests no longer lets the job
+  flip to "Translation ready" after the cancel.
+- Pressing Translate on a job that already has a translation now translates
+  again (it was a silent no-op), and changing the target language discards
+  partials made for the previous language.
+- Automatic sidecar export keeps a one-time `.bak` of any subtitle file it
+  would overwrite, so hand edits to an earlier export survive a re-run.
+- Quitting while jobs or downloads are running now asks first, and stops the
+  helper processes (yt-dlp, ffmpeg, Python) instead of leaving them orphaned.
+  The launch-time orphan sweep only touches processes whose parent is gone,
+  so a CLI run beside the GUI is never killed, and it now covers yt-dlp.
+- Groq, Cerebras, OpenRouter, and local Chat Completions requests set an
+  output token budget (Groq's small default truncated most chunks and forced
+  splits); rate-limited requests honor `Retry-After` and back off longer.
+- The CLI rejects misspelled options instead of running with defaults, runs
+  the one-time WhisperDesk data migration before headless commands, and
+  cleans up after Ctrl-C.
+- Media dropped on the Dock icon or opened via Finder's Open With becomes
+  jobs; the menu command that stops every lane is now labeled "Stop All
+  Jobs"; advanced controls the selected engine ignores are hidden; watch
+  folder scans run off the main thread; per-job and watch-folder settings
+  can now override the translation LLM, source language, and intro summary.
 
 ## 2.4.0 — 2026-08-22
 

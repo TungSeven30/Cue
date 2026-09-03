@@ -17,7 +17,7 @@ struct MenuBarView: View {
             Button("Resume Queue") { model.startAllPendingJobs() }
         } else {
             Button("Pause Queue") { model.pauseQueue() }
-                .disabled(!model.hasPendingWork && model.menuBarStatusText == "Idle")
+                .disabled(!model.isProcessing && !model.hasPendingWork)
         }
         Button("Start All Pending") { model.startAllPendingJobs() }
             .disabled(!model.hasPendingWork)

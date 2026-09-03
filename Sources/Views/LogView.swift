@@ -21,14 +21,9 @@ struct LogView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(log, forType: .string)
-                } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
-                }
-                .buttonStyle(.borderless)
-                .font(.caption)
+                CopyFeedbackButton(text: log, helpText: "Copy entire run log to clipboard")
+                    .buttonStyle(.borderless)
+                    .font(.caption)
             }
 
             LazyVStack(alignment: .leading, spacing: 2) {

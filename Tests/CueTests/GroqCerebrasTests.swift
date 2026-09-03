@@ -33,6 +33,9 @@ struct GroqCerebrasProviderTests {
         let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         #expect(json["model"] as? String == "openai/gpt-oss-120b")
         #expect((json["response_format"] as? [String: Any])?["type"] as? String == "json_schema")
+        // Groq defaults max_completion_tokens to roughly 1k when omitted, which
+        // truncates every Balanced/Faster chunk; the request must set a budget.
+        #expect((json["max_tokens"] as? Int ?? 0) >= 1_024)
     }
 
     @Test func requestTargetsCerebrasWithStrippedModel() throws {

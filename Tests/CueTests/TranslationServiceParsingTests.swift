@@ -477,4 +477,30 @@ struct TranslationServiceParsingTests {
         let requests = await client.capturedRequests()
         #expect(requests.count == 1)
     }
+
+    @Test func outputTokenBudgetScalesWithInputAndStaysBounded() {
+        #expect(TranslationService.outputTokenBudget(forUserText: "tiny") == 1_024)
+        let large = String(repeating: "word ", count: 40_000)
+        #expect(TranslationService.outputTokenBudget(forUserText: large) == 16_000)
+        let medium = String(repeating: "word ", count: 2_000)  // ~2.5k tokens
+        let budget = TranslationService.outputTokenBudget(forUserText: medium)
+        #expect(budget > 1_024 && budget < 16_000)
+    }
+
+    @Test func retryAfterHeaderParsesSecondsAndDates() throws {
+        func response(_ headers: [String: String]) -> HTTPURLResponse {
+            HTTPURLResponse(url: URL(string: "https://example.com")!, statusCode: 429, httpVersion: nil, headerFields: headers)!
+        }
+        #expect(TranslationService.retryAfterSeconds(from: response(["Retry-After": "7"])) == 7)
+        #expect(TranslationService.retryAfterSeconds(from: response(["Retry-After": "0"])) == nil)
+        #expect(TranslationService.retryAfterSeconds(from: response(["Retry-After": "soon"])) == nil)
+        #expect(TranslationService.retryAfterSeconds(from: response([:])) == nil)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        let future = formatter.string(from: Date(timeIntervalSinceNow: 90))
+        let delay = try #require(TranslationService.retryAfterSeconds(from: response(["Retry-After": future])))
+        #expect(delay > 60 && delay <= 90)
+    }
 }

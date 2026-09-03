@@ -58,7 +58,9 @@ struct SettingsView: View {
                     TextField(settings.whisperBackend == .qwen3ASR ? "Custom Qwen model" : "Custom Whisper model", text: $settings.whisperModel)
                     Toggle("Clean audio before transcription", isOn: $settings.preprocessAudio)
                         .help("Cleans audio with an ffmpeg filter before transcription; skipped when ffmpeg is not installed")
-                    if settings.whisperBackend != .qwen3ASR {
+                    // Only Faster Whisper reads these; showing a control the
+                    // selected engine ignores teaches users that Settings lie.
+                    if settings.whisperBackend == .fasterWhisper || settings.whisperBackend == .auto {
                         Toggle("Voice activity detection", isOn: $settings.vadFilter)
                     }
                     Toggle("Remove empty segments", isOn: $settings.removeEmptySegments)
@@ -76,15 +78,26 @@ struct SettingsView: View {
                         Text("\(settings.maxMergeGap, specifier: "%.2f")s")
                             .monospacedDigit()
                     }
-                    if settings.whisperBackend != .qwen3ASR {
+                    // Beam size: built-in engine and Faster Whisper. Best of
+                    // and temperature: MLX and Faster Whisper (the built-in
+                    // engine always beam-searches). No-speech: every Whisper.
+                    if settings.whisperBackend != .qwen3ASR && settings.whisperBackend != .mlxWhisper {
                         Stepper("Beam size: \(settings.beamSize)", value: $settings.beamSize, in: 1...10)
+                    }
+                    if settings.whisperBackend == .fasterWhisper || settings.whisperBackend == .auto {
                         Stepper("Best of: \(settings.bestOf)", value: $settings.bestOf, in: 1...10)
+                    }
+                    if settings.whisperBackend == .fasterWhisper || settings.whisperBackend == .mlxWhisper
+                        || settings.whisperBackend == .auto
+                    {
                         HStack {
                             Text("Temperature")
                             Slider(value: $settings.temperature, in: 0...1, step: 0.05)
                             Text("\(settings.temperature, specifier: "%.2f")")
                                 .monospacedDigit()
                         }
+                    }
+                    if settings.whisperBackend != .qwen3ASR {
                         HStack {
                             Text("No-speech threshold")
                             Slider(value: $settings.noSpeechThreshold, in: 0...1, step: 0.05)

@@ -455,18 +455,13 @@ struct SidebarView: View {
     /// menu races the menu teardown re-activating this app, which leaves
     /// Finder's window behind ours — indistinguishable from a dead button.
     private func revealInFinder(_ url: URL) {
-        NSLog("reveal: requested %@", url.path)
         DispatchQueue.main.async {
             if FileManager.default.fileExists(atPath: url.path) {
-                NSLog("reveal: file exists, revealing")
                 NSWorkspace.shared.activateFileViewerSelecting([url])
             } else if FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path) {
                 // The file moved or was deleted; its folder is still useful.
-                NSLog("reveal: file missing, opening parent")
-                let opened = NSWorkspace.shared.open(url.deletingLastPathComponent())
-                NSLog("reveal: open(parent) -> %d", opened ? 1 : 0)
+                NSWorkspace.shared.open(url.deletingLastPathComponent())
             } else {
-                NSLog("reveal: nothing exists at %@", url.path)
                 NSSound.beep()
             }
         }
@@ -746,9 +741,51 @@ struct SidebarView: View {
 
     @ViewBuilder
     private var emptyPlaceholder: some View {
-        Text(model.jobs.isEmpty ? "No jobs yet" : "No jobs match")
-            .font(.callout)
-            .foregroundStyle(.secondary)
+        if model.jobs.isEmpty {
+            VStack(spacing: 8) {
+                Image(systemName: "film.stack")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                Text("No Jobs Yet")
+                    .font(.subheadline.weight(.medium))
+                Text("Drag media files here or click Add Files below.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.vertical, 24)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity)
+        } else {
+            VStack(spacing: 8) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                Text("No Matching Jobs")
+                    .font(.subheadline.weight(.medium))
+                Text(sidebarFilterEmptyText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button("Clear Filters") {
+                    searchText = ""
+                    statusFilterRaw = JobStatusFilter.all.rawValue
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+            }
+            .padding(.vertical, 20)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var sidebarFilterEmptyText: String {
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return "No jobs matching “\(trimmed)”."
+        }
+        return "No \(statusFilter.label.lowercased()) jobs found."
     }
 
     @ViewBuilder
@@ -1158,10 +1195,13 @@ private struct JobRow: View, Equatable {
             }
             if canRetry {
                 Button(action: onRetry) {
-                    Image(systemName: "arrow.clockwise")
-                        .help("Retry this failed job")
+                    Label("Retry", systemImage: "arrow.clockwise")
+                        .labelStyle(.iconOnly)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
+                .help("Retry this failed job")
             }
             if hasOverrides {
                 Image(systemName: "slider.horizontal.3")
@@ -1171,5 +1211,7 @@ private struct JobRow: View, Equatable {
             }
         }
         .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title), \(statusText)")
     }
 }

@@ -153,13 +153,6 @@ struct SetupGuideView: View {
     }
 
     private func copyButton(_ command: String) -> some View {
-        Button {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(command, forType: .string)
-        } label: {
-            Label("Copy", systemImage: "doc.on.doc")
-        }
-        .font(.caption)
-        .help("Copy this command, then paste it into Terminal")
+        CopyFeedbackButton(text: command, helpText: "Copy this command, then paste it into Terminal")
     }
 }

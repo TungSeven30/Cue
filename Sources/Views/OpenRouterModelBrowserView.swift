@@ -29,13 +29,26 @@ struct OpenRouterModelBrowserView: View {
                     VStack(spacing: 8) {
                         Label(loadError, systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.orange)
-                        Button("Try Again") { load() }
+                        Button("Retry") { load() }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if visibleModels.isEmpty {
-                    Text("No models match")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    VStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                        Text("No Models Match")
+                            .font(.headline)
+                        Text("No OpenRouter models found matching “\(searchText)”.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("Clear Search") {
+                            searchText = ""
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List(visibleModels, selection: $selectedID) { model in
                         VStack(alignment: .leading, spacing: 2) {

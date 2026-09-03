@@ -92,6 +92,35 @@ build_bundle() {
   <string>6.0</string>
   <key>LSMinimumSystemVersion</key>
   <string>$MIN_SYSTEM_VERSION</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Video or audio</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.movie</string>
+        <string>public.audio</string>
+        <string>public.audiovisual-content</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Matroska video</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>mkv</string>
+      </array>
+    </dict>
+  </array>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSPrincipalClass</key>
@@ -110,7 +139,7 @@ build_bundle() {
   <key>SUPublicEDKey</key>
   <string>$SPARKLE_PUBLIC_KEY</string>
   <key>NSHumanReadableCopyright</key>
-  <string>Copyright © $(date +%Y). All rights reserved.</string>
+  <string>Copyright © $(date +%Y) Cue contributors. Released under the MIT License.</string>
 </dict>
 </plist>
 PLIST

@@ -86,14 +86,19 @@ struct DetailView: View {
         playerController.updateSegments(segments)
     }
 
+    @ViewBuilder
     private var emptyWorkspace: some View {
-        ContentUnavailableView {
-            Label("No Video Selected", systemImage: "film.stack")
-        } description: {
-            Text("Open video or audio files, or drag them into the window, to add jobs.")
-        } actions: {
-            Button("Add Files…") { model.selectVideo() }
-                .buttonStyle(.borderedProminent)
+        if model.jobs.isEmpty {
+            WelcomeWorkspaceView(model: model)
+        } else {
+            ContentUnavailableView {
+                Label("No Job Selected", systemImage: "film.stack")
+            } description: {
+                Text("Select a video or audio job from the sidebar to inspect its transcript, translations, or video preview.")
+            } actions: {
+                Button("Add Files…") { model.selectVideo() }
+                    .buttonStyle(.borderedProminent)
+            }
         }
     }
 
@@ -134,6 +139,16 @@ struct DetailView: View {
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 12)
+            .background {
+                // Background keyboard shortcuts for Cmd+1 / Cmd+2 / Cmd+3 tab switching
+                HStack {
+                    Button("") { tab = .transcript }.keyboardShortcut("1", modifiers: [.command])
+                    Button("") { tab = .translation }.keyboardShortcut("2", modifiers: [.command])
+                    Button("") { tab = .log }.keyboardShortcut("3", modifiers: [.command])
+                }
+                .opacity(0)
+                .allowsHitTesting(false)
+            }
 
             Divider()
 
@@ -149,6 +164,9 @@ struct DetailView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 4)
             .contentShape(Rectangle())
+            .accessibilityElement()
+            .accessibilityLabel("Resize video preview")
+            .accessibilityValue("\(Int(playerHeight)) points")
             .onHover { inside in
                 isHoveringResizeHandle = inside
                 if inside {
@@ -211,16 +229,26 @@ struct DetailView: View {
         switch tab {
         case .transcript:
             if model.displayTranscriptSegments.isEmpty {
-                ContentUnavailableView {
-                    Label("No Transcript Yet", systemImage: "waveform")
-                } description: {
-                    Text("Run transcription to turn the source audio into editable subtitle segments.")
-                } actions: {
-                    Button("Transcribe") { model.startTranscription() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!model.canTranscribe)
-                    Button("Load Subtitles…") { model.presentSubtitleLoadPanel() }
-                        .disabled(!model.canLoadSubtitles)
+                if model.isSelectedJobRunning || model.currentJob?.status.isRunning == true {
+                    TranscriptLoadingSkeletonView(
+                        title: "Transcribing Audio…",
+                        detail: model.progress.detail,
+                        fraction: model.progress.fraction
+                    )
+                } else if model.currentJob?.status == .queued {
+                    QueuedJobPlaceholderView(model: model)
+                } else {
+                    ContentUnavailableView {
+                        Label("No Transcript Yet", systemImage: "waveform")
+                    } description: {
+                        Text("Run transcription to turn the source audio into editable subtitle segments.")
+                    } actions: {
+                        Button("Transcribe") { model.startTranscription() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!model.canTranscribe)
+                        Button("Load Subtitles…") { model.presentSubtitleLoadPanel() }
+                            .disabled(!model.canLoadSubtitles)
+                    }
                 }
             } else {
                 VStack(alignment: .leading, spacing: 10) {
@@ -230,16 +258,36 @@ struct DetailView: View {
             }
         case .translation:
             if model.displayTranslatedSegments.isEmpty {
-                ContentUnavailableView {
-                    Label("No Translation Yet", systemImage: "character.bubble")
-                } description: {
-                    Text(translationHint)
-                } actions: {
-                    Button("Translate") { model.startTranslation() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!model.canTranslate)
-                    Button("Load Subtitles…") { model.presentSubtitleLoadPanel() }
-                        .disabled(!model.canLoadSubtitles)
+                if model.currentJob?.status == .translating {
+                    TranscriptLoadingSkeletonView(
+                        title: "Translating Subtitles…",
+                        detail: model.progress.detail.isEmpty ? "Generating \(model.translationTargetLabel) subtitles…" : model.progress.detail,
+                        fraction: model.progress.fraction
+                    )
+                } else if model.transcriptSegments.isEmpty {
+                    ContentUnavailableView {
+                        Label("No Translation Yet", systemImage: "character.bubble")
+                    } description: {
+                        Text("Transcribe the video first, then translate the segments into \(model.translationTargetLabel).")
+                    } actions: {
+                        Button("Transcribe") { model.startTranscription() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!model.canTranscribe)
+                        Button("Load Subtitles…") { model.presentSubtitleLoadPanel() }
+                            .disabled(!model.canLoadSubtitles)
+                    }
+                } else {
+                    ContentUnavailableView {
+                        Label("No Translation Yet", systemImage: "character.bubble")
+                    } description: {
+                        Text(translationHint)
+                    } actions: {
+                        Button("Translate") { model.startTranslation() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!model.canTranslate)
+                        Button("Load Subtitles…") { model.presentSubtitleLoadPanel() }
+                            .disabled(!model.canLoadSubtitles)
+                    }
                 }
             } else {
                 VStack(alignment: .leading, spacing: 10) {
@@ -343,17 +391,33 @@ private struct HeaderCard: View {
     @ViewBuilder
     private var settingsSummary: some View {
         if let job = model.currentJob {
-            HStack(spacing: 12) {
-                Label(job.settings.transcriptionPreset.label, systemImage: "speedometer")
-                Text(job.settings.transcriptionQualityPreset.label)
-                Text("\(job.settings.whisperBackend.label) · \(job.settings.whisperModel)")
-                Text("\(job.settings.translationSourceLanguage) → \(job.settings.translationTargetLanguage) · \(job.settings.openAIModel)")
-                Spacer()
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    metadataChip(icon: "speedometer", text: job.settings.transcriptionPreset.label)
+                    metadataChip(icon: "gauge.with.needle", text: job.settings.transcriptionQualityPreset.label)
+                    metadataChip(icon: "cpu", text: "\(job.settings.whisperBackend.label) · \(job.settings.whisperModel)")
+                    metadataChip(icon: "character.bubble", text: "\(job.settings.translationSourceLanguage) → \(job.settings.translationTargetLanguage)")
+                    if !job.settings.openAIModel.isEmpty {
+                        metadataChip(icon: "sparkles", text: job.settings.openAIModel)
+                    }
+                }
+                .padding(.vertical, 1)
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
         }
+    }
+
+    private func metadataChip(icon: String, text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(.quaternary.opacity(0.6), in: Capsule())
     }
 
     private var diagnosticsPill: some View {
@@ -422,19 +486,103 @@ private struct HeaderCard: View {
             }
 
             if isFailed {
-                // Show the full failure reason, wrapped, in a red-tinted banner.
-                Text(progress.detail)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                // Show the full failure reason, wrapped, in a red-tinted banner with direct recovery options.
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                            .frame(width: 18)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Processing Stopped")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.red)
+                            Text(progress.detail)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                    }
+
+                    HStack(spacing: 10) {
+                        Button {
+                            model.startTranscription(force: true)
+                        } label: {
+                            Label("Retry", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+
+                        if progress.detail.localizedCaseInsensitiveContains("ffmpeg") || progress.detail.localizedCaseInsensitiveContains("python")
+                            || progress.detail.localizedCaseInsensitiveContains("model")
+                        {
+                            Button("System Setup…") {
+                                model.isShowingSetupGuide = true
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+
+                        CopyFeedbackButton(text: progress.detail, helpText: "Copy error description")
+                            .controlSize(.small)
+                    }
+                    .padding(.top, 2)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(.red.opacity(0.2), lineWidth: 1)
+                )
             } else if let fraction = progress.fraction {
                 ProgressView(value: fraction)
+                    .accessibilityValue("\(Int((fraction * 100).rounded())) percent")
             } else if model.isSelectedJobRunning {
                 ProgressView().progressViewStyle(.linear)
+            } else if model.currentJob?.status == .translationComplete {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(.green)
+                    Text("Translation Ready")
+                        .font(.subheadline.weight(.semibold))
+                    Text("· \(model.translatedSegments.count) subtitle cues")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        model.isShowingExportSheet = true
+                    } label: {
+                        Label("Export Subtitles…", systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            } else if model.currentJob?.status == .transcriptionComplete && model.translatedSegments.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.teal)
+                    Text("Transcript Ready")
+                        .font(.subheadline.weight(.semibold))
+                    Text("· \(model.transcriptSegments.count) subtitle cues")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        model.isShowingExportSheet = true
+                    } label: {
+                        Label("Export Subtitles…", systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.teal.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
             }
         }
     }
@@ -545,11 +693,14 @@ private struct RunOptionsRow: View {
 
             HStack(alignment: .bottom, spacing: 20) {
                 field(title: "Preset") {
-                    Picker("Preset", selection: model.jobCardBinding(get: \.transcriptionPreset) { overrides, value, _ in
-                        overrides.transcriptionPreset = value
-                        overrides.whisperBackend = nil
-                        overrides.whisperModel = nil
-                    }) {
+                    Picker(
+                        "Preset",
+                        selection: model.jobCardBinding(get: \.transcriptionPreset) { overrides, value, _ in
+                            overrides.transcriptionPreset = value
+                            overrides.whisperBackend = nil
+                            overrides.whisperModel = nil
+                        }
+                    ) {
                         ForEach(TranscriptionPreset.allCases) { preset in
                             Text(preset.label).tag(preset)
                         }
@@ -560,9 +711,12 @@ private struct RunOptionsRow: View {
                 }
 
                 field(title: "Quality") {
-                    Picker("Quality", selection: model.jobCardBinding(get: \.transcriptionQualityPreset) { overrides, value, _ in
-                        overrides.transcriptionQualityPreset = value
-                    }) {
+                    Picker(
+                        "Quality",
+                        selection: model.jobCardBinding(get: \.transcriptionQualityPreset) { overrides, value, _ in
+                            overrides.transcriptionQualityPreset = value
+                        }
+                    ) {
                         ForEach(TranscriptionQualityPreset.available(for: resolvedBackend)) { preset in
                             Text(preset.label).tag(preset)
                         }
@@ -600,15 +754,18 @@ private struct RunOptionsRow: View {
             if model.settings.showAdvancedControls {
                 HStack(alignment: .bottom, spacing: 20) {
                     field(title: "Backend") {
-                        Picker("Backend", selection: model.jobCardBinding(get: \.whisperBackend) { overrides, value, resolved in
-                            overrides.transcriptionPreset = .custom
-                            overrides.whisperBackend = value
-                            overrides.whisperModel = AppSettingsStore.normalizedWhisperModel(
-                                for: value,
-                                current: resolved.whisperModel,
-                                force: true
-                            )
-                        }) {
+                        Picker(
+                            "Backend",
+                            selection: model.jobCardBinding(get: \.whisperBackend) { overrides, value, resolved in
+                                overrides.transcriptionPreset = .custom
+                                overrides.whisperBackend = value
+                                overrides.whisperModel = AppSettingsStore.normalizedWhisperModel(
+                                    for: value,
+                                    current: resolved.whisperModel,
+                                    force: true
+                                )
+                            }
+                        ) {
                             ForEach(WhisperBackend.allCases) { backend in
                                 Text(backend.label).tag(backend)
                             }
@@ -781,14 +938,8 @@ private struct DiagnosticsPopover: View {
                         }
                         Spacer(minLength: 0)
                         if diagnostic.state != .passed, let command = diagnostic.repairCommand {
-                            Button {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(command, forType: .string)
-                            } label: {
-                                Label("Copy", systemImage: "doc.on.doc")
-                            }
-                            .labelStyle(.iconOnly)
-                            .help(command)
+                            CopyFeedbackButton(text: command, helpText: command, showsLabel: false)
+                                .buttonStyle(.plain)
                         }
                     }
                 }
@@ -796,5 +947,252 @@ private struct DiagnosticsPopover: View {
         }
         .padding(16)
         .frame(width: 320)
+    }
+}
+
+// MARK: - Welcome Workspace
+
+private struct WelcomeWorkspaceView: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer(minLength: 20)
+
+            ZStack {
+                Circle()
+                    .fill(Color.accentColor.opacity(0.12))
+                    .frame(width: 88, height: 88)
+                Image(systemName: "waveform.badge.plus")
+                    .font(.system(size: 40, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+
+            VStack(spacing: 8) {
+                Text("Welcome to Cue")
+                    .font(.title.weight(.bold))
+
+                Text("Fast, accurate, and completely private subtitles and translation.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
+            HStack(spacing: 16) {
+                trustCard(
+                    icon: "lock.shield.fill",
+                    title: "100% On-Device & Private",
+                    subtitle: "Audio stays on your Mac. Whisper engine runs locally with zero telemetry."
+                )
+                trustCard(
+                    icon: "bolt.fill",
+                    title: "Metal Accelerated",
+                    subtitle: "Hardware-accelerated by Apple Silicon for instant transcription speed."
+                )
+                trustCard(
+                    icon: "character.bubble.fill",
+                    title: "Smart Translation",
+                    subtitle: "Translate into 50+ languages with synchronized subtitle cues."
+                )
+            }
+            .frame(maxWidth: 680)
+
+            VStack(spacing: 12) {
+                Button {
+                    model.selectVideo()
+                } label: {
+                    Label("Add Files…", systemImage: "folder.badge.plus")
+                        .font(.headline)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+
+                HStack(spacing: 16) {
+                    Button {
+                        model.promptForRemoteMedia()
+                    } label: {
+                        Label("Add from URL…", systemImage: "link")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+
+                    Text("·")
+                        .foregroundStyle(.secondary)
+
+                    Button {
+                        addWatchFolderViaPanel()
+                    } label: {
+                        Label("Watch a Folder…", systemImage: "folder.badge.gearshape")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                }
+                .font(.callout)
+            }
+
+            Text("Drop files anywhere · Supports MP4, MOV, MKV, MP3, WAV, M4A, FLAC, AAC")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+
+            Spacer(minLength: 20)
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func trustCard(icon: String, title: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+            }
+            Text(subtitle)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .lineSpacing(2)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background.secondary.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(.separator.opacity(0.5), lineWidth: 1)
+        )
+    }
+
+    private func addWatchFolderViaPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Watch"
+        panel.message = "Choose folders to watch. New videos dropped into them are processed automatically."
+        if panel.runModal() == .OK {
+            for url in panel.urls {
+                model.addWatchFolder(path: url.path)
+            }
+        }
+    }
+}
+
+// MARK: - Skeletons & Queued Placeholders
+
+private struct TranscriptLoadingSkeletonView: View {
+    let title: String
+    let detail: String
+    var fraction: Double? = nil
+    @State private var isShimmering = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    ProgressView()
+                        .controlSize(.small)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .font(.subheadline.weight(.semibold))
+                        if !detail.isEmpty {
+                            Text(detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer()
+                    if let fraction {
+                        Text("\(Int((fraction * 100).rounded()))%")
+                            .font(.caption.monospacedDigit().weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.background.secondary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+
+                if let fraction {
+                    ProgressView(value: min(max(fraction, 0), 1))
+                        .progressViewStyle(.linear)
+                }
+
+                VStack(spacing: 8) {
+                    ForEach(1...4, id: \.self) { index in
+                        skeletonRow(index: index)
+                    }
+                }
+                .opacity(isShimmering ? 0.35 : 0.85)
+                .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: isShimmering)
+            }
+            .padding(20)
+        }
+        .onAppear {
+            isShimmering = true
+        }
+    }
+
+    private func skeletonRow(index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(.quaternary)
+                    .frame(width: 28, height: 16)
+
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(.quaternary)
+                    .frame(width: 110, height: 12)
+
+                Spacer()
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(.quaternary)
+                    .frame(maxWidth: index % 2 == 0 ? .infinity : 320, minHeight: 11, maxHeight: 11)
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(.quaternary.opacity(0.7))
+                    .frame(width: index % 2 == 0 ? 210 : 150, height: 11)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+        }
+        .padding(12)
+        .background(.background.secondary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(.separator.opacity(0.4), lineWidth: 1)
+        )
+    }
+}
+
+private struct QueuedJobPlaceholderView: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("Queued for Processing", systemImage: "clock.fill")
+                .foregroundStyle(Color.indigo)
+        } description: {
+            Text("This video is waiting in the queue. Transcription will start automatically when prior jobs finish.")
+        } actions: {
+            if model.canStartSelectedJob {
+                Button("Start Now") {
+                    model.startSelectedJob()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            if model.queuePaused {
+                Button("Resume Queue") {
+                    model.startAllPendingJobs()
+                }
+            }
+        }
     }
 }

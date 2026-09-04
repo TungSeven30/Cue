@@ -31,6 +31,23 @@ BACKEND_MODULES = {
     "qwen3-asr": "mlx_qwen3_asr",
 }
 
+# Loaded backend objects, reused across jobs in --serve mode. Each backend's
+# transcribe call is stateless with respect to earlier calls (faster-whisper's
+# WhisperModel, Qwen's Session/ForcedAligner — already shared across chunks
+# inside one job — and mlx-whisper's own ModelHolder), so reuse cannot change
+# a job's output; it only skips the multi-second load. One resident model:
+# a different backend/model evicts the previous one before loading.
+MODEL_CACHE: dict = {}
+
+
+def cached_model(kind: str, key, factory):
+    entry = MODEL_CACHE.get(kind)
+    if entry is None or entry[0] != key:
+        MODEL_CACHE.clear()
+        entry = (key, factory())
+        MODEL_CACHE[kind] = entry
+    return entry[1]
+
 
 def emit(stage: str, detail: str, fraction=None) -> None:
     payload = {"stage": stage, "detail": detail, "fraction": fraction}
@@ -400,16 +417,21 @@ def load_with_qwen3(
     planning_seconds = time.perf_counter() - planning_started
 
     model_started = time.perf_counter()
-    session_type = getattr(qwen3, "Session", None)
-    if session_type is not None:
-        session = session_type(model=model)
+
+    def load_qwen_objects():
+        session_type = getattr(qwen3, "Session", None)
+        loaded_session = session_type(model=model) if session_type is not None else None
+        aligner_type = getattr(qwen3, "ForcedAligner", None)
+        loaded_aligner = aligner_type() if aligner_type is not None else None
+        return loaded_session, loaded_aligner
+
+    session, aligner = cached_model("qwen3-asr", model, load_qwen_objects)
+    if session is not None:
         transcribe_call = session.transcribe
         model_kwargs = {}
     else:  # Compatibility with older mlx-qwen3-asr releases.
         transcribe_call = qwen3.transcribe
         model_kwargs = {"model": model}
-    aligner_type = getattr(qwen3, "ForcedAligner", None)
-    aligner = aligner_type() if aligner_type is not None else None
     model_load_seconds = time.perf_counter() - model_started
 
     all_segments = []
@@ -525,7 +547,11 @@ def load_with_faster_whisper(
         emit("loadingModel", f"Loading {resolved_model} with Faster Whisper. First run may download the model.", 0.18)
     else:
         emit("loadingModel", f"Loading {resolved_model} with Faster Whisper (mapped from {model}). First run may download the model.", 0.18)
-    runner = WhisperModel(resolved_model, device="cpu", compute_type="int8")
+    runner = cached_model(
+        "faster-whisper",
+        resolved_model,
+        lambda: WhisperModel(resolved_model, device="cpu", compute_type="int8"),
+    )
     emit("transcribing", "Running Faster Whisper transcription.", 0.35)
     segments, _ = call_with_supported_kwargs(
         runner.transcribe,
@@ -555,9 +581,13 @@ def load_with_faster_whisper(
     ]
 
 
-def main() -> int:
+class JobFailure(Exception):
+    """A job failed with a message meant for the user (already complete)."""
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("input_file")
+    parser.add_argument("input_file", nargs="?")
     parser.add_argument("--language", default="auto")
     parser.add_argument("--qwen-context", default="")
     parser.add_argument("--model", default="mlx-community/whisper-large-v3-turbo")
@@ -573,13 +603,20 @@ def main() -> int:
     parser.add_argument("--resume-through-seconds", type=float, default=0.0)
     parser.add_argument("--starting-segment-id", type=int, default=1)
     parser.add_argument("--json", action="store_true")
-    args = parser.parse_args()
-    program_started = time.perf_counter()
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Stay resident: read one JSON job request per line from stdin and answer each on stderr.",
+    )
+    return parser
 
+
+def run_job(args, program_started: float):
+    """The whole per-job pipeline, shared by the one-shot CLI and --serve.
+    Returns (backend, segments); raises JobFailure with the user-facing text."""
     input_path = Path(args.input_file)
     if not input_path.exists():
-        print(f"File not found: {input_path}", file=sys.stderr)
-        return 1
+        raise JobFailure(f"File not found: {input_path}")
 
     with tempfile.TemporaryDirectory(prefix="cue_") as temp_dir:
         emit("preflight", "Preparing transcription helper.", 0.02)
@@ -592,11 +629,9 @@ def main() -> int:
                 audio_wav=Path(args.audio_wav) if args.audio_wav else None,
             )
         except FileNotFoundError:
-            print("ffmpeg was not found. Install ffmpeg and make sure it is on your PATH.", file=sys.stderr)
-            return 1
+            raise JobFailure("ffmpeg was not found. Install ffmpeg and make sure it is on your PATH.")
         except Exception as exc:
-            print(f"Could not extract audio with ffmpeg: {exc}", file=sys.stderr)
-            return 1
+            raise JobFailure(f"Could not extract audio with ffmpeg: {exc}")
         audio_preparation_seconds = time.perf_counter() - audio_preparation_started
 
         errors = []
@@ -643,14 +678,7 @@ def main() -> int:
                     metrics["totalRTF"] = total_seconds / duration if duration > 0 else 0.0
                     emit_metrics(metrics)
                 emit("complete", f"Transcription complete with {used_backend}.", 1.0)
-                if args.json:
-                    json.dump({"backend": used_backend, "segments": segments}, sys.stdout, ensure_ascii=False)
-                    sys.stdout.write("\n")
-                else:
-                    output_path = input_path.with_suffix(".srt")
-                    write_srt(output_path, segments)
-                    print(output_path)
-                return 0
+                return used_backend, segments
             except ModuleNotFoundError as exc:
                 if exc.name == BACKEND_MODULES.get(backend):
                     errors.append(f"{backend} is not installed (pip install {PIP_PACKAGES.get(backend, backend)}).")
@@ -663,13 +691,112 @@ def main() -> int:
                 errors.append(f"{backend} failed: {exc}")
 
     label = " or ".join(ordered_backends)
-    print(
+    raise JobFailure(
         f"Transcription failed using {label}.\n"
         + "\n".join(errors)
-        + "\nInstall mlx-whisper (recommended on Apple Silicon), mlx-qwen3-asr[aligner] (best accuracy), or faster-whisper, then try again.",
-        file=sys.stderr,
+        + "\nInstall mlx-whisper (recommended on Apple Silicon), mlx-qwen3-asr[aligner] (best accuracy), or faster-whisper, then try again."
     )
-    return 1
+
+
+# Request fields accepted in --serve mode, mapped onto the CLI flags so a
+# served job is parsed by exactly the same argparse rules as a one-shot run.
+SERVE_FIELDS = (
+    ("language", "--language"),
+    ("qwen_context", "--qwen-context"),
+    ("model", "--model"),
+    ("backend", "--backend"),
+    ("preprocess_audio", "--preprocess-audio"),
+    ("audio_wav", "--audio-wav"),
+    ("vad_filter", "--vad-filter"),
+    ("beam_size", "--beam-size"),
+    ("best_of", "--best-of"),
+    ("temperature", "--temperature"),
+    ("no_speech_threshold", "--no-speech-threshold"),
+    ("stream_segments", "--stream-segments"),
+    ("resume_through_seconds", "--resume-through-seconds"),
+    ("starting_segment_id", "--starting-segment-id"),
+)
+
+
+def job_arguments(parser: argparse.ArgumentParser, message: dict):
+    argv = [str(message.get("input_path", ""))]
+    for key, flag in SERVE_FIELDS:
+        value = message.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            value = "true" if value else "false"
+        # --flag=value form: a user-typed value starting with "-" would
+        # otherwise be read as another flag.
+        argv.append(f"{flag}={value}")
+    argv.append("--json")
+    return parser.parse_args(argv)
+
+
+def serve(parser: argparse.ArgumentParser) -> int:
+    """Resident mode. One JSON object per stdin line:
+      {"event":"job","id":"…", "input_path":"…", <SERVE_FIELDS>}  -> run it
+      {"event":"shutdown"}                                       -> exit 0
+    Progress, segments, chunk_complete and metrics events stream on stderr
+    exactly as in one-shot mode, and the job ends with one more stderr line,
+    {"event":"result","id":…,"backend":…,"segments":[…]} or
+    {"event":"error","id":…,"message":…}. Everything for a job travels on
+    the same pipe, so the client sees the result after every event that
+    preceded it. stdout is unused (stray library prints land there harmlessly).
+    """
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(message, dict):
+            continue
+        event = message.get("event")
+        if event == "shutdown":
+            return 0
+        if event != "job":
+            continue
+        job_id = message.get("id")
+        program_started = time.perf_counter()
+        try:
+            try:
+                args = job_arguments(parser, message)
+            except SystemExit as exc:  # argparse rejected a value
+                raise JobFailure(f"Invalid job request (argparse exit {exc.code}).")
+            used_backend, segments = run_job(args, program_started)
+            payload = {"event": "result", "id": job_id, "backend": used_backend, "segments": segments}
+        except JobFailure as exc:
+            payload = {"event": "error", "id": job_id, "message": str(exc)}
+        except Exception as exc:
+            payload = {"event": "error", "id": job_id, "message": f"{type(exc).__name__}: {exc}"}
+        print(json.dumps(payload, ensure_ascii=False), file=sys.stderr, flush=True)
+    return 0
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.serve:
+        return serve(parser)
+    if not args.input_file:
+        parser.error("input_file is required unless --serve is given")
+    program_started = time.perf_counter()
+    try:
+        used_backend, segments = run_job(args, program_started)
+    except JobFailure as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.json:
+        json.dump({"backend": used_backend, "segments": segments}, sys.stdout, ensure_ascii=False)
+        sys.stdout.write("\n")
+    else:
+        output_path = Path(args.input_file).with_suffix(".srt")
+        write_srt(output_path, segments)
+        print(output_path)
+    return 0
 
 
 if __name__ == "__main__":

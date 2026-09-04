@@ -55,6 +55,12 @@ enum TranscriptionServiceError: LocalizedError {
 }
 
 struct TranscriptionService {
+    private let workerPool: PythonWorkerPool
+
+    init(workerPool: PythonWorkerPool = .shared) {
+        self.workerPool = workerPool
+    }
+
     /// Decides which engine runs a job. `.auto` resolves to the built-in
     /// whisper.cpp engine (always available); explicitly chosen backends run
     /// as stored. A legacy `.auto` setting can be paired with a non-GGML
@@ -117,26 +123,24 @@ struct TranscriptionService {
             )
         }
 
-        let scriptURL = try BackendScriptWriter.ensureScript()
-
         // Extract audio natively (AVFoundation) so the helper skips its ffmpeg
         // step. "Clean audio" preprocessing is ffmpeg-only, so when it is on
         // and ffmpeg exists the helper keeps running its own filter chain.
         let wantsPreprocess = snapshot.preprocessAudio && ProcessEnvironment.hasFFmpeg
         let cachedWav = try AudioCache.cachedAudioURL(for: videoURL, preprocess: wantsPreprocess)
-        var audioArgument: [String] = []
+        var audioWavPath: String?
         let cachedWavSize = (try? FileManager.default.attributesOfItem(atPath: cachedWav.path)[.size] as? UInt64) ?? 0
         if cachedWavSize > 0 {
             // Safe: extraction is atomic (temp file + move), so existence == validity;
             // the size > 0 check mirrors the Python helper's cache-hit rule, since
             // the cache is shared with entries it writes.
-            audioArgument = ["--audio-wav", cachedWav.path]
+            audioWavPath = cachedWav.path
         } else if !wantsPreprocess {
             progress(JobProgress(stage: .extractingAudio, detail: "Extracting audio.", fraction: 0.08))
             do {
                 try await AudioExtractor.extract(from: videoURL, to: cachedWav)
                 AudioCache.prune(directory: AudioCache.directory, keeping: cachedWav)
-                audioArgument = ["--audio-wav", cachedWav.path]
+                audioWavPath = cachedWav.path
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -156,125 +160,55 @@ struct TranscriptionService {
         }
         // wantsPreprocess && no cache → pass nothing; the Python helper runs
         // its ffmpeg filter chain exactly as today.
-        // Freezes the value so the @Sendable closure below captures a `let`.
-        let finalAudioArguments = audioArgument
 
-        let processBox = ProcessBox()
+        let request = PythonJobRequest(
+            inputPath: videoURL.path,
+            language: snapshot.sourceLanguage,
+            qwenContext: snapshot.qwenContext,
+            model: snapshot.whisperModel,
+            backend: snapshot.whisperBackendRawValue,
+            preprocessAudio: snapshot.preprocessAudio,
+            vadFilter: snapshot.vadFilter,
+            beamSize: snapshot.beamSize,
+            bestOf: snapshot.bestOf,
+            temperature: snapshot.temperature,
+            noSpeechThreshold: snapshot.noSpeechThreshold,
+            streamSegments: true,
+            // The one-shot CLI passed this as "%.3f"; keep the same precision.
+            resumeThroughSeconds: (resumeThrough * 1000).rounded() / 1000,
+            startingSegmentID: existingPartialSegments.map(\.id).max().map { $0 + 1 } ?? 1,
+            audioWav: audioWavPath
+        )
 
-        return try await withTaskCancellationHandler {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.environment = ProcessEnvironment.withToolPaths()
-            process.arguments =
-                [
-                    "python3",
-                    scriptURL.path,
-                    videoURL.path,
-                    "--json",
-                    // `--opt=value` form: argparse treats a separate value
-                    // starting with "-" as a flag, and both of these are typed
-                    // by the user.
-                    "--language=\(snapshot.sourceLanguage)",
-                    "--qwen-context=\(snapshot.qwenContext)",
-                    "--model",
-                    snapshot.whisperModel,
-                    "--backend",
-                    snapshot.whisperBackendRawValue,
-                    "--preprocess-audio",
-                    snapshot.preprocessAudio ? "true" : "false",
-                    "--vad-filter",
-                    snapshot.vadFilter ? "true" : "false",
-                    "--beam-size",
-                    "\(snapshot.beamSize)",
-                    "--best-of",
-                    "\(snapshot.bestOf)",
-                    "--temperature",
-                    "\(snapshot.temperature)",
-                    "--no-speech-threshold",
-                    "\(snapshot.noSpeechThreshold)",
-                    "--stream-segments",
-                    "true",
-                    "--resume-through-seconds",
-                    String(format: "%.3f", resumeThrough),
-                    "--starting-segment-id",
-                    "\(existingPartialSegments.map(\.id).max().map { $0 + 1 } ?? 1)",
-                ] + finalAudioArguments
-            processBox.process = process
-
-            let stdout = PipeCollector()
-            let stderr = PipeCollector { line in
-                guard let event = TranscriptionStreamEvent.decode(line) else { return }
-                // A serial hop to the main queue keeps progress and segment
-                // updates in emission order; unstructured Tasks are not ordered.
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
-                        switch event {
-                        case .progress(let update):
-                            progress(update)
-                        case .segments(let batch):
-                            let cleaned = TranscriptionPostProcessor.cleanWindow(batch, settings: snapshot)
-                            if !cleaned.isEmpty { onSegments?(cleaned) }
-                        case .chunkComplete(let through):
-                            onChunkComplete?(through)
-                        case .metrics(let metrics):
-                            onMetrics?(metrics)
-                        }
+        // The resident helper streams the same stderr events the one-shot
+        // helper did; the pool delivers them in emission order and a serial
+        // hop to the main queue keeps progress and segment updates ordered.
+        let result = try await workerPool.run(request) { event in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    switch event {
+                    case .progress(let update):
+                        progress(update)
+                    case .segments(let batch):
+                        let cleaned = TranscriptionPostProcessor.cleanWindow(batch, settings: snapshot)
+                        if !cleaned.isEmpty { onSegments?(cleaned) }
+                    case .chunkComplete(let through):
+                        onChunkComplete?(through)
+                    case .metrics(let metrics):
+                        onMetrics?(metrics)
                     }
                 }
             }
-
-            process.standardOutput = stdout.pipe
-            process.standardError = stderr.pipe
-
-            try process.run()
-            // A cancellation that landed between storing the process and
-            // run() found isRunning == false and did nothing; catch up now
-            // so the helper does not run a full transcription after cancel.
-            if Task.isCancelled {
-                processBox.terminate()
-            }
-            let terminationStatus = await process.waitForTermination()
-            // The process has exited, but the readability handlers run on a
-            // background queue and may still have buffered pipe data that has
-            // not been appended yet. Wait for both pipes to reach EOF before
-            // reading, otherwise a long transcript's JSON can be truncated.
-            await stdout.waitForEOF()
-            await stderr.waitForEOF()
-            stdout.close()
-            stderr.close()
-
-            let stdoutData = stdout.data()
-            let stderrText = stderr.text().trimmingCharacters(in: .whitespacesAndNewlines)
-
-            if Task.isCancelled {
-                throw CancellationError()
-            }
-
-            guard terminationStatus == 0 else {
-                // stderr carries both JSON progress events and the real error
-                // text; drop the progress lines so the message is legible.
-                let errorText =
-                    stderrText
-                    .split(separator: "\n", omittingEmptySubsequences: true)
-                    .map(String.init)
-                    .filter { !$0.hasPrefix("{") }
-                    .joined(separator: "\n")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                throw TranscriptionServiceError.pythonFailed(
-                    errorText.isEmpty ? "The Python helper exited with status \(terminationStatus)." : errorText
-                )
-            }
-
-            let payload = try Self.decodePayload(from: stdoutData)
-            let segments = TranscriptionPostProcessor.cleanResumed(
-                partials: existingPartialSegments,
-                newlyCollected: payload.segments,
-                settings: snapshot
-            )
-            return TranscriptionResult(backend: payload.backend, segments: segments)
-        } onCancel: {
-            processBox.terminate()
         }
+        if Task.isCancelled {
+            throw CancellationError()
+        }
+        let segments = TranscriptionPostProcessor.cleanResumed(
+            partials: existingPartialSegments,
+            newlyCollected: result.segments,
+            settings: snapshot
+        )
+        return TranscriptionResult(backend: result.backend, segments: segments)
     }
 
     /// Fully in-process path for the built-in whisper.cpp backend: native
@@ -404,21 +338,6 @@ struct TranscriptionService {
         }
     }
 
-    /// The helper writes exactly one JSON object as its last stdout line, but
-    /// a stray print from a Python dependency must not fail the whole run:
-    /// fall back to decoding the last line that parses as the payload.
-    private static func decodePayload(from data: Data) throws -> TranscriptionPayload {
-        let decoder = JSONDecoder()
-        if let payload = try? decoder.decode(TranscriptionPayload.self, from: data) {
-            return payload
-        }
-        for line in data.split(separator: UInt8(ascii: "\n")).reversed() {
-            if let payload = try? decoder.decode(TranscriptionPayload.self, from: Data(line)) {
-                return payload
-            }
-        }
-        throw TranscriptionServiceError.malformedResponse
-    }
 }
 
 struct TranscriptionSettingsSnapshot: Sendable {
@@ -437,11 +356,6 @@ struct TranscriptionSettingsSnapshot: Sendable {
     let bestOf: Int
     let temperature: Double
     let noSpeechThreshold: Double
-}
-
-private struct TranscriptionPayload: Decodable {
-    let backend: String
-    let segments: [TranscriptionSegment]
 }
 
 enum TranscriptionPostProcessor {

@@ -89,6 +89,49 @@ import Testing
         report("engine.third", try await run())
     }
 
+    // MARK: - Python helper (resident worker vs. one-shot)
+
+    /// For every installed Python backend: two jobs through the resident
+    /// worker (first includes spawn, imports, and model load) and one
+    /// one-shot run of the same script, whose output must match the worker's.
+    @Test func pythonWorkerFirstAndSecondRunPerBackend() async throws {
+        guard Self.enabled else { return }
+        let wav = try await BenchmarkFixtures.spokenFixtureWAV()
+        defer { try? FileManager.default.removeItem(at: wav.deletingLastPathComponent()) }
+        let backends: [(backend: String, model: String, module: String)] = [
+            ("mlx-whisper", "mlx-community/whisper-large-v3-turbo", "mlx_whisper"),
+            ("qwen3-asr", "Qwen/Qwen3-ASR-1.7B", "mlx_qwen3_asr"),
+            ("faster-whisper", "large-v3-turbo", "faster_whisper"),
+        ]
+        for entry in backends where BenchmarkFixtures.pythonModuleIsImportable(entry.module) {
+            let pool = PythonWorkerPool()
+            let request = PythonJobRequest(
+                inputPath: wav.path, language: "en", qwenContext: "", model: entry.model, backend: entry.backend,
+                preprocessAudio: false, vadFilter: true, beamSize: 5, bestOf: 5, temperature: 0,
+                noSpeechThreshold: 0.6, streamSegments: true, resumeThroughSeconds: 0, startingSegmentID: 1,
+                audioWav: wav.path)
+            var first: PythonJobResult?
+            let firstSeconds = try await timedAsync { first = try await pool.run(request) { _ in } }
+            var second: PythonJobResult?
+            let secondSeconds = try await timedAsync { second = try await pool.run(request) { _ in } }
+            var third: PythonJobResult?
+            let thirdSeconds = try await timedAsync { third = try await pool.run(request) { _ in } }
+            await pool.shutdown()
+            report("python.\(entry.backend).worker.first", firstSeconds)
+            report("python.\(entry.backend).worker.second", secondSeconds)
+            report("python.\(entry.backend).worker.third", thirdSeconds)
+
+            var oneShot: [TranscriptionSegment] = []
+            let oneShotSeconds = try await timedAsync {
+                oneShot = try await BenchmarkFixtures.oneShotHelperRun(request)
+            }
+            report("python.\(entry.backend).oneshot", oneShotSeconds)
+            #expect(first?.segments == second?.segments, "\(entry.backend): resident worker must be deterministic")
+            #expect(second?.segments == third?.segments)
+            #expect(first?.segments == oneShot, "\(entry.backend): worker output must equal the one-shot helper")
+        }
+    }
+
     // MARK: - Main-thread work while a job streams
 
     /// Approximates what the views ask of AppModel on every streamed batch
@@ -146,6 +189,57 @@ import Testing
 }
 
 enum BenchmarkFixtures {
+    static func pythonModuleIsImportable(_ module: String) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.environment = ProcessEnvironment.withToolPaths()
+        process.arguments = ["python3", "-c", "import \(module)"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return false }
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    }
+
+    /// Runs the embedded helper once in the pre-existing one-shot form and
+    /// returns its stdout payload's segments.
+    static func oneShotHelperRun(_ request: PythonJobRequest) async throws -> [TranscriptionSegment] {
+        struct Payload: Decodable {
+            let backend: String
+            let segments: [TranscriptionSegment]
+        }
+        let script = try BackendScriptWriter.ensureScript()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.environment = ProcessEnvironment.withToolPaths()
+        var arguments = [
+            "python3", script.path, request.inputPath, "--json",
+            "--language=\(request.language)", "--qwen-context=\(request.qwenContext)",
+            "--model", request.model, "--backend", request.backend,
+            "--preprocess-audio", request.preprocessAudio ? "true" : "false",
+            "--vad-filter", request.vadFilter ? "true" : "false",
+            "--beam-size", "\(request.beamSize)", "--best-of", "\(request.bestOf)",
+            "--temperature", "\(request.temperature)", "--no-speech-threshold", "\(request.noSpeechThreshold)",
+            "--stream-segments", request.streamSegments ? "true" : "false",
+            "--resume-through-seconds", String(format: "%.3f", request.resumeThroughSeconds),
+            "--starting-segment-id", "\(request.startingSegmentID)",
+        ]
+        if let audioWav = request.audioWav {
+            arguments += ["--audio-wav", audioWav]
+        }
+        process.arguments = arguments
+        let stdout = PipeCollector()
+        process.standardOutput = stdout.pipe
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let status = await process.waitForTermination()
+        await stdout.waitForEOF()
+        stdout.close()
+        guard status == 0 else { throw TranscriptionServiceError.pythonFailed("one-shot helper exited \(status)") }
+        let line = try #require(stdout.text().split(separator: "\n").last)
+        return try JSONDecoder().decode(Payload.self, from: Data(line.utf8)).segments
+    }
+
     static func installedModelURL() -> URL? {
         let downloader = ModelDownloader()
         return ModelDownloader.models.reversed().lazy

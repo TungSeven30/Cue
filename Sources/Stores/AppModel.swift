@@ -229,6 +229,10 @@ final class AppModel: ObservableObject {
             task.cancel()
         }
         ytDlpInstallTask?.cancel()
+        // The resident Python helper is a child process; SIGTERM it now so it
+        // does not outlive the app. Its serve loop also exits on stdin EOF,
+        // and the orphan reaper covers anything that still survives.
+        PythonWorkerPool.shared.terminateImmediately()
         flushPendingWork()
     }
 

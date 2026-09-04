@@ -21,6 +21,12 @@ struct WatchFolderScanEngine {
 
     private var candidates: [String: Candidate] = [:]
 
+    /// Files sighted but not yet stable: a follow-up scan after the
+    /// stability interval will decide them.
+    var hasPendingCandidates: Bool {
+        !candidates.isEmpty
+    }
+
     /// Must match TranscriptionJob.fingerprint(for:) byte for byte, since
     /// ledger entries and job fingerprints are compared against it.
     static func fingerprint(for file: FileObservation) -> String {

@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import Cue
 
@@ -218,6 +219,33 @@ struct WatchFolderLedgerTests {
 
 @MainActor
 struct WatchFolderServiceTests {
+    /// The event stream is recursive and a follow-up scan runs once the
+    /// stability gate can pass, so a file dropped into a nested folder is
+    /// reported in a few seconds — well inside the 60 s timer fallback.
+    @Test func nestedFileIsReportedWithoutWaitingForTheTimer() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("watch-nested-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let service = WatchFolderService()
+        let ready = OSAllocatedUnfairLock(initialState: [URL]())
+        service.onFilesReady = { urls in ready.withLock { $0 += urls } }
+        service.start(path: root.path)
+        defer { service.stop() }
+
+        // Created after start, two levels down.
+        let nested = root.appendingPathComponent("season 2/disc 1", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 4096).write(to: nested.appendingPathComponent("ep1.mkv"))
+
+        let deadline = ContinuousClock.now + .seconds(20)
+        while ContinuousClock.now < deadline, ready.withLock({ $0.isEmpty }) {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(ready.withLock { $0.map(\.lastPathComponent) } == ["ep1.mkv"])
+        #expect(ContinuousClock.now < deadline, "the file must be reported before the timer fallback could")
+    }
+
     @Test func observesMediaFilesInSubfolders() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("watch-recursive-\(UUID().uuidString)", isDirectory: true)

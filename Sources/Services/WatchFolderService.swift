@@ -2,16 +2,23 @@ import AppKit
 import Foundation
 
 /// Watches one folder and periodically reports files ready to ingest.
-/// Detection strategy (spec §2.2): a kqueue DispatchSource on the folder is
-/// the low-latency hint, a 60-second timer plus wake/launch scans are the
-/// truth. scan() is idempotent, so redundant triggers are free.
+/// Detection strategy (spec §2.2): a recursive FSEvents stream on the folder
+/// is the low-latency hint, a follow-up scan after the stability interval
+/// turns a fresh sighting into an ingest without waiting for the timer, and
+/// a 60-second timer plus wake/launch scans remain the truth. scan() is
+/// idempotent, so redundant triggers are free.
 @MainActor
 final class WatchFolderService: ObservableObject {
     static let rescanInterval: TimeInterval = 60
+    /// A candidate seen once needs a second sighting at least
+    /// `stabilityInterval` later; rescan just after that instead of on the
+    /// next timer tick.
+    static let followUpDelay: TimeInterval = WatchFolderScanEngine.stabilityInterval + 0.5
 
     private var engine = WatchFolderScanEngine()
-    private var folderDescriptor: CInt = -1
-    private var folderSource: DispatchSourceFileSystemObject?
+    private var eventStream: FolderEventStream?
+    private let eventQueue = DispatchQueue(label: "Cue.WatchFolderService.events", qos: .utility)
+    private var followUpTask: Task<Void, Never>?
     private var timer: Timer?
     private var wakeObserver: NSObjectProtocol?
     private(set) var watchedPath: String?
@@ -39,22 +46,10 @@ final class WatchFolderService: ObservableObject {
         watchedPath = path
         lastError = nil
 
-        folderDescriptor = open(path, O_EVTONLY)
-        if folderDescriptor >= 0 {
-            let source = DispatchSource.makeFileSystemObjectSource(
-                fileDescriptor: folderDescriptor,
-                eventMask: [.write, .rename, .delete],
-                queue: .main
-            )
-            source.setEventHandler { [weak self] in
-                Task { @MainActor in self?.scan() }
-            }
-            source.setCancelHandler { [descriptor = folderDescriptor] in
-                close(descriptor)
-            }
-            source.resume()
-            folderSource = source
-        } else {
+        eventStream = FolderEventStream(path: path, latency: 0.5, queue: eventQueue) { [weak self] in
+            Task { @MainActor in self?.scan() }
+        }
+        if eventStream == nil {
             lastError = "Could not open the watch folder. Check that it exists and is readable."
         }
 
@@ -75,9 +70,10 @@ final class WatchFolderService: ObservableObject {
 
     func stop() {
         lastError = nil
-        folderSource?.cancel()
-        folderSource = nil
-        folderDescriptor = -1
+        eventStream?.stop()
+        eventStream = nil
+        followUpTask?.cancel()
+        followUpTask = nil
         timer?.invalidate()
         timer = nil
         if let wakeObserver {
@@ -164,6 +160,26 @@ final class WatchFolderService: ObservableObject {
         onScanCompleted(folderPath, Set(observations.map(\.path)).union(stillPresentLedgerPaths))
         if !ready.isEmpty {
             onFilesReady(ready.map { URL(fileURLWithPath: $0.path) })
+        }
+        if engine.hasPendingCandidates {
+            scheduleFollowUpScan()
+        } else {
+            followUpTask?.cancel()
+            followUpTask = nil
+        }
+    }
+
+    /// A file seen for the first time (or still growing) cannot be ingested
+    /// until it has held still for the stability interval, and a scan is
+    /// what notices that. Without this, a file that arrives quietly waits
+    /// for the 60 s timer even though the event stream saw it at once.
+    private func scheduleFollowUpScan() {
+        followUpTask?.cancel()
+        followUpTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.followUpDelay))
+            guard !Task.isCancelled, let self else { return }
+            self.followUpTask = nil
+            self.scan()
         }
     }
 }

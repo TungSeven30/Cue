@@ -27,6 +27,7 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
 
 struct DetailView: View {
     @ObservedObject var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var playerController: PlayerController
     @State private var tab: WorkspaceTab = .transcript
     @AppStorage("followPlayback") private var followPlayback = true
@@ -61,7 +62,10 @@ struct DetailView: View {
             }
             return added > 0
         }
-        .onAppear { syncPlayer() }
+        .onAppear {
+            playerHeight = PreviewHeightControl.clamped(playerHeight)
+            syncPlayer()
+        }
         .onChange(of: model.selectedJobID) { syncPlayer() }
         .onChange(of: model.isPlayerVisible) { syncPlayer() }
         .onChange(of: tab) { syncOverlaySegments() }
@@ -124,12 +128,20 @@ struct DetailView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
                 PlayerPane(controller: playerController)
-                    .frame(height: playerHeight)
+                    .frame(height: PreviewHeightControl.clamped(playerHeight))
                     .padding(.horizontal, 20)
                     .padding(.top, 10)
 
-                playerResizeHandle
-                    .padding(.bottom, 2)
+                HStack(spacing: 8) {
+                    playerResizeHandle
+                    Text("Preview size")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    PreviewHeightControl(height: $playerHeight)
+                        .frame(width: 24, height: 28)
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 2)
             } else {
                 HeaderCard(model: model)
                     .padding(20)
@@ -161,6 +173,7 @@ struct DetailView: View {
                 }
                 .opacity(0)
                 .allowsHitTesting(false)
+                .accessibilityHidden(true)
             }
 
             Divider()
@@ -175,11 +188,11 @@ struct DetailView: View {
             .fill(.tertiary)
             .frame(width: 44, height: 5)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 4)
+            .padding(.vertical, 11.5)
             .contentShape(Rectangle())
-            .accessibilityElement()
-            .accessibilityLabel("Resize video preview")
-            .accessibilityValue("\(Int(playerHeight)) points")
+            // The adjacent native stepper exposes this operation to assistive
+            // technologies; the pointer-only drag affordance is redundant.
+            .accessibilityHidden(true)
             .onHover { inside in
                 isHoveringResizeHandle = inside
                 if inside {
@@ -335,7 +348,7 @@ struct DetailView: View {
             }
             .onChange(of: playerController.activeSegmentID) { _, newID in
                 guard followPlayback, model.isPlayerVisible, let newID else { return }
-                withAnimation(.easeInOut(duration: 0.2)) {
+                withTransaction(TranscriptMotion.followTransaction(reduceMotion: reduceMotion)) {
                     proxy.scrollTo(newID, anchor: .center)
                 }
             }
@@ -1100,6 +1113,7 @@ private struct WelcomeWorkspaceView: View {
 // MARK: - Skeletons & Queued Placeholders
 
 private struct TranscriptLoadingSkeletonView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let title: String
     let detail: String
     var fraction: Double? = nil
@@ -1142,8 +1156,8 @@ private struct TranscriptLoadingSkeletonView: View {
                         skeletonRow(index: index)
                     }
                 }
-                .opacity(isShimmering ? 0.35 : 0.85)
-                .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: isShimmering)
+                .opacity(reduceMotion ? 0.65 : (isShimmering ? 0.35 : 0.85))
+                .animation(reduceMotion ? nil : .easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: isShimmering)
             }
             .padding(20)
         }

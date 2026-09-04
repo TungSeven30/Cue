@@ -1043,7 +1043,7 @@ private struct JobFilterChip: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Toggle(isOn: Binding(get: { isSelected }, set: { _ in action() })) {
             HStack(spacing: 4) {
                 Text(label)
                 Text("\(count)")
@@ -1051,15 +1051,10 @@ private struct JobFilterChip: View {
                     .opacity(0.8)
             }
             .font(.caption)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .foregroundStyle(isSelected ? Color.white : Color.primary)
-            .background(
-                isSelected ? Color.accentColor : Color.secondary.opacity(0.14),
-                in: Capsule()
-            )
+
         }
-        .buttonStyle(.plain)
+        .toggleStyle(.button)
+        .controlSize(.small)
         .accessibilityLabel("\(label), \(count) jobs")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }

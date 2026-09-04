@@ -93,6 +93,32 @@ struct JobStoreTests {
         #expect(sortedAgain.map(\.id) == first.map(\.id))
     }
 
+    @Test func simultaneousSnapshotsPreserveEveryJobPayload() async throws {
+        defer { cleanUp() }
+        let store = JobStore(baseURL: baseURL)
+        var expected: [UUID: String] = [:]
+        for index in 0..<200 {
+            let job = try makeJob(status: .idle, log: "Distinct payload \(index)")
+            expected[job.id] = job.log
+            store.saveJob(job)
+        }
+        store.flush()
+        let snapshots = await withTaskGroup(of: JobLoadSnapshot.self) { group in
+            for _ in 0..<8 { group.addTask { store.loadJobsSnapshot() } }
+            var snapshots: [JobLoadSnapshot] = []
+            for await snapshot in group { snapshots.append(snapshot) }
+            return snapshots
+        }
+        #expect(snapshots.count == 8)
+        for snapshot in snapshots {
+            #expect(snapshot.failures.isEmpty)
+            #expect(snapshot.jobs.count == expected.count)
+            #expect(snapshot.jobs.allSatisfy { expected[$0.id] == $0.log })
+            #expect(snapshot.jobs.map(\.id) == snapshots.first?.jobs.map(\.id))
+        }
+        print("AUDIT06 validated_job_payloads=\(snapshots.reduce(0) { $0 + $1.jobs.count })/1600")
+    }
+
     @Test func backgroundSnapshotCollectsFailuresForTheMainActorToSurface() throws {
         defer { cleanUp() }
         let job = try makeJob(status: .idle)

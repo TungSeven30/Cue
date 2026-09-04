@@ -151,12 +151,18 @@ final class JobStore {
     ) -> [Result<TranscriptionJob, Error>] {
         guard !files.isEmpty else { return [] }
         final class Slots: @unchecked Sendable {
+            private let lock = NSLock()
             var results: [Result<TranscriptionJob, Error>?]
             init(count: Int) { results = Array(repeating: nil, count: count) }
+            func set(_ result: Result<TranscriptionJob, Error>, at index: Int) {
+                lock.lock()
+                defer { lock.unlock() }
+                results[index] = result
+            }
         }
         let slots = Slots(count: files.count)
-        // Each iteration writes its own slot, so no synchronisation is needed
-        // beyond concurrentPerform's completion barrier.
+        // Distinct Array indices still mutate one shared Swift value. Decode
+        // concurrently, then protect only the short result assignment.
         DispatchQueue.concurrentPerform(iterations: files.count) { index in
             let file = files[index]
             let result = Result<TranscriptionJob, Error> {
@@ -164,7 +170,7 @@ final class JobStore {
                 let data = try Data(contentsOf: file)
                 return try makeDecoder().decode(TranscriptionJob.self, from: data)
             }
-            slots.results[index] = result
+            slots.set(result, at: index)
         }
         return slots.results.map { $0! }
     }

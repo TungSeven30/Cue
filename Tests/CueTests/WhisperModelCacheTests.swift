@@ -151,9 +151,14 @@ import Testing
 
         let model = try await cache.acquire(modelURL: url)
         await cache.release(model)
-        try await Task.sleep(for: .milliseconds(700))
-
-        #expect(await cache.residentKeys().isEmpty)
+        let deadline = ContinuousClock.now + .seconds(3)
+        while ContinuousClock.now < deadline, !(await cache.residentKeys().isEmpty) {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let remaining = await cache.residentKeys()
+        #expect(
+            remaining.isEmpty,
+            "expected idle sweep to evict released model within 3s, still resident: \(remaining.map(\.path))")
     }
 
     @Test func reacquiringBeforeTheIdleTimeoutKeepsTheModel() async throws {

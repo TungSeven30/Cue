@@ -316,7 +316,9 @@ actor PythonWorkerPool {
         let stderr = PipeCollector(retainsData: false) { [weak self, weak worker] line in
             guard let worker else { return }
             if let envelope = ServeEnvelope.decode(line) {
-                Task { await self?.complete(envelope, from: worker) }
+                let pool = self
+                let ownedWorker = worker
+                Task { await pool?.complete(envelope, from: ownedWorker) }
                 return
             }
             if let event = TranscriptionStreamEvent.decode(line) {
@@ -331,7 +333,9 @@ actor PythonWorkerPool {
         worker.stderrCollector = stderr
         process.terminationHandler = { [weak self, weak worker] process in
             let status = process.terminationStatus
-            Task { await self?.workerExited(worker, status: status) }
+            let pool = self
+            let exitedWorker = worker
+            Task { await pool?.workerExited(exitedWorker, status: status) }
         }
         do {
             try process.run()

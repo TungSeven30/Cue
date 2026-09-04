@@ -4,6 +4,17 @@ import Testing
 @testable import Cue
 
 struct ImportedSubtitleSourceTests {
+    @Test func preciseDatesDoNotLoseBitsThroughEpochConversion() throws {
+        let url = try makeFile("subtitle")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        var source = try #require(ImportedSubtitleSource(url: url, format: .srt))
+        for index in 0..<100 {
+            source.modifiedAt = Date(timeIntervalSinceReferenceDate: Double(index) + 0.123456789)
+            let data = try JSONEncoder().encode(source)
+            #expect(try JSONDecoder().decode(ImportedSubtitleSource.self, from: data).modifiedAt == source.modifiedAt)
+        }
+    }
+
     private func makeFile(_ contents: String) throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("cue-provenance-\(UUID().uuidString)")

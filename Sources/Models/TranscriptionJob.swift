@@ -41,6 +41,44 @@ struct ImportedSubtitleSource: Codable, Hashable {
         self.lastSyncError = nil
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case path, importedAt, format, fileSize, modifiedAt, didBackup, syncPaused, lastSyncError
+        case modifiedAtReferenceSeconds
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        path = try values.decode(String.self, forKey: .path)
+        importedAt = try values.decode(Date.self, forKey: .importedAt)
+        format = try values.decode(SubtitleExportFormat.self, forKey: .format)
+        fileSize = try values.decode(Int.self, forKey: .fileSize)
+        modifiedAt = try values.decode(Date.self, forKey: .modifiedAt)
+        if let precise = try values.decodeIfPresent(Double.self, forKey: .modifiedAtReferenceSeconds) {
+            guard precise.isFinite else {
+                throw DecodingError.dataCorruptedError(forKey: .modifiedAtReferenceSeconds, in: values, debugDescription: "Invalid subtitle modification time")
+            }
+            modifiedAt = Date(timeIntervalSinceReferenceDate: precise)
+        }
+        didBackup = try values.decode(Bool.self, forKey: .didBackup)
+        syncPaused = try values.decode(Bool.self, forKey: .syncPaused)
+        lastSyncError = try values.decodeIfPresent(String.self, forKey: .lastSyncError)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(path, forKey: .path)
+        try values.encode(importedAt, forKey: .importedAt)
+        try values.encode(format, forKey: .format)
+        try values.encode(fileSize, forKey: .fileSize)
+        // Keep the original date field for older readers. JobStore's ISO-8601
+        // strategy drops fractions, so retain full precision in an optional key.
+        try values.encode(modifiedAt, forKey: .modifiedAt)
+        try values.encode(modifiedAt.timeIntervalSinceReferenceDate, forKey: .modifiedAtReferenceSeconds)
+        try values.encode(didBackup, forKey: .didBackup)
+        try values.encode(syncPaused, forKey: .syncPaused)
+        try values.encodeIfPresent(lastSyncError, forKey: .lastSyncError)
+    }
+
     /// True when the file on disk is byte-count and mtime identical to what we
     /// recorded. A missing file reads as changed.
     func matchesFileOnDisk() -> Bool {

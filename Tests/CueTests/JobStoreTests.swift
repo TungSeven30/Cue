@@ -119,6 +119,25 @@ struct JobStoreTests {
         print("AUDIT06 validated_job_payloads=\(snapshots.reduce(0) { $0 + $1.jobs.count })/1600")
     }
 
+    @Test func fractionalSubtitleModificationTimeSurvivesTheRealStore() throws {
+        defer { cleanUp() }
+        let subtitle = baseURL.appendingPathComponent("timing.vi.srt")
+        try Data("1\n00:00:00,000 --> 00:00:01,000\nViệt\n".utf8).write(to: subtitle)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_720_000_000.765432)], ofItemAtPath: subtitle.path)
+        var job = try makeJob(status: .transcriptionComplete)
+        let source = try #require(ImportedSubtitleSource(url: subtitle, format: .srt))
+        job.importedTranscriptSource = source
+        let store = JobStore(baseURL: baseURL)
+        store.saveJob(job)
+        store.flush()
+        let reloaded = try #require(store.loadJobs().first?.importedTranscriptSource)
+        print("AUDIT07 mtime_roundtrip_error_seconds=\(abs(reloaded.modifiedAt.timeIntervalSince(source.modifiedAt))) unchanged_file_matches=\(reloaded.matchesFileOnDisk())")
+        #expect(reloaded.matchesFileOnDisk())
+        #expect(abs(reloaded.modifiedAt.timeIntervalSince(source.modifiedAt)) < 0.001)
+        try FileManager.default.setAttributes([.modificationDate: source.modifiedAt.addingTimeInterval(0.1)], ofItemAtPath: subtitle.path)
+        #expect(!reloaded.matchesFileOnDisk(), "Same-size edits within a second still need to pause sync")
+    }
+
     @Test func backgroundSnapshotCollectsFailuresForTheMainActorToSurface() throws {
         defer { cleanUp() }
         let job = try makeJob(status: .idle)

@@ -709,6 +709,13 @@ enum TranscriptionStreamEvent: Equatable {
 
     static func decode(_ line: String) -> TranscriptionStreamEvent? {
         guard line.hasPrefix("{"), let data = line.data(using: .utf8) else { return nil }
+        // Progress lines are by far the most frequent and always start with
+        // their "stage" key; decode them first when the prefix says so rather
+        // than after three failed envelope decodes. The full chain below
+        // still handles any key order.
+        if line.hasPrefix("{\"stage\""), let envelope = try? JSONDecoder().decode(ProgressEnvelope.self, from: data) {
+            return .progress(JobProgress(stage: envelope.stage, detail: envelope.detail, fraction: envelope.fraction))
+        }
         if let envelope = try? JSONDecoder().decode(SegmentsEnvelope.self, from: data), envelope.event == "segments" {
             return .segments(envelope.segments)
         }

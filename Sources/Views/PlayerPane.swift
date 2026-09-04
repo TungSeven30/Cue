@@ -56,6 +56,15 @@ final class PlayerController: ObservableObject {
     /// The segments the overlay and highlight follow — the original
     /// transcript or the translation, depending on the visible tab.
     func updateSegments(_ newSegments: [TranscriptionSegment]) {
+        // The same array instance as last time (a re-render, not a change):
+        // nothing to sort or refresh.
+        if newSegments.count == segments.count,
+            newSegments.withUnsafeBufferPointer({ new in
+                segments.withUnsafeBufferPointer { $0.baseAddress == new.baseAddress }
+            })
+        {
+            return
+        }
         // The binary search below requires ordering by start time; backends
         // emit segments in order today, but nothing in the Swift layer
         // enforces it.

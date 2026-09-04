@@ -2,7 +2,7 @@ import SwiftUI
 
 struct TranscriptView: View {
     let segments: [TranscriptionSegment]
-    let warnings: [SubtitleQualityWarning]
+    let warnings: SubtitleWarnings
     var activeSegmentID: Int? = nil
     let onEdit: (TranscriptionSegment, String) -> Void
     var onSeek: ((TranscriptionSegment) -> Void)? = nil
@@ -11,9 +11,9 @@ struct TranscriptView: View {
     @State private var warningsOnly = false
 
     var body: some View {
-        // Build the lookup once per render; computing it per row made large
-        // transcripts O(n^2) to draw.
-        let warningsBySegment = Dictionary(grouping: warnings, by: \.segmentID)
+        // The grouping arrives precomputed with the (memoised) warnings, so a
+        // render costs the filter, not another pass over every cue.
+        let warningsBySegment = warnings.bySegment
         let filtered = filteredSegments(warningsBySegment: warningsBySegment)
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
@@ -24,15 +24,15 @@ struct TranscriptView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                if !warnings.isEmpty {
-                    Label("^[\(warnings.count) warning](inflect: true)", systemImage: "exclamationmark.triangle.fill")
+                if !warnings.list.isEmpty {
+                    Label("^[\(warnings.list.count) warning](inflect: true)", systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
                 Spacer()
                 Toggle("Warnings", isOn: $warningsOnly)
                     .toggleStyle(.checkbox)
-                    .disabled(warnings.isEmpty)
+                    .disabled(warnings.list.isEmpty)
                 TextField("Search cues…", text: $searchText)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 200)
@@ -51,9 +51,11 @@ struct TranscriptView: View {
                         segment: segment,
                         warnings: warningsBySegment[segment.id] ?? [],
                         isActive: segment.id == activeSegmentID,
+                        canSeek: onSeek != nil,
                         onEdit: onEdit,
                         onSeek: onSeek
                     )
+                    .equatable()
                     .id(segment.id)
                 }
             }
@@ -83,12 +85,25 @@ struct TranscriptView: View {
     }
 }
 
-private struct SegmentEditorRow: View {
+/// Equatable on its data so SwiftUI skips the body of every row whose cue,
+/// warnings, and highlight state did not change (the closures are stable
+/// per parent and deliberately excluded, as in JobRow).
+private struct SegmentEditorRow: View, Equatable {
     let segment: TranscriptionSegment
     let warnings: [SubtitleQualityWarning]
     var isActive: Bool = false
+    /// Whether the timestamp is a seek button; mirrors `onSeek != nil` as a
+    /// plain value so equality can consider it without touching the closure.
+    var canSeek: Bool = false
     let onEdit: (TranscriptionSegment, String) -> Void
     var onSeek: ((TranscriptionSegment) -> Void)? = nil
+
+    nonisolated static func == (lhs: SegmentEditorRow, rhs: SegmentEditorRow) -> Bool {
+        lhs.segment == rhs.segment
+            && lhs.warnings == rhs.warnings
+            && lhs.isActive == rhs.isActive
+            && lhs.canSeek == rhs.canSeek
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -102,7 +117,7 @@ private struct SegmentEditorRow: View {
                     .background(.quaternary, in: Capsule())
                     .accessibilityLabel("Cue \(segment.id)")
 
-                if let onSeek {
+                if canSeek, let onSeek {
                     Button {
                         onSeek(segment)
                     } label: {

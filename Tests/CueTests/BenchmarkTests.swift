@@ -160,7 +160,7 @@ import Testing
                 }
                 _ = model.isSelectedJobRunning
                 _ = model.canTranslate
-                _ = model.qualityWarnings(for: model.displayTranscriptSegments)
+                _ = model.qualityWarnings(for: model.displayTranscriptSegments, slot: .transcript)
                 _ = model.queueSummaryText
                 _ = model.hasPendingWork
             }
@@ -342,6 +342,7 @@ enum BenchmarkFixtures {
             jobStore: JobStore(baseURL: baseURL),
             diagnosticsService: BenchmarkDiagnostics()
         )
+        await model.hydration()
         return ModelFixture(model: model, baseURL: baseURL, defaults: defaults, suiteName: suiteName)
     }
 }

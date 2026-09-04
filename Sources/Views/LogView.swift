@@ -41,10 +41,8 @@ struct LogView: View {
     }
 
     private var visibleLines: (lines: [String], truncated: Bool) {
-        let all = log.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        guard all.count > Self.maxVisibleLines else {
-            return (all, false)
-        }
-        return (Array(all.suffix(Self.maxVisibleLines)), true)
+        // Walks the UTF-8 tail backwards instead of splitting the whole log
+        // on every progress tick.
+        LogTail.lastLines(of: log, count: Self.maxVisibleLines)
     }
 }

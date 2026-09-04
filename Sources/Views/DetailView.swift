@@ -65,8 +65,9 @@ struct DetailView: View {
         .onChange(of: model.selectedJobID) { syncPlayer() }
         .onChange(of: model.isPlayerVisible) { syncPlayer() }
         .onChange(of: tab) { syncOverlaySegments() }
-        .onChange(of: model.displayTranscriptSegments) { syncOverlaySegments() }
-        .onChange(of: model.displayTranslatedSegments) { syncOverlaySegments() }
+        // A cheap revision key instead of comparing whole segment arrays on
+        // every render (see AppModel.overlayRevision).
+        .onChange(of: model.overlayRevision) { syncOverlaySegments() }
     }
 
     private func syncPlayer() {
@@ -76,6 +77,9 @@ struct DetailView: View {
     }
 
     private func syncOverlaySegments() {
+        // Nothing to keep in sync while the player is hidden; syncPlayer
+        // re-syncs when it appears.
+        guard model.isPlayerVisible else { return }
         // The overlay and highlight follow whichever text the user is looking
         // at: translation on the translation tab, else the original — live
         // partials included while a job streams.
@@ -258,7 +262,7 @@ struct DetailView: View {
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     ImportedSubtitleBanner(model: model, slot: .transcript)
-                    segmentList(segments: model.displayTranscriptSegments, onEdit: model.updateTranscriptSegment)
+                    segmentList(segments: model.displayTranscriptSegments, slot: .transcript, onEdit: model.updateTranscriptSegment)
                 }
             }
         case .translation:
@@ -297,7 +301,7 @@ struct DetailView: View {
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     ImportedSubtitleBanner(model: model, slot: .translation)
-                    segmentList(segments: model.displayTranslatedSegments, onEdit: model.updateTranslatedSegment)
+                    segmentList(segments: model.displayTranslatedSegments, slot: .translation, onEdit: model.updateTranslatedSegment)
                 }
             }
         case .log:
@@ -310,13 +314,14 @@ struct DetailView: View {
 
     private func segmentList(
         segments: [TranscriptionSegment],
+        slot: SubtitleSidecarScanner.Slot,
         onEdit: @escaping (TranscriptionSegment, String) -> Void
     ) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 TranscriptView(
                     segments: segments,
-                    warnings: model.qualityWarnings(for: segments),
+                    warnings: model.qualityWarnings(for: segments, slot: slot),
                     activeSegmentID: model.isPlayerVisible ? playerController.activeSegmentID : nil,
                     onEdit: onEdit,
                     onSeek: model.isPlayerVisible ? { playerController.seek(to: $0.start) } : nil

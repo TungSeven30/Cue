@@ -75,6 +75,9 @@ final class AppModel: ObservableObject {
     private let jobRepository: JobRepository
     private let burnInService = BurnInService()
     private let exportCoordinator = ExportCoordinator()
+    /// Memoised quality warnings for the displayed transcript/translation;
+    /// see SubtitleWarningCache for why per-render recomputation was O(n²).
+    private let warningCache = SubtitleWarningCache()
     private let watchLedger = WatchFolderLedger()
     private lazy var watchCoordinator = WatchFolderCoordinator(
         makeService: { [weak self] id in
@@ -800,6 +803,7 @@ final class AppModel: ObservableObject {
         }
         for id in ids {
             jobRepository.delete(id)
+            warningCache.invalidate(jobID: id)
         }
     }
 
@@ -2744,24 +2748,34 @@ final class AppModel: ObservableObject {
         updateSegment(segment, text: text, keyPath: \.translatedSegments)
     }
 
-    func qualityWarnings(for segments: [TranscriptionSegment]) -> [SubtitleQualityWarning] {
-        segments.flatMap { segment -> [SubtitleQualityWarning] in
-            var warnings: [SubtitleQualityWarning] = []
-            let trimmed = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty {
-                warnings.append(SubtitleQualityWarning(segmentID: segment.id, message: "Empty text"))
-            }
-            if segment.end <= segment.start {
-                warnings.append(SubtitleQualityWarning(segmentID: segment.id, message: "Invalid timing"))
-            }
-            if segment.end - segment.start > 8 {
-                warnings.append(SubtitleQualityWarning(segmentID: segment.id, message: "Long duration"))
-            }
-            if trimmed.count > 90 {
-                warnings.append(SubtitleQualityWarning(segmentID: segment.id, message: "Long subtitle text"))
-            }
-            return warnings
-        }
+    /// Warnings for the segments a tab displays, memoised per job and slot
+    /// so a streaming run does not re-evaluate the whole transcript on every
+    /// progress tick.
+    func qualityWarnings(for segments: [TranscriptionSegment], slot: SubtitleSidecarScanner.Slot) -> SubtitleWarnings {
+        guard let jobID = selectedJobID, !segments.isEmpty else { return .empty }
+        return warningCache.warnings(for: segments, key: SubtitleWarningCache.Key(jobID: jobID, slot: slot))
+    }
+
+    /// Change key for the player overlay and highlight. Every mutation that
+    /// reaches a job goes through updateJob, which stamps updatedAt, and the
+    /// counts catch the direct clears at run start, so this is a superset of
+    /// "the displayed segments changed" without comparing the arrays on
+    /// every render.
+    struct OverlayRevision: Equatable {
+        let jobID: UUID?
+        let updatedAt: Date?
+        let transcriptCount: Int
+        let translationCount: Int
+    }
+
+    var overlayRevision: OverlayRevision {
+        let job = currentJob
+        return OverlayRevision(
+            jobID: job?.id,
+            updatedAt: job?.updatedAt,
+            transcriptCount: displayTranscriptSegments.count,
+            translationCount: displayTranslatedSegments.count
+        )
     }
 
     private func finishTranscription(_ result: TranscriptionResult, summary: String?, for id: UUID) {
@@ -3038,7 +3052,9 @@ final class AppModel: ObservableObject {
         }
         mutate(&jobs[index])
         jobs[index].updatedAt = Date()
-        if jobs[index].log.count > Self.maxLogLength {
+        // String.count walks grapheme clusters; the UTF-8 length is O(1) and
+        // never smaller, so it is an exact pre-filter for the common case.
+        if jobs[index].log.utf8.count > Self.maxLogLength, jobs[index].log.count > Self.maxLogLength {
             let tail = jobs[index].log.suffix(Self.maxLogLength * 3 / 4)
             jobs[index].log = "… earlier log trimmed …\n\(tail)"
         }

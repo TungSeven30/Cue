@@ -99,3 +99,61 @@ struct BurnInPreflightParsingTests {
         #expect(!BurnInService.hasSubtitlesFilter(inFiltersOutput: ""))
     }
 }
+
+struct BurnInProcessTests {
+    @Test func preflightDrainsFloodedStderr() async {
+        let start = ContinuousClock.now
+        let output = await BurnInService.runCapturingOutput(arguments: [
+            "/usr/bin/python3", "-c",
+            "import os, signal; signal.alarm(3); os.write(2, b'x' * 1048576); print(' subtitles ')",
+        ])
+        print("AUDIT12 flood_seconds=\(ContinuousClock.now - start) success=\(output != nil)")
+        #expect(output?.contains(" subtitles ") == true)
+    }
+
+    @Test func preflightCancellationStopsTheChild() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pidFile = directory.appendingPathComponent("pid")
+        let task = Task {
+            await BurnInService.runCapturingOutput(arguments: [
+                "/usr/bin/python3", "-c",
+                "import os, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(30)",
+                pidFile.path,
+            ])
+        }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !FileManager.default.fileExists(atPath: pidFile.path), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let pid = try #require(Int32(try String(contentsOf: pidFile, encoding: .utf8)))
+        let start = ContinuousClock.now
+        task.cancel()
+        #expect(await task.value == nil)
+        #expect(ContinuousClock.now - start < .seconds(2))
+        #expect(kill(pid, 0) == -1 && errno == ESRCH)
+    }
+
+    @Test func preflightDoesNotWaitForAnInheritedPipe() async {
+        let start = ContinuousClock.now
+        let output = await BurnInService.runCapturingOutput(arguments: [
+            "/usr/bin/python3", "-c",
+            "import os, time; pid = os.fork(); time.sleep(1.5) if pid == 0 else None; os._exit(0)",
+        ], timeout: .milliseconds(100))
+        #expect(output == nil)
+        #expect(ContinuousClock.now - start < .seconds(1))
+    }
+
+    @Test func preflightTimeoutBoundsAnUnresponsiveChild() async {
+        let start = ContinuousClock.now
+        let output = await BurnInService.runCapturingOutput(arguments: [
+            "/usr/bin/python3", "-c",
+            "import signal, time; signal.alarm(3); signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)",
+        ], timeout: .milliseconds(100))
+        let elapsed = ContinuousClock.now - start
+        print("AUDIT12 timeout_seconds=\(elapsed)")
+        #expect(output == nil)
+        #expect(elapsed < .seconds(2))
+    }
+}

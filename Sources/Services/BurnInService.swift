@@ -124,30 +124,41 @@ struct BurnInService {
 
     /// Runs a command via /usr/bin/env with tool paths; nil if launch fails
     /// or it exits non-zero.
-    private static func runCapturingOutput(arguments: [String]) async -> String? {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                process.environment = ProcessEnvironment.withToolPaths()
-                process.arguments = arguments
-                let pipe = Pipe()
-                process.standardOutput = pipe
-                process.standardError = Pipe()
-                do {
-                    try process.run()
-                } catch {
-                    continuation.resume(returning: nil)
-                    return
+    static func runCapturingOutput(arguments: [String], timeout: Duration = .seconds(10)) async -> String? {
+        let box = ProcessBox(killGrace: 0.25)
+        let stdout = PipeCollector()
+        let stderr = PipeCollector(retainsData: false)
+        defer { stdout.close(); stderr.close() }
+        return await withTaskCancellationHandler {
+            guard !Task.isCancelled else { return nil }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.environment = ProcessEnvironment.withToolPaths()
+            process.arguments = arguments
+            process.standardOutput = stdout.pipe
+            process.standardError = stderr.pipe
+            box.process = process
+            do { try process.run() } catch { return nil }
+            if Task.isCancelled { box.terminate() }
+            return await withTaskGroup(of: String?.self) { group in
+                group.addTask {
+                    let status = await process.waitForTermination()
+                    await stdout.waitForEOF()
+                    await stderr.waitForEOF()
+                    return status == 0 && !Task.isCancelled ? stdout.text() : nil
                 }
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                guard process.terminationStatus == 0 else {
-                    continuation.resume(returning: nil)
-                    return
+                group.addTask {
+                    do { try await Task.sleep(for: timeout) }
+                    catch { return nil }
+                    box.terminate()
+                    return nil
                 }
-                continuation.resume(returning: String(decoding: data, as: UTF8.self))
+                let output = await group.next() ?? nil
+                group.cancelAll()
+                return output
             }
+        } onCancel: {
+            box.terminate()
         }
     }
 

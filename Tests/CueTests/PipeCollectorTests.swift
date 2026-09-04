@@ -84,6 +84,32 @@ import Testing
         #expect(seconds < 2.0, "incremental scan took \(seconds)s")
     }
 
+    @Test func concurrentDrainWaitersAndCancellationDoNotLoseContinuations() async throws {
+        let collector = PipeCollector()
+        let started = Lines()
+        let completed = Lines()
+        let tasks = (0..<3).map { index in
+            Task {
+                started.append("\(index)")
+                await collector.waitForEOF()
+                completed.append("\(index)")
+            }
+        }
+        let startedDeadline = ContinuousClock.now + .seconds(2)
+        while started.all.count < 3 && ContinuousClock.now < startedDeadline { await Task.yield() }
+        try await Task.sleep(for: .milliseconds(50))
+        tasks[0].cancel()
+        let cancelDeadline = ContinuousClock.now + .seconds(1)
+        while completed.all.isEmpty && ContinuousClock.now < cancelDeadline { await Task.yield() }
+        #expect(completed.all == ["0"], "Cancellation must resume only its own drain waiter")
+        try collector.pipe.fileHandleForWriting.close()
+        let eofDeadline = ContinuousClock.now + .seconds(2)
+        while completed.all.count < 3 && ContinuousClock.now < eofDeadline { await Task.yield() }
+        #expect(Set(completed.all) == Set(["0", "1", "2"]))
+        tasks.forEach { $0.cancel() }
+        collector.close()
+    }
+
     @Test func drainsARealProcessAndReportsEOF() async throws {
         let lines = Lines()
         let collector = PipeCollector { lines.append($0) }
@@ -96,7 +122,7 @@ import Testing
         await collector.waitForEOF()
         collector.close()
         #expect(status == 0)
-        #expect(lines.all == ["a", "b"])
+        #expect(lines.all == ["a", "b", "tail-without-newline"])
         #expect(collector.text() == "a\nb\ntail-without-newline")
     }
 }

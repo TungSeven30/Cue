@@ -39,6 +39,9 @@ import Testing
                 continue
             segment = {"id": 1, "start": 0.0, "end": 1.0, "text": f"job {count} pid {os.getpid()} {name}"}
             emit({"event": "segments", "segments": [segment]})
+            if "exit-result" in name:
+                os.write(2, json.dumps({"event": "result", "id": job_id, "backend": "fake", "segments": [segment]}).encode())
+                os._exit(0)
             emit({"event": "result", "id": job_id, "backend": "fake", "segments": [segment]})
         """
 
@@ -100,6 +103,21 @@ import Testing
             try? await Task.sleep(for: .milliseconds(50))
         }
         return kill(pid, 0) != 0 && errno == ESRCH
+    }
+
+    @Test func finalResultSurvivesImmediateExitWithoutNewline() async throws {
+        let harness = try makeHarness()
+        defer { harness.cleanUp() }
+        var successes = 0
+        for _ in 0..<20 {
+            do {
+                let result = try await harness.pool.run(harness.request("exit-result.mp4")) { _ in }
+                if result.segments.first?.text.contains("exit-result.mp4") == true { successes += 1 }
+            } catch { }
+            await harness.pool.shutdown()
+        }
+        print("AUDIT12 worker_results=\(successes)/20")
+        #expect(successes == 20)
     }
 
     @Test func workerIsReusedAcrossJobsAndEventsStayWithTheirJob() async throws {

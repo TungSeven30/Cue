@@ -127,6 +127,18 @@ actor PythonWorkerPool {
         private let lock = NSLock()
         private var eventSink: (@Sendable (TranscriptionStreamEvent) -> Void)?
         private var errorLines: [String] = []
+        private var pendingResults: [ServeEnvelope] = []
+
+        func recordResult(_ envelope: ServeEnvelope) {
+            lock.withLock { pendingResults.append(envelope) }
+        }
+
+        func takeResults() -> [ServeEnvelope] {
+            lock.withLock {
+                defer { pendingResults.removeAll() }
+                return pendingResults
+            }
+        }
         private static let maxErrorLines = 200
 
         init(key: WorkerKey, process: Process, stdin: FileHandle) {
@@ -307,6 +319,11 @@ actor PythonWorkerPool {
         process.environment = environment
 
         let stdinPipe = Pipe()
+        // A worker may exit between isRunning and a request/shutdown write.
+        // Turn a broken pipe into a catchable write error, not app-wide SIGPIPE.
+        guard fcntl(stdinPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else {
+            throw TranscriptionServiceError.pythonFailed("Could not configure the transcription helper input pipe.")
+        }
         process.standardInput = stdinPipe
         // stdout carries nothing in --serve mode; stray library prints are
         // discarded rather than accumulated for the worker's lifetime.
@@ -316,7 +333,8 @@ actor PythonWorkerPool {
         let stderr = PipeCollector(retainsData: false) { [weak self, weak worker] line in
             guard let worker else { return }
             if let envelope = ServeEnvelope.decode(line) {
-                Task { await self?.complete(envelope, from: worker) }
+                worker.recordResult(envelope)
+                Task { await self?.drainResults(from: worker) }
                 return
             }
             if let event = TranscriptionStreamEvent.decode(line) {
@@ -355,6 +373,10 @@ actor PythonWorkerPool {
         }
     }
 
+    private func drainResults(from worker: Worker) {
+        for envelope in worker.takeResults() { complete(envelope, from: worker) }
+    }
+
     private func complete(_ envelope: ServeEnvelope, from worker: Worker) {
         guard worker === self.worker, let job = activeJob, envelope.id == job.id else { return }
         if envelope.event == "result", let backend = envelope.backend, let segments = envelope.segments {
@@ -367,17 +389,18 @@ actor PythonWorkerPool {
 
     private func workerExited(_ exited: Worker?, status: Int32) async {
         guard let exited, exited === worker else { return }
+        let job = activeJob
+        // Keep the identity until all final lines have been received. Results
+        // are recorded synchronously by the pipe before its EOF notification,
+        // so this drain does not depend on the scheduling order of actor tasks.
+        if let collector = exited.stderrCollector {
+            await Self.waitForEOF(of: collector, timeout: .seconds(2))
+        }
+        guard exited === worker else { return }
+        drainResults(from: exited)
         worker = nil
         liveProcess.process = nil
-        if let job = activeJob {
-            // The exit notification and the last stderr lines arrive on
-            // different queues; let the pipe drain (bounded, in case a
-            // grandchild still holds it open) so the failure message carries
-            // the helper's own words, as the one-shot path guaranteed.
-            if let collector = exited.stderrCollector {
-                await Self.waitForEOF(of: collector, timeout: .seconds(2))
-            }
-            guard activeJob === job else { return }
+        if let job, activeJob === job {
             let text = exited.errorText
             finish(
                 job,

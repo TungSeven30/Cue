@@ -23,7 +23,7 @@ final class PipeCollector: @unchecked Sendable {
     /// only needs its lines delivered; retaining them would grow forever.
     private let retainsData: Bool
     private var didReachEOF = false
-    private var eofContinuation: CheckedContinuation<Void, Never>?
+    private var eofContinuations: [UUID: CheckedContinuation<Void, Never>] = [:]
 
     init(retainsData: Bool = true, onLine: (@Sendable (String) -> Void)? = nil) {
         self.onLine = onLine
@@ -47,6 +47,7 @@ final class PipeCollector: @unchecked Sendable {
     /// open indefinitely; callers that must not hang race this against a
     /// timeout).
     func waitForEOF() async {
+        let id = UUID()
         await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 lock.lock()
@@ -55,13 +56,12 @@ final class PipeCollector: @unchecked Sendable {
                     continuation.resume()
                     return
                 }
-                eofContinuation = continuation
+                eofContinuations[id] = continuation
                 lock.unlock()
             }
         } onCancel: {
             lock.lock()
-            let continuation = eofContinuation
-            eofContinuation = nil
+            let continuation = eofContinuations.removeValue(forKey: id)
             lock.unlock()
             continuation?.resume()
         }
@@ -69,11 +69,19 @@ final class PipeCollector: @unchecked Sendable {
 
     private func signalEOF() {
         lock.lock()
-        didReachEOF = true
-        let continuation = eofContinuation
-        eofContinuation = nil
+        // Deliver the unterminated final line before notifying drain waiters.
+        // Readability callbacks are serialized on the file handle's queue.
+        let tail = pendingData.isEmpty ? nil : String(decoding: pendingData, as: UTF8.self)
+        pendingData.removeAll()
+        scannedCount = 0
         lock.unlock()
-        continuation?.resume()
+        if let tail { onLine?(tail) }
+        lock.lock()
+        didReachEOF = true
+        let continuations = Array(eofContinuations.values)
+        eofContinuations.removeAll()
+        lock.unlock()
+        continuations.forEach { $0.resume() }
     }
 
     func data() -> Data {

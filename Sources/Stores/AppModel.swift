@@ -116,6 +116,7 @@ final class AppModel: ObservableObject {
     /// transcribing, so the transcription progress line can report both.
     private var streamingTranslationFraction: [UUID: Double] = [:]
     private var cancellables = Set<AnyCancellable>()
+    private let jobStoreNotificationToken: UUID?
     /// Only the newest diagnostics snapshot may update the UI. Probe processes
     /// can finish out of order when settings change quickly.
     private var diagnosticsTask: Task<Void, Never>?
@@ -152,6 +153,7 @@ final class AppModel: ObservableObject {
         // Tests inject a repository over a recording store; the app builds
         // one over the on-disk JobStore.
         self.jobRepository = jobRepository ?? JobRepository(store: jobStore ?? JobStore())
+        self.jobStoreNotificationToken = self.jobRepository.jobStoreNotificationToken
         self.diagnosticsService = diagnosticsService
         self.translationService = translationService
         isPlayerVisible = UserDefaults.standard.object(forKey: "isPlayerVisible") as? Bool ?? true
@@ -167,7 +169,13 @@ final class AppModel: ObservableObject {
             .sink { [weak self] _ in self?.prepareForTermination() }
             .store(in: &cancellables)
         Publishers.Merge(
-            NotificationCenter.default.publisher(for: JobStore.persistenceDidFail),
+            NotificationCenter.default.publisher(for: JobStore.persistenceDidFail)
+                .compactMap { [jobStoreNotificationToken] notification -> String? in
+                    guard let token = jobStoreNotificationToken,
+                          notification.object as? UUID == token
+                    else { return nil }
+                    return notification.userInfo?["message"] as? String
+                },
             NotificationCenter.default.publisher(for: WatchFolderLedger.persistenceDidFail)
         )
         .receive(on: DispatchQueue.main)
@@ -301,9 +309,12 @@ final class AppModel: ObservableObject {
         if !early.isEmpty {
             jobRepository.save(early)
         }
-        // Same precedence as the synchronous load had: a job-history startup
-        // failure outranks anything that arrived earlier.
-        if let startupError = jobRepository.startupError {
+        // Background load collects failures without touching the store; replay
+        // them now, then pin the UI to this hydration's outcome. A process-wide
+        // notification may have arrived from another store while we were loading.
+        if let failure = snapshot.failures.last {
+            persistenceError = failure
+        } else if let startupError = jobRepository.startupError {
             persistenceError = startupError
         }
         autoArchiveOldJobs()

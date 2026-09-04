@@ -45,6 +45,8 @@ final class JobStore {
     private let fileManagerBox: SendableFileManager
     private let failureInjector: FailureInjector
     private let ioQueue = DispatchQueue(label: "Cue.JobStore", qos: .utility)
+    /// Routes `persistenceDidFail` to the one AppModel that owns this store.
+    let notificationToken = UUID()
     private(set) var startupError: String?
 
     private nonisolated var fileManager: FileManager { fileManagerBox.value }
@@ -69,7 +71,7 @@ final class JobStore {
         } catch {
             let message = "Could not create the job-history folder at \(jobsFolderURL.path): \(error.localizedDescription)"
             startupError = message
-            Self.reportFailure(message)
+            postPersistenceFailure(message)
         }
     }
 
@@ -186,6 +188,7 @@ final class JobStore {
     /// for the same job are serialized by the queue, last write wins.
     func saveJob(_ job: TranscriptionJob) {
         let url = fileURL(for: job.id)
+        let token = notificationToken
         let failureInjector = self.failureInjector
         ioQueue.async {
             do {
@@ -193,8 +196,9 @@ final class JobStore {
                 try failureInjector(.write, url)
                 try data.write(to: url, options: .atomic)
             } catch {
-                Self.reportFailure(
-                    "Could not save job \(job.id.uuidString): \(error.localizedDescription). Its latest state is still in memory."
+                Self.postFailure(
+                    "Could not save job \(job.id.uuidString): \(error.localizedDescription). Its latest state is still in memory.",
+                    token: token
                 )
             }
         }
@@ -208,6 +212,7 @@ final class JobStore {
 
     func deleteJob(_ id: UUID) {
         let url = fileURL(for: id)
+        let token = notificationToken
         let fileManager = fileManagerBox
         let failureInjector = self.failureInjector
         ioQueue.async {
@@ -217,7 +222,10 @@ final class JobStore {
                     try fileManager.value.removeItem(at: url)
                 }
             } catch {
-                Self.reportFailure("Could not delete job history \(id.uuidString): \(error.localizedDescription)")
+                Self.postFailure(
+                    "Could not delete job history \(id.uuidString): \(error.localizedDescription)",
+                    token: token
+                )
             }
         }
     }
@@ -309,14 +317,22 @@ final class JobStore {
         return decoder
     }
 
-    private nonisolated static func reportFailure(_ message: String) {
+    private nonisolated static func postFailure(_ message: String, token: UUID) {
         NSLog("Cue: %@", message)
-        NotificationCenter.default.post(name: persistenceDidFail, object: message)
+        NotificationCenter.default.post(
+            name: persistenceDidFail,
+            object: token,
+            userInfo: ["message": message]
+        )
+    }
+
+    private func postPersistenceFailure(_ message: String) {
+        Self.postFailure(message, token: notificationToken)
     }
 
     private func recordStartupFailure(_ message: String) {
         startupError = message
-        Self.reportFailure(message)
+        postPersistenceFailure(message)
     }
 }
 

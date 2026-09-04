@@ -158,6 +158,53 @@ struct JobStoreTests {
         #expect(reader.startupError?.contains("It was preserved") == true)
     }
 
+    @Test func malformedCueValuesArePreservedForRecoveryInsteadOfLoaded() throws {
+        defer { cleanUp() }
+        let store = JobStore(baseURL: baseURL)
+        var duplicate = try makeJob(status: .transcriptionComplete)
+        duplicate.transcriptSegments = [
+            TranscriptionSegment(id: 1, start: 0, end: 1, text: "A"),
+            TranscriptionSegment(id: 1, start: 2, end: 3, text: "B"),
+        ]
+        var infinite = try makeJob(status: .transcriptionComplete)
+        infinite.translatedSegments = [TranscriptionSegment(id: 1, start: 0, end: .infinity, text: "Bad time")]
+        store.saveJob(duplicate)
+        store.saveJob(infinite)
+        store.flush()
+        let snapshot = store.loadJobsSnapshot()
+        print("AUDIT09 malformed_jobs_rejected=\(snapshot.failures.count)/2")
+        #expect(snapshot.jobs.isEmpty)
+        #expect(snapshot.failures.count == 2)
+        for id in [duplicate.id, infinite.id] {
+            let original = baseURL.appendingPathComponent("Cue/jobs/\(id.uuidString).json")
+            #expect(FileManager.default.fileExists(atPath: original.path))
+            #expect(FileManager.default.fileExists(atPath: original.deletingPathExtension().appendingPathExtension("corrupt.json").path))
+        }
+    }
+
+    @Test func persistedInvalidProgressBecomesIndeterminate() throws {
+        defer { cleanUp() }
+        let store = JobStore(baseURL: baseURL)
+        for value in [Double.nan, .infinity, 1e100, -1] {
+            var job = try makeJob(status: .idle)
+            job.progress.fraction = value
+            store.saveJob(job)
+        }
+        store.flush()
+        let jobs = store.loadJobsSnapshot().jobs
+        print("AUDIT09 invalid_progress_values_retained=\(jobs.filter { $0.progress.fraction != nil }.count)")
+        #expect(jobs.count == 4)
+        #expect(jobs.allSatisfy { $0.progress.fraction == nil })
+    }
+
+    @Test func liveProgressOnlyExposesFinitePercentages() {
+        for value in [Double.nan, .infinity, -.infinity, -1, 1e100] {
+            #expect(JobProgress(stage: .transcribing, detail: "", fraction: value).displayFraction == nil)
+        }
+        #expect(JobProgress(stage: .transcribing, detail: "", fraction: 0).displayFraction == 0)
+        #expect(JobProgress(stage: .transcribing, detail: "", fraction: 1).displayFraction == 1)
+    }
+
     @Test func flushCompletesPendingWrites() throws {
         defer { cleanUp() }
         let store = JobStore(baseURL: baseURL)

@@ -168,7 +168,7 @@ final class JobStore {
             let result = Result<TranscriptionJob, Error> {
                 try failureInjector(.read, file)
                 let data = try Data(contentsOf: file)
-                return try makeDecoder().decode(TranscriptionJob.self, from: data)
+                return try validatedForLoading(makeDecoder().decode(TranscriptionJob.self, from: data))
             }
             slots.set(result, at: index)
         }
@@ -185,6 +185,34 @@ final class JobStore {
         job.status = .canceled
         job.progress = JobProgress(stage: .canceled, detail: "Interrupted — the app quit while this job was running.", fraction: nil)
         job.log += "This job was interrupted by an app quit and marked as canceled.\n"
+        return job
+    }
+
+    private struct InvalidJob: LocalizedError {
+        let errorDescription: String?
+    }
+
+    private nonisolated static func validatedForLoading(_ original: TranscriptionJob) throws -> TranscriptionJob {
+        for (name, segments) in [
+            ("transcript", original.transcriptSegments), ("translation", original.translatedSegments),
+            ("partial transcript", original.partialTranscriptSegments), ("partial translation", original.partialTranslatedSegments),
+        ] {
+            guard Set(segments.map(\.id)).count == segments.count else {
+                throw InvalidJob(errorDescription: "The \(name) contains duplicate cue IDs.")
+            }
+            guard segments.allSatisfy({
+                $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end >= $0.start
+                    && $0.end < SubtitleReader.maximumTimestampSeconds
+            }) else {
+                throw InvalidJob(errorDescription: "The \(name) contains invalid cue timestamps.")
+            }
+        }
+        var job = original
+        job.progress.fraction = job.progress.displayFraction
+        if !job.orderIndex.isFinite { job.orderIndex = -job.createdAt.timeIntervalSince1970 }
+        if !job.transcriptionResumeThrough.isFinite || job.transcriptionResumeThrough < 0 {
+            job.transcriptionResumeThrough = 0
+        }
         return job
     }
 
@@ -243,7 +271,7 @@ final class JobStore {
         }
         var decodedJobs: [TranscriptionJob] = []
         do {
-            let jobs = try Self.makeDecoder().decode([TranscriptionJob].self, from: data)
+            let jobs = try Self.makeDecoder().decode([TranscriptionJob].self, from: data).map(Self.validatedForLoading)
             decodedJobs = jobs
             let encoder = Self.makeEncoder()
             for job in jobs {

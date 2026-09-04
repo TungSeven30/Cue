@@ -221,7 +221,7 @@ struct DetailView: View {
                 Text(job.status.label)
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                if model.isSelectedJobRunning, let fraction = model.progress.fraction {
+                if model.isSelectedJobRunning, let fraction = model.progress.displayFraction {
                     ProgressView(value: fraction)
                         .frame(width: 120)
                     Text("\(Int((fraction * 100).rounded()))%")
@@ -242,7 +242,7 @@ struct DetailView: View {
                     TranscriptLoadingSkeletonView(
                         title: "Transcribing Audio…",
                         detail: model.progress.detail,
-                        fraction: model.progress.fraction
+                        fraction: model.progress.displayFraction
                     )
                 } else if model.currentJob?.status == .queued {
                     QueuedJobPlaceholderView(model: model)
@@ -271,7 +271,7 @@ struct DetailView: View {
                     TranscriptLoadingSkeletonView(
                         title: "Translating Subtitles…",
                         detail: model.progress.detail.isEmpty ? "Generating \(model.translationTargetLabel) subtitles…" : model.progress.detail,
-                        fraction: model.progress.fraction
+                        fraction: model.progress.displayFraction
                     )
                 } else if model.transcriptSegments.isEmpty {
                     ContentUnavailableView {
@@ -488,7 +488,7 @@ private struct HeaderCard: View {
                         .lineLimit(1)
                 }
                 Spacer()
-                if let fraction = progress.fraction {
+                if let fraction = progress.displayFraction {
                     Text("\(Int((fraction * 100).rounded()))%")
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -546,7 +546,7 @@ private struct HeaderCard: View {
                     RoundedRectangle(cornerRadius: 8)
                         .strokeBorder(.red.opacity(0.2), lineWidth: 1)
                 )
-            } else if let fraction = progress.fraction {
+            } else if let fraction = progress.displayFraction {
                 ProgressView(value: fraction)
                     .accessibilityValue("\(Int((fraction * 100).rounded())) percent")
             } else if model.isSelectedJobRunning {

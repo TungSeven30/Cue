@@ -111,5 +111,12 @@ struct JobProgress: Codable, Hashable, Sendable {
     /// Optional so histories written before stage-aware Retry still load.
     var failedStage: JobStage? = nil
 
+    /// Invalid telemetry is indeterminate, never an unsafe Int conversion or
+    /// a fabricated percentage. Used for both live and persisted progress.
+    var displayFraction: Double? {
+        guard let fraction, fraction.isFinite, (0...1).contains(fraction) else { return nil }
+        return fraction
+    }
+
     static let idle = JobProgress(stage: .idle, detail: "Waiting to start.", fraction: nil)
 }

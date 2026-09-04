@@ -718,7 +718,7 @@ struct SidebarView: View {
             title: job.title,
             status: job.status,
             statusText: rowStatusText(for: job, queuePosition: queuePosition),
-            progressFraction: job.status.isRunning ? job.progress.fraction : nil,
+            progressFraction: job.status.isRunning ? job.progress.displayFraction : nil,
             hasOverrides: !job.overrides.isEmpty,
             canRetry: canRetry,
             onRetry: { model.retryFailedJobs([job.id]) }
@@ -729,7 +729,7 @@ struct SidebarView: View {
     }
 
     private func rowStatusText(for job: TranscriptionJob, queuePosition: Int?) -> String {
-        if job.status.isRunning, let fraction = job.progress.fraction {
+        if job.status.isRunning, let fraction = job.progress.displayFraction {
             let percent = Int((min(max(fraction, 0), 1) * 100).rounded())
             return "\(job.status.label) · \(percent)%"
         }

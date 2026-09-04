@@ -108,6 +108,8 @@ struct JobProgress: Codable, Hashable, Sendable {
     var stage: JobStage
     var detail: String
     var fraction: Double?
+    /// Optional so histories written before stage-aware Retry still load.
+    var failedStage: JobStage? = nil
 
     static let idle = JobProgress(stage: .idle, detail: "Waiting to start.", fraction: nil)
 }

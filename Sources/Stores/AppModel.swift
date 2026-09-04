@@ -930,6 +930,26 @@ final class AppModel: ObservableObject {
         enqueueJobs(retryableIDs)
     }
 
+    func retrySelectedFailedStage() {
+        guard let job = currentJob, !isSelectedJobRunning, job.progress.stage == .failed else { return }
+        let failedStage = job.progress.failedStage
+        if failedStage == .burningIn || job.progress.detail.hasPrefix("Burn-in failed:") {
+            // Output URLs are not persisted. Reopen the existing native
+            // options sheet instead of guessing a destination to overwrite.
+            isShowingBurnInSheet = true
+        } else if failedStage == .translating || job.progress.detail.hasPrefix("Translation failed:") {
+            startTranslation(jobID: job.id)
+        } else if job.transcriptSegments.isEmpty || job.progress.detail.hasPrefix("Transcription failed:")
+            || [.preflight, .extractingAudio, .loadingModel, .transcribing].contains(failedStage)
+        {
+            startTranscription(jobID: job.id, force: !job.transcriptSegments.isEmpty)
+        } else {
+            // Legacy failures have no typed stage. Keep a finished transcript
+            // intact and resume the remaining translation work.
+            startTranslation(jobID: job.id)
+        }
+    }
+
     /// Adds one job to the queue (or starts it right away when nothing is
     /// running). Every caller is a user asking for more work, so an explicit
     /// stop is lifted.
@@ -2389,7 +2409,7 @@ final class AppModel: ObservableObject {
                 // or translation — restore the completed status, log loudly.
                 updateJob(jobID) { job in
                     job.status = restoredStatus
-                    job.progress = JobProgress(stage: .failed, detail: "Burn-in failed: \(error.localizedDescription)", fraction: nil)
+                    job.progress = JobProgress(stage: .failed, detail: "Burn-in failed: \(error.localizedDescription)", fraction: nil, failedStage: .burningIn)
                     job.log += "Burn-in failed: \(error.localizedDescription)\n"
                 }
                 presentExportError("Burn-in failed: \(error.localizedDescription)")
@@ -2997,8 +3017,9 @@ final class AppModel: ObservableObject {
 
     private func markFailed(_ id: UUID, message: String) {
         updateJob(id) { job in
+            let stage = job.progress.failedStage ?? job.progress.stage
             job.status = .failed
-            job.progress = JobProgress(stage: .failed, detail: message, fraction: nil)
+            job.progress = JobProgress(stage: .failed, detail: message, fraction: nil, failedStage: stage)
             job.log += "\(message)\n"
         }
         recordWatchOutcome(for: id, success: false)

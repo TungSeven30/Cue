@@ -675,6 +675,41 @@ struct AppModelSubtitleImportTests {
         #expect(job.status == .transcriptionComplete)
     }
 
+    @Test func translationFailureRetryPreservesTheImportedTranscript() async throws {
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
+        defer { fixture.model.cancelActiveJob(); fixture.cleanUp() }
+        let model = fixture.model
+        model.settings.openAIAPIKey = "test-key"
+        model.addVideos(urls: [fixture.mediaURL])
+        let id = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: id)
+        let original = try #require(model.job(withID: id))
+        model.jobs[0].status = .failed
+        model.jobs[0].progress = JobProgress(stage: .failed, detail: "Translation failed: offline", fraction: nil)
+        model.retrySelectedFailedStage()
+        let retried = try #require(model.job(withID: id))
+        print("AUDIT05 transcript_link_retained=\(retried.importedTranscriptSource == original.importedTranscriptSource)")
+        #expect(retried.transcriptSegments == original.transcriptSegments)
+        #expect(retried.importedTranscriptSource == original.importedTranscriptSource)
+        #expect(model.translationJobID == id)
+        #expect(model.gpuJobID == nil)
+    }
+
+    @Test func burnInFailureRetryOpensOutputOptionsWithoutStartingASR() async throws {
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
+        defer { fixture.model.cancelActiveJob(); fixture.cleanUp() }
+        let model = fixture.model
+        model.addVideos(urls: [fixture.mediaURL])
+        let id = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: id)
+        model.jobs[0].progress = JobProgress(stage: .failed, detail: "Burn-in failed: offline", fraction: nil)
+        model.retrySelectedFailedStage()
+        print("AUDIT05 burnin_options_opened=\(model.isShowingBurnInSheet)")
+        #expect(model.isShowingBurnInSheet)
+        #expect(model.gpuJobID == nil)
+        #expect(model.jobs[0].importedTranscriptSource != nil)
+    }
+
     // A batch add of one folder now lists that folder once and matches every
     // video against the same listing, so each job must still pick up its own
     // sidecar and only its own.

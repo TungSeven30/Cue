@@ -517,7 +517,7 @@ private struct HeaderCard: View {
 
                     HStack(spacing: 10) {
                         Button {
-                            model.startTranscription(force: true)
+                            model.retrySelectedFailedStage()
                         } label: {
                             Label("Retry", systemImage: "arrow.clockwise")
                         }

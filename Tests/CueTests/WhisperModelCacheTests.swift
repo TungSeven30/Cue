@@ -28,6 +28,17 @@ import Testing
         return url
     }
 
+    /// Polls instead of sleeping a fixed amount: a loaded CI runner can delay
+    /// the sweep task well past the idle timeout.
+    private func waitUntilEvicted(_ cache: WhisperModelCache, within seconds: Double = 10) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(seconds)
+        while ContinuousClock.now < deadline {
+            if await cache.residentKeys().isEmpty { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return await cache.residentKeys().isEmpty
+    }
+
     private func makeCache(idleTimeout: TimeInterval = 600, ledger: Ledger) -> WhisperModelCache {
         WhisperModelCache(
             idleTimeout: idleTimeout,
@@ -151,24 +162,26 @@ import Testing
 
         let model = try await cache.acquire(modelURL: url)
         await cache.release(model)
-        try await Task.sleep(for: .milliseconds(700))
 
-        #expect(await cache.residentKeys().isEmpty)
+        #expect(await waitUntilEvicted(cache))
     }
 
     @Test func reacquiringBeforeTheIdleTimeoutKeepsTheModel() async throws {
         let ledger = Ledger()
-        let cache = makeCache(idleTimeout: 0.4, ledger: ledger)
+        let cache = makeCache(idleTimeout: 0.3, ledger: ledger)
         let url = try makeFile("a")
         defer { try? FileManager.default.removeItem(at: url) }
 
         let model = try await cache.acquire(modelURL: url)
         await cache.release(model)
-        try await Task.sleep(for: .milliseconds(200))
+        // Re-lease straight away: the sweep scheduled by the release must be
+        // cancelled, and a leased model survives however long we wait.
         let again = try await cache.acquire(modelURL: url)
-        try await Task.sleep(for: .milliseconds(400))
+        try await Task.sleep(for: .milliseconds(900))
         #expect(await cache.residentKeys().count == 1, "a lease taken before the sweep must cancel it")
+        #expect(ledger.loads.count == 1)
         await cache.release(again)
+        #expect(await waitUntilEvicted(cache), "released again, the idle timeout frees it")
         #expect(ledger.loads.count == 1)
     }
 }

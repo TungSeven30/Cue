@@ -191,10 +191,14 @@ import Testing
         _ = try await harness.pool.run(harness.request("one.mp4")) { _ in }
         let pid = try #require(await harness.pool.residentWorkerPID())
 
-        try await Task.sleep(for: .milliseconds(900))
-
+        // Poll rather than sleep a fixed amount: a loaded runner can delay
+        // the sweep well past the timeout.
+        let deadline = ContinuousClock.now + .seconds(10)
+        while ContinuousClock.now < deadline, await harness.pool.residentWorkerPID() != nil {
+            try await Task.sleep(for: .milliseconds(50))
+        }
         #expect(await harness.pool.residentWorkerPID() == nil)
-        #expect(await processIsGone(pid, within: 3))
+        #expect(await processIsGone(pid, within: 5))
     }
 
     @Test func shutdownStopsTheWorkerPromptly() async throws {

@@ -58,6 +58,7 @@ struct AppModelDiagnosticsTests {
             jobStore: JobStore(baseURL: base),
             diagnosticsService: diagnostics
         )
+        await model.hydration()
 
         // Finish the launch-time request before arranging the overlap under
         // test, so there are exactly two controlled runs in flight.

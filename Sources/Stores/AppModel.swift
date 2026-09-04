@@ -10,6 +10,16 @@ import UserNotifications
 final class AppModel: ObservableObject {
     @Published var settings: AppSettingsStore
     @Published var jobs: [TranscriptionJob] = []
+    /// True until the persisted job history has been loaded and merged.
+    /// The window shows immediately; views render a neutral state instead
+    /// of "no jobs yet" while this is set, and the queue and watch folders
+    /// wait, so a scan can never re-ingest a file whose job has not loaded.
+    @Published private(set) var isHydratingJobs = true
+    private var hydrationTask: Task<Void, Never>?
+    /// Verified-on-use cache behind `index(of:)`. Never trusted blindly:
+    /// a hit is checked against the job at that position, so any reorder,
+    /// insert, or delete is caught and the map is rebuilt once.
+    private var jobIndexCache: [UUID: Int] = [:]
     /// Every highlighted sidebar job. The detail pane continues to use
     /// `selectedJobID` as the primary member of this selection.
     @Published private(set) var selectedJobIDs: Set<UUID> = []
@@ -140,10 +150,7 @@ final class AppModel: ObservableObject {
         self.diagnosticsService = diagnosticsService
         self.translationService = translationService
         isPlayerVisible = UserDefaults.standard.object(forKey: "isPlayerVisible") as? Bool ?? true
-        jobs = jobRepository.loadJobs().sorted { $0.orderIndex < $1.orderIndex }
-        persistenceError = jobRepository.startupError ?? watchLedger.startupError
-        autoArchiveOldJobs()
-        selectJob(jobs.first(where: { $0.archivedAt == nil })?.id ?? jobs.first?.id)
+        persistenceError = watchLedger.startupError
         // `settings` is a nested ObservableObject; changes to its fields do not
         // fire AppModel's objectWillChange on their own, so forward them.
         self.settings.objectWillChange
@@ -193,8 +200,16 @@ final class AppModel: ObservableObject {
         .sink { [weak self] _ in self?.runDiagnostics() }
         .store(in: &cancellables)
         runDiagnostics()
-        syncWatchFolders()
         Self.current = self
+        // Decoding a large history takes long enough to notice; do it off
+        // the main actor and merge once it lands (see finishHydration).
+        let repository = jobRepository
+        hydrationTask = Task { [weak self] in
+            let snapshot = await Task.detached(priority: .userInitiated) {
+                repository.loadJobsSnapshot()
+            }.value
+            self?.finishHydration(with: snapshot)
+        }
         // Files opened through the Dock icon or Finder's Open With can arrive
         // before this model exists; the delegate parks them until now.
         OpenFileRequests.register { [weak self] urls in
@@ -245,6 +260,60 @@ final class AppModel: ObservableObject {
             guard settings.authorizationStatus == .notDetermined else { return }
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         }
+    }
+
+    /// Resolves when the persisted history has been merged into `jobs`.
+    func hydration() async {
+        await hydrationTask?.value
+    }
+
+    /// Merges the loaded history under whatever was added interactively
+    /// while it loaded: early adds keep their order and stay on top (their
+    /// indices are re-stamped against the loaded ones), duplicates by id are
+    /// impossible because early jobs have fresh ids, and only then do the
+    /// queue and watch folders start.
+    private func finishHydration(with snapshot: JobLoadSnapshot) {
+        jobRepository.recordStartupFailures(snapshot.failures)
+        let loaded = JobLoadOrdering.stableSortedByOrderIndex(snapshot.jobs)
+        let earlyIDs = Set(jobs.map(\.id))
+        let persisted = loaded.filter { !earlyIDs.contains($0.id) }
+        var early = jobs
+        if !early.isEmpty {
+            let indices = QueueOrdering.indicesForBatchAdd(count: early.count, existing: persisted.map(\.orderIndex))
+            for (offset, orderIndex) in indices.enumerated() {
+                early[offset].orderIndex = orderIndex
+            }
+        }
+        jobs = early + persisted
+        jobIndexCache.removeAll()
+        if !early.isEmpty {
+            jobRepository.save(early)
+        }
+        if persistenceError == nil {
+            persistenceError = jobRepository.startupError
+        }
+        autoArchiveOldJobs()
+        if selectedJobID == nil {
+            selectJob(jobs.first(where: { $0.archivedAt == nil })?.id ?? jobs.first?.id)
+        }
+        isHydratingJobs = false
+        syncWatchFolders()
+        processQueue()
+    }
+
+    /// Position of the job with `id`, O(1) on the hot path. The cached index
+    /// is validated against the array before use and the map is rebuilt when
+    /// it is stale, so structural edits to `jobs` need no bookkeeping.
+    func index(of id: UUID) -> Int? {
+        if let cached = jobIndexCache[id], cached < jobs.count, jobs[cached].id == id {
+            return cached
+        }
+        jobIndexCache = Dictionary(jobs.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return jobIndexCache[id]
+    }
+
+    func job(withID id: UUID) -> TranscriptionJob? {
+        index(of: id).map { jobs[$0] }
     }
 
     var currentJob: TranscriptionJob? {
@@ -368,7 +437,7 @@ final class AppModel: ObservableObject {
     var canStartSelectedJob: Bool {
         guard selectedJobIDs.count == 1,
             let id = selectedJobIDs.first,
-            let job = jobs.first(where: { $0.id == id }),
+            let job = self.job(withID: id),
             !isProcessing,
             job.archivedAt == nil,
             !job.status.isRunning
@@ -448,7 +517,7 @@ final class AppModel: ObservableObject {
         guard let selectedJobID else {
             return nil
         }
-        return jobs.firstIndex { $0.id == selectedJobID }
+        return index(of: selectedJobID)
     }
 
     func selectJob(_ id: UUID?) {
@@ -578,7 +647,7 @@ final class AppModel: ObservableObject {
     }
 
     func setOverrides(_ overrides: JobSettingsOverrides, for id: UUID) {
-        guard let job = jobs.first(where: { $0.id == id }), !job.status.isRunning else { return }
+        guard let job = self.job(withID: id), !job.status.isRunning else { return }
         updateJob(id) { job in
             job.overrides = overrides
             job.log +=
@@ -722,7 +791,7 @@ final class AppModel: ObservableObject {
 
         jobs.removeAll { ids.contains($0.id) }
         selectedJobIDs.subtract(ids)
-        if let selectedJobID, jobs.contains(where: { $0.id == selectedJobID }) {
+        if let selectedJobID, index(of: selectedJobID) != nil {
             selectedJobIDs.insert(selectedJobID)
         } else if let nextSelectedID = jobs.first(where: { selectedJobIDs.contains($0.id) })?.id {
             selectedJobID = nextSelectedID
@@ -802,7 +871,7 @@ final class AppModel: ObservableObject {
     func startSelectedJob() {
         guard canStartSelectedJob,
             let id = selectedJobIDs.first,
-            let job = jobs.first(where: { $0.id == id })
+            let job = self.job(withID: id)
         else { return }
 
         if jobs.contains(where: { $0.id != id && $0.status == .queued }) {
@@ -850,7 +919,7 @@ final class AppModel: ObservableObject {
     /// running). Every caller is a user asking for more work, so an explicit
     /// stop is lifted.
     func enqueueJob(_ id: UUID) {
-        guard let job = jobs.first(where: { $0.id == id }), !job.status.isRunning else { return }
+        guard let job = self.job(withID: id), !job.status.isRunning else { return }
         queuePaused = false
         updateJob(id) { job in
             job.status = .queued
@@ -924,6 +993,9 @@ final class AppModel: ObservableObject {
     /// two run independently, so the next transcription can start while the
     /// previous job is still translating.
     private func processQueue() {
+        // Nothing runs from the queue until the history has been merged;
+        // finishHydration pumps once it has.
+        guard !isHydratingJobs else { return }
         defer { updateProcessingActivity() }
         pumpTranslation()
         pumpGPU()
@@ -1111,7 +1183,7 @@ final class AppModel: ObservableObject {
     private func updateVolumeWaitingJobs() {
         let waiting = jobsWaitingOnVolumes
         for id in waiting {
-            guard let job = jobs.first(where: { $0.id == id }) else { continue }
+            guard let job = self.job(withID: id) else { continue }
             let volume = SourceVolume.volumeName(forPath: job.sourcePath) ?? "volume"
             let detail = "Waiting for “\(volume)” to reconnect."
             if job.progress.detail != detail {
@@ -1131,13 +1203,13 @@ final class AppModel: ObservableObject {
 
     private func pumpGPU() {
         guard let id = PipelineScheduler.nextGPUJob(jobs: jobViews, gpuBusy: gpuJobID != nil, queuePaused: queuePaused),
-            let index = jobs.firstIndex(where: { $0.id == id })
+            let index = index(of: id)
         else { return }
         didProcessQueuedJob = true
         startTranscriptionNow(at: index, force: false)
         // If the job could not start (e.g. a guard failed), fail it instead
         // of stalling the whole queue on a stuck "queued" entry.
-        if gpuJobID == nil, jobs.first(where: { $0.id == id })?.status == .queued {
+        if gpuJobID == nil, self.job(withID: id)?.status == .queued {
             markFailed(id, message: "Could not start this job. Check the file and settings.")
             processQueue()
         }
@@ -1156,11 +1228,11 @@ final class AppModel: ObservableObject {
             return
         }
         guard let id = PipelineScheduler.nextTranslationJob(jobs: jobViews, translationBusy: false, queuePaused: queuePaused),
-            let index = jobs.firstIndex(where: { $0.id == id })
+            let index = index(of: id)
         else { return }
         didProcessQueuedJob = true
         startTranslationNow(at: index)
-        if translationJobID == nil, jobs.first(where: { $0.id == id })?.status == .queued {
+        if translationJobID == nil, self.job(withID: id)?.status == .queued {
             markFailed(id, message: "Could not start this job. Check the file and settings.")
             processQueue()
         }
@@ -1190,6 +1262,9 @@ final class AppModel: ObservableObject {
     /// folder whose path changed. Idempotent, so callers just mutate
     /// `settings.watchFolders` and call this.
     func syncWatchFolders() {
+        // Services read job fingerprints to block re-ingest; they start
+        // once the history is in (finishHydration calls this again).
+        guard !isHydratingJobs else { return }
         watchCoordinator.sync(folders: settings.watchFolders)
     }
 
@@ -1511,7 +1586,7 @@ final class AppModel: ObservableObject {
     /// failure are recorded; cancel is not — the canceled job itself blocks
     /// re-ingest while it exists, and deleting it means "do it over".
     private func recordWatchOutcome(for id: UUID, success: Bool) {
-        guard let job = jobs.first(where: { $0.id == id }), job.origin == .watchFolder else { return }
+        guard let job = self.job(withID: id), job.origin == .watchFolder else { return }
         watchLedger.record(job.sourceFingerprint, outcome: success ? .success : .failure)
     }
 
@@ -1527,12 +1602,12 @@ final class AppModel: ObservableObject {
     }
 
     func moveJobToTop(_ id: UUID) {
-        guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = index(of: id) else { return }
         moveJobs(from: IndexSet(integer: index), to: 0)
     }
 
     func moveJobToBottom(_ id: UUID) {
-        guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = index(of: id) else { return }
         moveJobs(from: IndexSet(integer: index), to: jobs.count)
     }
 
@@ -1600,7 +1675,7 @@ final class AppModel: ObservableObject {
     }
 
     func startTranscription(jobID: UUID? = nil, force: Bool = false) {
-        guard let index = jobs.firstIndex(where: { $0.id == (jobID ?? selectedJobID) }) else { return }
+        guard let index = (jobID ?? selectedJobID).flatMap(index(of:)) else { return }
         let targetID = jobs[index].id
         guard !jobs[index].status.isRunning else { return }
         // Something else is running: queue this job instead of fighting for
@@ -1798,7 +1873,7 @@ final class AppModel: ObservableObject {
                         // line can arrive after the run already finished. Dropping
                         // it keeps cleared partials cleared instead of leaving
                         // stale ones on a completed job forever.
-                        guard self.jobs.first(where: { $0.id == jobID })?.status == .transcribing else { return }
+                        guard self.self.job(withID: jobID)?.status == .transcribing else { return }
                         self.updateJob(jobID, debouncePersist: true) { job in
                             if resumeMergesPartials {
                                 job.partialTranscriptSegments = TranscriptionChunkPlanner.mergePartialSegments(
@@ -1868,7 +1943,7 @@ final class AppModel: ObservableObject {
                     enqueueTranslationWork(jobID: jobID) { [weak self] in
                         guard let self else { return }
                         do {
-                            let final = self.jobs.first(where: { $0.id == jobID })?.transcriptSegments ?? []
+                            let final = self.self.job(withID: jobID)?.transcriptSegments ?? []
                             // Persist the reconciled partials *before* the
                             // finish pass runs. Mid-stream partials are keyed
                             // by streamed segment ids; if this pass fails or is
@@ -1938,7 +2013,7 @@ final class AppModel: ObservableObject {
     }
 
     func startTranslation(jobID: UUID? = nil) {
-        guard let index = jobs.firstIndex(where: { $0.id == (jobID ?? selectedJobID) }),
+        guard let index = (jobID ?? selectedJobID).flatMap(index(of:)),
             !jobs[index].transcriptSegments.isEmpty
         else { return }
         let targetID = jobs[index].id
@@ -2317,7 +2392,7 @@ final class AppModel: ObservableObject {
     /// the main actor so a large batch add stays responsive.
     private func adoptSidecars(for ids: [UUID]) {
         let requests: [(id: UUID, url: URL, source: String, target: String)] = ids.compactMap { id in
-            guard let job = jobs.first(where: { $0.id == id }) else { return nil }
+            guard let job = self.job(withID: id) else { return nil }
             let resolved = job.settings.applying(job.overrides)
             return (id, job.sourceURL, resolved.sourceLanguage, resolved.translationTargetLanguage)
         }
@@ -2369,7 +2444,7 @@ final class AppModel: ObservableObject {
         // Empty slots are checked too because an explicit Load Subtitles…
         // onto a queued job leaves it queued, so its status alone cannot
         // tell the two apart.
-        guard let current = jobs.first(where: { $0.id == id }),
+        guard let current = self.job(withID: id),
             current.status == .idle || current.status == .queued,
             !isJobActive(id),
             current.transcriptSegments.isEmpty,
@@ -2451,7 +2526,7 @@ final class AppModel: ObservableObject {
     }
 
     func applySubtitleLoad(_ request: SubtitleLoadRequest, to slot: SubtitleSidecarScanner.Slot) {
-        guard let id = selectedJobID, let job = jobs.first(where: { $0.id == id }) else { return }
+        guard let id = selectedJobID, let job = self.job(withID: id) else { return }
         let existing = slot == .transcript ? job.transcriptSegments : job.translatedSegments
         if !existing.isEmpty, !confirmReplacingSegments(slot: slot) { return }
 
@@ -2557,7 +2632,7 @@ final class AppModel: ObservableObject {
     }
 
     private func writeBackImportedSubtitles(jobID: UUID, slot: SubtitleSidecarScanner.Slot) {
-        guard let job = jobs.first(where: { $0.id == jobID }),
+        guard let job = self.job(withID: jobID),
             var source = job.importedSource(for: slot),
             !source.syncPaused
         else { return }
@@ -2608,7 +2683,7 @@ final class AppModel: ObservableObject {
     /// Writes SRT files next to the source video when a job finishes, named
     /// with language codes (video.vi.srt) so media players auto-load them.
     private func autoExportSidecars(for id: UUID) {
-        guard let job = jobs.first(where: { $0.id == id }),
+        guard let job = self.job(withID: id),
             settings.autoExportSidecar || job.origin == .watchFolder
         else { return }
 
@@ -2797,7 +2872,7 @@ final class AppModel: ObservableObject {
         language: String,
         for id: UUID
     ) async -> String? {
-        guard let job = jobs.first(where: { $0.id == id }) else { return nil }
+        guard let job = self.job(withID: id) else { return nil }
         let generateSummary = job.overrides.generateSummary ?? settings.generateSummary
         guard generateSummary, !segments.isEmpty else { return nil }
         guard settings.isSummaryReady else {
@@ -2907,7 +2982,7 @@ final class AppModel: ObservableObject {
     /// reports for itself — only finishTranslation may write the terminal
     /// state, or a job still awaiting its finish pass would read "complete".
     private func recordStreamingTranslationProgress(_ update: JobProgress, for id: UUID) {
-        guard jobs.first(where: { $0.id == id })?.status == .translating else { return }
+        guard self.job(withID: id)?.status == .translating else { return }
         guard update.stage != .complete || drivers[id] == nil else { return }
         updateProgress(update, for: id)
     }
@@ -2935,7 +3010,7 @@ final class AppModel: ObservableObject {
     /// Posts a completion notification when the app is in the background so
     /// long runs can be left unattended.
     private func notifyJobFinished(_ id: UUID) {
-        guard let job = jobs.first(where: { $0.id == id }) else { return }
+        guard let job = self.job(withID: id) else { return }
         notify(title: job.title, body: job.status.label)
     }
 
@@ -2958,7 +3033,7 @@ final class AppModel: ObservableObject {
     }
 
     private func updateJob(_ id: UUID, debouncePersist: Bool = false, mutate: (inout TranscriptionJob) -> Void) {
-        guard let index = jobs.firstIndex(where: { $0.id == id }) else {
+        guard let index = index(of: id) else {
             return
         }
         mutate(&jobs[index])
@@ -3011,7 +3086,7 @@ final class AppModel: ObservableObject {
         // A mutation that changes nothing must not schedule a write: an
         // untouched file should stay untouched, byte for byte.
         guard let id = selectedJobID,
-            let job = jobs.first(where: { $0.id == id }),
+            let job = self.job(withID: id),
             let existing = job[keyPath: keyPath].first(where: { $0.id == segment.id }),
             existing.text != text
         else { return }
@@ -3022,7 +3097,7 @@ final class AppModel: ObservableObject {
             job[keyPath: keyPath][index].text = text
         }
         let slot: SubtitleSidecarScanner.Slot = keyPath == \TranscriptionJob.transcriptSegments ? .transcript : .translation
-        if let source = jobs.first(where: { $0.id == id })?.importedSource(for: slot), !source.syncPaused {
+        if let source = self.job(withID: id)?.importedSource(for: slot), !source.syncPaused {
             scheduleSubtitleSync(jobID: id, slot: slot)
         }
     }
@@ -3080,7 +3155,7 @@ final class AppModel: ObservableObject {
     }
 
     private func persistJob(_ id: UUID) {
-        guard let job = jobs.first(where: { $0.id == id }) else { return }
+        guard let job = self.job(withID: id) else { return }
         jobRepository.save(job)
     }
 }

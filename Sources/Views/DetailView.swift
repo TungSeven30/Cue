@@ -88,7 +88,12 @@ struct DetailView: View {
 
     @ViewBuilder
     private var emptyWorkspace: some View {
-        if model.jobs.isEmpty {
+        if model.isHydratingJobs {
+            // The history is still decoding off the main actor; flashing the
+            // welcome screen for a beat would be wrong for a returning user.
+            ProgressView("Loading jobs…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if model.jobs.isEmpty {
             WelcomeWorkspaceView(model: model)
         } else {
             ContentUnavailableView {

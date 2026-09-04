@@ -29,7 +29,7 @@ struct ContentView: View {
         }
         .sheet(
             item: Binding(
-                get: { model.overridesEditorJobID.flatMap { id in model.jobs.first { $0.id == id } } },
+                get: { model.overridesEditorJobID.flatMap { model.job(withID: $0) } },
                 set: { model.overridesEditorJobID = $0?.id }
             )
         ) { job in

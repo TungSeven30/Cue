@@ -52,7 +52,7 @@ struct AppModelSubtitleImportTests {
         sidecars: [String],
         autoStart: Bool = false,
         translationService: TranslationService = TranslationService(httpClient: HangingHTTPClient())
-    ) throws -> Fixture {
+    ) async throws -> Fixture {
         let suiteName = "app-model-import-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         let baseURL = FileManager.default.temporaryDirectory
@@ -72,6 +72,7 @@ struct AppModelSubtitleImportTests {
             diagnosticsService: EmptyImportDiagnostics(),
             translationService: translationService
         )
+        await model.hydration()
         return Fixture(model: model, baseURL: baseURL, suiteName: suiteName)
     }
 
@@ -85,7 +86,7 @@ struct AppModelSubtitleImportTests {
     }
 
     @Test func adoptsSidecarIntoTranscriptSlot() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -103,7 +104,7 @@ struct AppModelSubtitleImportTests {
     }
 
     @Test func adoptsBothSlotsWhenSourceAndTargetSidecarsExist() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt", "movie.vi.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt", "movie.vi.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -121,7 +122,7 @@ struct AppModelSubtitleImportTests {
     // for ASR (queued && !hasTranscript), and startTranscriptionNow then wipes
     // translatedSegments — the adopted translation vanishes silently.
     @Test func brokenTranscriptSidecarLeavesTheTranslationUnadopted() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt", "movie.vi.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt", "movie.vi.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
         try Data("not a subtitle at all".utf8)
@@ -139,7 +140,7 @@ struct AppModelSubtitleImportTests {
     }
 
     @Test func jobWithNoSidecarIsUntouched() async throws {
-        let fixture = try makeFixture(sidecars: [])
+        let fixture = try await makeFixture(sidecars: [])
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -159,7 +160,7 @@ struct AppModelSubtitleImportTests {
     // hermetic: processQueue() really does dispatch to translationService
     // once translationReady is true, so this must never reach a live host.
     @Test func adoptedJobStaysQueuedSoItCanTranslate() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"], autoStart: true)
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"], autoStart: true)
         defer { fixture.cleanUp() }
         let model = fixture.model
         model.settings.openAIAPIKey = "test-key"
@@ -184,7 +185,7 @@ struct AppModelSubtitleImportTests {
     // Both slots filled means no work is left, so the job leaves the queue
     // rather than waiting to be re-translated.
     @Test func adoptingBothSlotsLeavesTheQueue() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt", "movie.vi.srt"], autoStart: true)
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt", "movie.vi.srt"], autoStart: true)
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -198,8 +199,8 @@ struct AppModelSubtitleImportTests {
     // The race the pending set exists to close: pumpGPU schedules through
     // jobViews, not jobNeedsWork, so auto-start could otherwise begin ASR
     // before adoption lands.
-    @Test func pendingScanKeepsTheJobOutOfScheduling() throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"], autoStart: true)
+    @Test func pendingScanKeepsTheJobOutOfScheduling() async throws {
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"], autoStart: true)
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -215,7 +216,7 @@ struct AppModelSubtitleImportTests {
     // a click during the scan window was silently dropped — the job stayed
     // .idle forever, since PipelineScheduler only ever picks up .queued jobs.
     @Test func queuingDuringScanStillTranscribesOnceScanSettles() async throws {
-        let fixture = try makeFixture(sidecars: [])
+        let fixture = try await makeFixture(sidecars: [])
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -252,7 +253,7 @@ struct AppModelSubtitleImportTests {
     // with the sidecar's — that would leave importedTranscriptSource
     // pointing at a file that no longer matches the job's actual transcript.
     @Test func runningJobDuringScanIsNotClobberedByLateAdoption() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -292,7 +293,7 @@ struct AppModelSubtitleImportTests {
     // directly is what makes this deterministic; a real ASR run would race
     // the scan.
     @Test func runFinishedDuringScanIsNotClobberedByLateAdoption() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -314,7 +315,7 @@ struct AppModelSubtitleImportTests {
     // A run that failed during the scan window must keep its failure: adoption
     // stamping .transcriptionComplete over it would hide a real error.
     @Test func failedRunDuringScanIsNotOverwrittenByAdoption() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -335,7 +336,7 @@ struct AppModelSubtitleImportTests {
     // the pending set either, so the user's explicit file choice must not be
     // replaced by the auto-detected sidecar that lands moments later.
     @Test func manualLoadDuringScanIsNotClobberedByAdoption() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -359,7 +360,7 @@ struct AppModelSubtitleImportTests {
     // auto-started job .queued when translation is configured, so the status
     // alone cannot distinguish it from an untouched job — the filled slot can.
     @Test func manualLoadDuringScanOnAQueuedJobIsNotClobberedByAdoption() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"], autoStart: true)
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"], autoStart: true)
         defer { fixture.cleanUp() }
         let model = fixture.model
         model.settings.openAIAPIKey = "test-key"
@@ -387,7 +388,7 @@ struct AppModelSubtitleImportTests {
     // The skip-if-unchanged branch would otherwise treat imported subtitles as
     // "already transcribed with these settings", which they never were.
     @Test func transcribeOnImportedJobDoesNotTakeTheSkipPath() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -410,7 +411,7 @@ struct AppModelSubtitleImportTests {
     }
 
     @Test func realRunClearsImportedTranslationProvenance() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt", "movie.vi.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt", "movie.vi.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -428,7 +429,7 @@ struct AppModelSubtitleImportTests {
     }
 
     @Test func editsAreWrittenBackToTheImportedFile() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
         let sidecarURL = fixture.baseURL.appendingPathComponent("movie.ja.srt")
@@ -455,7 +456,7 @@ struct AppModelSubtitleImportTests {
     }
 
     @Test func firstWriteBacksUpTheOriginalExactlyOnce() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
         let backupURL = fixture.baseURL.appendingPathComponent("movie.ja.srt.bak")
@@ -486,7 +487,7 @@ struct AppModelSubtitleImportTests {
     // exercises it as a genuine fallback rather than a step that always finds
     // didBackup already true.
     @Test func writeBackBacksUpTheOriginalWhenImportCouldNotBackItUp() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
         defer {
             try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fixture.baseURL.path)
             fixture.cleanUp()
@@ -515,7 +516,7 @@ struct AppModelSubtitleImportTests {
     // The safeguard that makes automatic write-back defensible: an edit made
     // elsewhere must never be silently destroyed.
     @Test func externalChangePausesSyncInsteadOfOverwriting() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
         let sidecarURL = fixture.baseURL.appendingPathComponent("movie.ja.srt")
@@ -537,7 +538,7 @@ struct AppModelSubtitleImportTests {
     }
 
     @Test func manyEditsCoalesceIntoOneWrite() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
         let sidecarURL = fixture.baseURL.appendingPathComponent("movie.ja.srt")
@@ -558,7 +559,7 @@ struct AppModelSubtitleImportTests {
     }
 
     @Test func unlinkStopsWriteBack() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
         let sidecarURL = fixture.baseURL.appendingPathComponent("movie.ja.srt")
@@ -589,7 +590,7 @@ struct AppModelSubtitleImportTests {
                 .utf8
         )
         let client = RecordingHTTPClient(responses: [.init(data: response, statusCode: 200)])
-        let fixture = try makeFixture(
+        let fixture = try await makeFixture(
             sidecars: ["movie.ja.srt", "movie.vi.srt"],
             translationService: TranslationService(httpClient: client)
         )
@@ -628,7 +629,7 @@ struct AppModelSubtitleImportTests {
     }
 
     @Test func manualLoadFillsTheChosenSlotAndSetsProvenance() async throws {
-        let fixture = try makeFixture(sidecars: [])
+        let fixture = try await makeFixture(sidecars: [])
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -653,7 +654,7 @@ struct AppModelSubtitleImportTests {
     // video against the same listing, so each job must still pick up its own
     // sidecar and only its own.
     @Test func batchAddInOneFolderAdoptsEachVideosOwnSidecar() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -682,7 +683,7 @@ struct AppModelSubtitleImportTests {
     // cancel it. Backing up there left a .bak beside a file the user never
     // ended up loading — a side effect with nothing to show for it.
     @Test func manualLoadBacksUpOnlyWhenTheSlotIsCommitted() async throws {
-        let fixture = try makeFixture(sidecars: [])
+        let fixture = try await makeFixture(sidecars: [])
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -709,7 +710,7 @@ struct AppModelSubtitleImportTests {
     // the file just loaded, rewriting it with renumbered ids and normalized
     // timestamps though the user edited nothing.
     @Test func loadingASlotCancelsItsPendingWrite() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -739,7 +740,7 @@ struct AppModelSubtitleImportTests {
     // An edit that changes nothing (a Replace All that matched nothing, a
     // rebuilt view handing back the same text) must not rewrite the file.
     @Test func aNoOpEditDoesNotRewriteTheFile() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
         let sidecarURL = fixture.baseURL.appendingPathComponent("movie.ja.srt")
@@ -763,7 +764,7 @@ struct AppModelSubtitleImportTests {
     // before the run must not fire afterwards — the same reasoning that made
     // startTranslationNow cancel its slot.
     @Test func startingARunCancelsPendingWritesForBothSlots() async throws {
-        let fixture = try makeFixture(sidecars: ["movie.ja.srt", "movie.vi.srt"])
+        let fixture = try await makeFixture(sidecars: ["movie.ja.srt", "movie.vi.srt"])
         defer { fixture.cleanUp() }
         let model = fixture.model
         let transcriptURL = fixture.baseURL.appendingPathComponent("movie.ja.srt")
@@ -790,7 +791,7 @@ struct AppModelSubtitleImportTests {
     // Translation without a transcript is a state the rest of the app cannot
     // represent, so the picker must not offer it.
     @Test func translationSlotIsUnavailableWithoutATranscript() async throws {
-        let fixture = try makeFixture(sidecars: [])
+        let fixture = try await makeFixture(sidecars: [])
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -809,7 +810,7 @@ struct AppModelSubtitleImportTests {
     // status/hasTranscript, not readiness) picks the job up and it fails
     // immediately with no translation host configured.
     @Test func manualLoadOnAQueuedJobWithoutTranslationConfiguredCompletesInsteadOfStayingQueued() async throws {
-        let fixture = try makeFixture(sidecars: [], autoStart: true)
+        let fixture = try await makeFixture(sidecars: [], autoStart: true)
         defer { fixture.cleanUp() }
         let model = fixture.model
         #expect(model.settings.isTranslationReady == false, "Fixture must have no translation host configured")

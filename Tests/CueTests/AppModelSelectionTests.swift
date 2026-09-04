@@ -14,8 +14,8 @@ private actor EmptySelectionDiagnostics: EnvironmentDiagnosing {
 
 @MainActor
 struct AppModelSelectionTests {
-    @Test func multiSelectionKeepsOnePrimaryJobForTheDetailPane() throws {
-        let fixture = try makeFixture()
+    @Test func multiSelectionKeepsOnePrimaryJobForTheDetailPane() async throws {
+        let fixture = try await makeFixture()
         defer { fixture.cleanUp() }
         let model = fixture.model
 
@@ -36,8 +36,8 @@ struct AppModelSelectionTests {
         #expect(model.selectedJobID == initialPrimary)
     }
 
-    @Test func bulkDeleteRemovesAllSelectedRecordsButNotSourceMedia() throws {
-        let fixture = try makeFixture(createSources: true)
+    @Test func bulkDeleteRemovesAllSelectedRecordsButNotSourceMedia() async throws {
+        let fixture = try await makeFixture(createSources: true)
         defer { fixture.cleanUp() }
         let model = fixture.model
         let sourceURLs = [fixture.sourceURL(1), fixture.sourceURL(2), fixture.sourceURL(3)]
@@ -57,8 +57,8 @@ struct AppModelSelectionTests {
         #expect(JobStore(baseURL: fixture.baseURL).loadJobs().count == 1)
     }
 
-    @Test func bulkArchiveAndUnarchiveUpdatesTheSelectionAndPersists() throws {
-        let fixture = try makeFixture()
+    @Test func bulkArchiveAndUnarchiveUpdatesTheSelectionAndPersists() async throws {
+        let fixture = try await makeFixture()
         defer { fixture.cleanUp() }
         let model = fixture.model
         model.addVideos(urls: [fixture.sourceURL(1), fixture.sourceURL(2), fixture.sourceURL(3)])
@@ -80,8 +80,8 @@ struct AppModelSelectionTests {
         #expect(reloaded.filter { archivingIDs.contains($0.id) }.allSatisfy { $0.archivedAt == nil })
     }
 
-    @Test func bulkRemoveFromQueueChangesOnlyQueuedJobs() throws {
-        let fixture = try makeFixture()
+    @Test func bulkRemoveFromQueueChangesOnlyQueuedJobs() async throws {
+        let fixture = try await makeFixture()
         defer { fixture.cleanUp() }
         let model = fixture.model
         model.addVideos(urls: [fixture.sourceURL(1), fixture.sourceURL(2), fixture.sourceURL(3)])
@@ -100,8 +100,8 @@ struct AppModelSelectionTests {
         #expect(model.jobs.first(where: { $0.id == untouchedID })?.status == .canceled)
     }
 
-    @Test func restoreQueueUndoRestoresEligibleJobsAndPausedState() throws {
-        let fixture = try makeFixture()
+    @Test func restoreQueueUndoRestoresEligibleJobsAndPausedState() async throws {
+        let fixture = try await makeFixture()
         defer { fixture.cleanUp() }
         let model = fixture.model
         model.addVideos(urls: [fixture.sourceURL(1), fixture.sourceURL(2)])
@@ -118,8 +118,8 @@ struct AppModelSelectionTests {
         #expect(model.jobs.allSatisfy { $0.status == .queued })
     }
 
-    @Test func startSelectedJobPausesEveryOtherQueuedJob() throws {
-        let fixture = try makeFixture(createSources: true)
+    @Test func startSelectedJobPausesEveryOtherQueuedJob() async throws {
+        let fixture = try await makeFixture(createSources: true)
         defer { fixture.cleanUp() }
         let model = fixture.model
         model.addVideos(urls: [fixture.sourceURL(1), fixture.sourceURL(2), fixture.sourceURL(3)])
@@ -143,8 +143,8 @@ struct AppModelSelectionTests {
         model.cancelActiveJob()
     }
 
-    @Test func startSelectedJobRequiresExactlyOneIdleSelection() throws {
-        let fixture = try makeFixture()
+    @Test func startSelectedJobRequiresExactlyOneIdleSelection() async throws {
+        let fixture = try await makeFixture()
         defer { fixture.cleanUp() }
         let model = fixture.model
         model.addVideos(urls: [fixture.sourceURL(1), fixture.sourceURL(2)])
@@ -158,7 +158,7 @@ struct AppModelSelectionTests {
     }
 
     @Test func retryFailedJobsQueuesOnlyRetryableFailures() async throws {
-        let fixture = try makeFixture()
+        let fixture = try await makeFixture()
         defer { fixture.cleanUp() }
         let model = fixture.model
         model.addVideos(urls: [fixture.sourceURL(1), fixture.sourceURL(2), fixture.sourceURL(3)])
@@ -188,7 +188,7 @@ struct AppModelSelectionTests {
         #expect(model.jobs.first(where: { $0.id == untouchedID })?.status == .idle)
     }
 
-    private func makeFixture(createSources: Bool = false) throws -> SelectionFixture {
+    private func makeFixture(createSources: Bool = false) async throws -> SelectionFixture {
         let suiteName = "app-model-selection-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         let baseURL = FileManager.default.temporaryDirectory
@@ -210,6 +210,7 @@ struct AppModelSelectionTests {
             jobStore: JobStore(baseURL: baseURL),
             diagnosticsService: EmptySelectionDiagnostics()
         )
+        await model.hydration()
         return SelectionFixture(
             model: model,
             baseURL: baseURL,

@@ -741,7 +741,12 @@ struct SidebarView: View {
 
     @ViewBuilder
     private var emptyPlaceholder: some View {
-        if model.jobs.isEmpty {
+        if model.isHydratingJobs {
+            ProgressView()
+                .controlSize(.small)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+        } else if model.jobs.isEmpty {
             VStack(spacing: 8) {
                 Image(systemName: "film.stack")
                     .font(.title3)

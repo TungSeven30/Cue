@@ -14,8 +14,8 @@ private actor EmptyJobCardDiagnostics: EnvironmentDiagnosing {
 
 @MainActor
 struct JobCardSettingsTests {
-    @Test func jobCardOverrideDoesNotMutateGlobalDefaults() throws {
-        let fixture = try makeFixture()
+    @Test func jobCardOverrideDoesNotMutateGlobalDefaults() async throws {
+        let fixture = try await makeFixture()
         defer { fixture.cleanUp() }
         let model = fixture.model
         model.settings.translationTargetLanguage = "English"
@@ -46,8 +46,8 @@ struct JobCardSettingsTests {
         #expect(model.currentJob?.overrides.generateSummary == true)
     }
 
-    @Test func newlyAddedJobStillUsesGlobalDefaults() throws {
-        let fixture = try makeFixture()
+    @Test func newlyAddedJobStillUsesGlobalDefaults() async throws {
+        let fixture = try await makeFixture()
         defer { fixture.cleanUp() }
         let model = fixture.model
         model.settings.translationTargetLanguage = "English"
@@ -67,8 +67,8 @@ struct JobCardSettingsTests {
         #expect(model.resolvedSettings(for: newJob).openAIModel == model.settings.openAIModel)
     }
 
-    @Test func jobCardEditDoesNotRewriteWatchFolderProfile() throws {
-        let fixture = try makeFixture()
+    @Test func jobCardEditDoesNotRewriteWatchFolderProfile() async throws {
+        let fixture = try await makeFixture()
         defer { fixture.cleanUp() }
         let model = fixture.model
         var folder = WatchFolder(path: "/tmp/japanese-inbox")
@@ -88,7 +88,7 @@ struct JobCardSettingsTests {
         #expect(stored.profile.autoTranslate == true)
     }
 
-    private func makeFixture() throws -> JobCardFixture {
+    private func makeFixture() async throws -> JobCardFixture {
         let suiteName = "job-card-settings-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         let baseURL = FileManager.default.temporaryDirectory
@@ -108,6 +108,7 @@ struct JobCardSettingsTests {
             jobStore: JobStore(baseURL: baseURL),
             diagnosticsService: EmptyJobCardDiagnostics()
         )
+        await model.hydration()
         return JobCardFixture(
             model: model,
             baseURL: baseURL,

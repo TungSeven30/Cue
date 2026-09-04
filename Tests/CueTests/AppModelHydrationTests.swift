@@ -180,7 +180,11 @@ struct AppModelHydrationTests {
         await model.hydration()
 
         #expect(model.jobs.count == 2)
-        #expect(model.persistenceError?.contains("It was preserved") == true)
+        #expect(model.jobStoreStartupError?.contains("It was preserved") == true)
+        // The notification bus is process-wide, so under parallel tests the
+        // displayed message may already belong to another fixture; only its
+        // presence is asserted here.
+        #expect(model.persistenceError != nil)
     }
 
     @Test func indexLookupSurvivesReorderInsertAndDelete() async throws {

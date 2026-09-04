@@ -273,6 +273,12 @@ final class AppModel: ObservableObject {
         await hydrationTask?.value
     }
 
+    /// The job store's own startup failure, if any. `persistenceError` can
+    /// be overwritten by later failure notifications; this stays put.
+    var jobStoreStartupError: String? {
+        jobRepository.startupError
+    }
+
     /// Merges the loaded history under whatever was added interactively
     /// while it loaded: early adds keep their order and stay on top (their
     /// indices are re-stamped against the loaded ones), duplicates by id are
@@ -295,8 +301,10 @@ final class AppModel: ObservableObject {
         if !early.isEmpty {
             jobRepository.save(early)
         }
-        if persistenceError == nil {
-            persistenceError = jobRepository.startupError
+        // Same precedence as the synchronous load had: a job-history startup
+        // failure outranks anything that arrived earlier.
+        if let startupError = jobRepository.startupError {
+            persistenceError = startupError
         }
         autoArchiveOldJobs()
         if selectedJobID == nil {

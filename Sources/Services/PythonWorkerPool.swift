@@ -61,7 +61,7 @@ struct PythonJobResult: Sendable {
 }
 
 /// The helper's end-of-job line in `--serve` mode.
-private struct ServeEnvelope: Decodable {
+private struct ServeEnvelope: Decodable, Sendable {
     let event: String
     let id: String?
     let backend: String?

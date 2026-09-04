@@ -104,7 +104,7 @@ enum JobStage: String, Codable, Hashable {
     }
 }
 
-struct JobProgress: Codable, Hashable {
+struct JobProgress: Codable, Hashable, Sendable {
     var stage: JobStage
     var detail: String
     var fraction: Double?

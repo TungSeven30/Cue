@@ -680,7 +680,7 @@ enum TranscriptionPostProcessor {
     }
 }
 
-enum TranscriptionStreamEvent: Equatable {
+enum TranscriptionStreamEvent: Equatable, Sendable {
     case progress(JobProgress)
     case segments([TranscriptionSegment])
     case chunkComplete(Double)

@@ -18,14 +18,14 @@ final class PipeCollector: @unchecked Sendable {
     private var pendingData = Data()
     /// Prefix of `pendingData` already known to contain no newline.
     private var scannedCount = 0
-    private let onLine: ((String) -> Void)?
+    private let onLine: (@Sendable (String) -> Void)?
     /// Whether every byte is kept for `data()`/`text()`. A long-lived worker
     /// only needs its lines delivered; retaining them would grow forever.
     private let retainsData: Bool
     private var didReachEOF = false
     private var eofContinuation: CheckedContinuation<Void, Never>?
 
-    init(retainsData: Bool = true, onLine: ((String) -> Void)? = nil) {
+    init(retainsData: Bool = true, onLine: (@Sendable (String) -> Void)? = nil) {
         self.onLine = onLine
         self.retainsData = retainsData
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in

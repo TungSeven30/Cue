@@ -2,8 +2,11 @@ import Foundation
 
 /// The persistence boundary used by `JobRepository`. Keeping AppModel behind
 /// this protocol makes persistence behavior testable without touching disk.
+// Sendable so the repository can hand the store's nonisolated snapshot loader
+// to a background task; every conformer is main-actor-isolated (inherited
+// from this protocol), which already makes it Sendable.
 @MainActor
-protocol JobPersisting: AnyObject {
+protocol JobPersisting: AnyObject, Sendable {
     var startupError: String? { get }
 
     func loadJobs() -> [TranscriptionJob]
@@ -21,10 +24,7 @@ protocol JobPersisting: AnyObject {
 /// it no longer manages timers or dirty-id bookkeeping itself.
 @MainActor
 final class JobRepository {
-    // Immutable after init and only ever used off the main actor through the
-    // protocol's own nonisolated `loadJobsSnapshot()`, which the store
-    // guarantees is safe to call from any thread.
-    nonisolated(unsafe) private let store: any JobPersisting
+    private let store: any JobPersisting
     private let debounceNanoseconds: UInt64
     private var pendingJobs: [UUID: TranscriptionJob] = [:]
     private var persistTask: Task<Void, Never>?

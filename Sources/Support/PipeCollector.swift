@@ -42,17 +42,28 @@ final class PipeCollector: @unchecked Sendable {
     }
 
     /// Suspends until the pipe has been fully drained to EOF. Resolves
-    /// immediately if EOF was already observed.
+    /// immediately if EOF was already observed, and resolves early if the
+    /// waiting task is cancelled (a lingering grandchild can hold a pipe
+    /// open indefinitely; callers that must not hang race this against a
+    /// timeout).
     func waitForEOF() async {
-        await withCheckedContinuation { continuation in
-            lock.lock()
-            if didReachEOF {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                lock.lock()
+                if didReachEOF || Task.isCancelled {
+                    lock.unlock()
+                    continuation.resume()
+                    return
+                }
+                eofContinuation = continuation
                 lock.unlock()
-                continuation.resume()
-                return
             }
-            eofContinuation = continuation
+        } onCancel: {
+            lock.lock()
+            let continuation = eofContinuation
+            eofContinuation = nil
             lock.unlock()
+            continuation?.resume()
         }
     }
 

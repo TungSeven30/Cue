@@ -365,11 +365,19 @@ actor PythonWorkerPool {
         }
     }
 
-    private func workerExited(_ exited: Worker?, status: Int32) {
+    private func workerExited(_ exited: Worker?, status: Int32) async {
         guard let exited, exited === worker else { return }
         worker = nil
         liveProcess.process = nil
         if let job = activeJob {
+            // The exit notification and the last stderr lines arrive on
+            // different queues; let the pipe drain (bounded, in case a
+            // grandchild still holds it open) so the failure message carries
+            // the helper's own words, as the one-shot path guaranteed.
+            if let collector = exited.stderrCollector {
+                await Self.waitForEOF(of: collector, timeout: .seconds(2))
+            }
+            guard activeJob === job else { return }
             let text = exited.errorText
             finish(
                 job,
@@ -377,6 +385,15 @@ actor PythonWorkerPool {
                     TranscriptionServiceError.pythonFailed(
                         text.isEmpty ? "The Python helper exited with status \(status)." : text)),
                 dropWorker: false)
+        }
+    }
+
+    private static func waitForEOF(of collector: PipeCollector, timeout: Duration) async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await collector.waitForEOF() }
+            group.addTask { try? await Task.sleep(for: timeout) }
+            await group.next()
+            group.cancelAll()
         }
     }
 

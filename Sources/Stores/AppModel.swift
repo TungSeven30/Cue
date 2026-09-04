@@ -177,9 +177,9 @@ final class AppModel: ObservableObject {
                     return notification.userInfo?["message"] as? String
                 },
             NotificationCenter.default.publisher(for: WatchFolderLedger.persistenceDidFail)
+                .compactMap { $0.object as? String }
         )
         .receive(on: DispatchQueue.main)
-        .compactMap { $0.object as? String }
         .sink { [weak self] message in self?.persistenceError = message }
         .store(in: &cancellables)
         // Diagnostics classify probes as required/optional based on the

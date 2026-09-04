@@ -232,6 +232,7 @@ private struct SelectionFixture {
     }
 
     func cleanUp() {
+        model.cancelActiveJob()
         model.flushPendingWork()
         defaults.removePersistentDomain(forName: suiteName)
         try? FileManager.default.removeItem(at: baseURL)

@@ -12,6 +12,14 @@ CLT_TESTING_LIBS="/Library/Developer/CommandLineTools/Library/Developer/usr/lib"
 
 cd "$ROOT_DIR"
 
+# GitHub-hosted macOS runners have few vCPUs. Swift Testing's default worker
+# count can saturate the cooperative thread pool and deadlock @MainActor suites.
+SWIFT_TEST_PARALLEL=()
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  SWIFT_TEST_PARALLEL=(--no-parallel)
+  echo "GitHub Actions: swift test ${SWIFT_TEST_PARALLEL[*]}"
+fi
+
 # The Python helper is shipped in two forms. Run its behavioral tests and the
 # parity check before Swift so the advertised standalone CLI cannot drift from
 # the app's embedded copy.
@@ -31,9 +39,9 @@ fi
 # With a full Xcode install, plain `swift test` works — prefer it.
 if xcrun --sdk macosx --show-sdk-platform-path >/dev/null 2>&1; then
   if [[ "${CUE_ENABLE_CODE_COVERAGE:-0}" == "1" ]]; then
-    exec swift test --enable-code-coverage "$@"
+    exec swift test --enable-code-coverage "${SWIFT_TEST_PARALLEL[@]}" "$@"
   fi
-  exec swift test "$@"
+  exec swift test "${SWIFT_TEST_PARALLEL[@]}" "$@"
 fi
 
 BUILD_OPTIONS=(--build-tests)

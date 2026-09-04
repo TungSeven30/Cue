@@ -11,7 +11,7 @@ permissions:
 jobs:
   verify:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -26,9 +26,13 @@ jobs:
           .build/ci-python/bin/pip install --disable-pip-version-check -r script/requirements-ci.txt
 
       - name: Swift and Python tests
+        env:
+          GITHUB_ACTIONS: true
         run: PATH="$PWD/.build/ci-python/bin:$PATH" script/run_tests.sh
 
       - name: Coverage policy
+        env:
+          GITHUB_ACTIONS: true
         run: script/run_coverage.sh
 
       - name: Release build with warnings as errors

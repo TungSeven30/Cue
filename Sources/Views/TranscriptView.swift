@@ -6,6 +6,7 @@ struct TranscriptView: View {
     var activeSegmentID: Int? = nil
     let onEdit: (TranscriptionSegment, String) -> Void
     var onSeek: ((TranscriptionSegment) -> Void)? = nil
+    var onEditBatch: (([TranscriptionSegment]) -> Void)? = nil
     @State private var searchText = ""
     @State private var replacementText = ""
     @State private var warningsOnly = false
@@ -74,14 +75,17 @@ struct TranscriptView: View {
     private func replaceAll(in filtered: [TranscriptionSegment]) {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
-        for segment in filtered where segment.text.localizedCaseInsensitiveContains(query) {
-            let updated = segment.text.replacingOccurrences(
+        let edited = filtered.filter { $0.text.localizedCaseInsensitiveContains(query) }.map { segment in
+            var updated = segment
+            updated.text = segment.text.replacingOccurrences(
                 of: query,
                 with: replacementText,
                 options: [.caseInsensitive, .literal]
             )
-            onEdit(segment, updated)
+            return updated
         }
+        if let onEditBatch { onEditBatch(edited) }
+        else { for segment in edited { onEdit(segment, segment.text) } }
     }
 }
 

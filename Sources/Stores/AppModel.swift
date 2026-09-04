@@ -47,6 +47,10 @@ final class AppModel: ObservableObject {
     private var ytDlpInstallTask: Task<Void, Never>?
     /// Set when a subtitle file has been parsed and needs a slot chosen.
     @Published var subtitleLoadRequest: SubtitleLoadRequest?
+    @Published private(set) var isReadingSubtitleFile = false
+    @Published private(set) var isApplyingSubtitleLoad = false
+    private let subtitleFileWriter = SubtitleFileWriter()
+    private var subtitleWriteRequests: [SubtitleFileWriter.Key: SubtitleFileWriter.Request] = [:]
     /// nil = not yet checked; cached until Recheck (spec §3.1).
     @Published var burnInPreflight: BurnInService.PreflightResult?
     /// The setup guide auto-opens once per launch (when something required is
@@ -541,7 +545,7 @@ final class AppModel: ObservableObject {
     }
 
     func selectJob(_ id: UUID?) {
-        flushSubtitleSync()
+        enqueuePendingSubtitleSync()
         selectedJobID = id
         selectedJobIDs = id.map { [$0] } ?? []
     }
@@ -2550,7 +2554,7 @@ final class AppModel: ObservableObject {
     }
 
     var canLoadSubtitles: Bool {
-        currentJob != nil && !isSelectedJobRunning
+        currentJob != nil && !isSelectedJobRunning && !isReadingSubtitleFile && !isApplyingSubtitleLoad
     }
 
     /// A translation with no transcript is a state the rest of the app cannot
@@ -2581,12 +2585,24 @@ final class AppModel: ObservableObject {
         panel.directoryURL = selectedVideoURL?.deletingLastPathComponent()
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
+        Task { [weak self] in
+            await self?.loadSubtitleFile(at: url, for: target)
+        }
+    }
+
+    func loadSubtitleFile(
+        at url: URL, for target: TranscriptionJob,
+        reader: @escaping @Sendable (URL) throws -> SubtitleImporter.Document = { try SubtitleImporter.importFile(at: $0, backingUp: false) }
+    ) async {
+        guard !isReadingSubtitleFile else { return }
+        isReadingSubtitleFile = true
+        defer { isReadingSubtitleFile = false }
         do {
             // Unlike auto-detect, this was an explicit request, so a failure
             // gets a dialog rather than a quiet log line. No backup yet: the
             // slot picker below can still be cancelled, and a cancelled load
             // must not leave a .bak beside the user's file.
-            let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+            let document = try await Task.detached(priority: .userInitiated) { try reader(url) }.value
             subtitleLoadRequest = SubtitleLoadRequest(id: UUID(), document: document, job: target)
         } catch {
             presentExportError(
@@ -2596,8 +2612,11 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func applySubtitleLoad(_ request: SubtitleLoadRequest, to slot: SubtitleSidecarScanner.Slot) {
-        guard canApplySubtitleLoad(request, to: slot), let id = request.jobID,
+    func applySubtitleLoad(
+        _ request: SubtitleLoadRequest, to slot: SubtitleSidecarScanner.Slot,
+        beforeBackup: @escaping @Sendable () -> Void = {}
+    ) async {
+        guard !isApplyingSubtitleLoad, canApplySubtitleLoad(request, to: slot), let id = request.jobID,
             let job = self.job(withID: id)
         else { return }
         let segments: [TranscriptionSegment]
@@ -2612,18 +2631,21 @@ final class AppModel: ObservableObject {
         }
         let existing = slot == .transcript ? job.transcriptSegments : job.translatedSegments
         if !existing.isEmpty, !confirmReplacingSegments(slot: slot) { return }
-        // NSAlert runs a nested event loop: the queue and source file can
-        // change while confirmation is open, so validate again at commit.
-        guard canApplySubtitleLoad(request, to: slot), request.document.source.matchesFileOnDisk() else { return }
-
+        // Both confirmation and disk I/O can let the queue or selection move.
+        // Keep the sheet busy, perform the backup off-main, then revalidate.
+        guard canApplySubtitleLoad(request, to: slot) else { return }
+        isApplyingSubtitleLoad = true
+        defer { isApplyingSubtitleLoad = false }
         let document = request.document
-        // The manual path leaves the backup until here, so a cancelled slot
-        // picker writes nothing. Adoption still backs up at import time: it
-        // has no cancel step and no later commit to hang the backup on.
-        var source = document.source
-        if !source.didBackup {
-            source.didBackup = SubtitleImporter.backUpOriginal(at: source.url)
-        }
+        let preparedSource = await Task.detached(priority: .userInitiated) { () -> ImportedSubtitleSource? in
+            beforeBackup()
+            var source = document.source
+            guard source.matchesFileOnDisk() else { return nil }
+            if !source.didBackup { source.didBackup = SubtitleImporter.backUpOriginal(at: source.url) }
+            guard source.matchesFileOnDisk() else { return nil }
+            return source
+        }.value
+        guard let source = preparedSource, canApplySubtitleLoad(request, to: slot) else { return }
         // A queued write for the slot being replaced would otherwise fire at
         // the newly loaded file moments later, rewriting it with renumbered
         // ids and normalized timestamps without the user editing anything.
@@ -2675,10 +2697,7 @@ final class AppModel: ObservableObject {
 
     // MARK: - Imported subtitle sync
 
-    private struct SubtitleSyncKey: Hashable {
-        let jobID: UUID
-        let slot: SubtitleSidecarScanner.Slot
-    }
+    private typealias SubtitleSyncKey = SubtitleFileWriter.Key
 
     /// Edits are written back on a debounce so a Replace All firing hundreds of
     /// edits produces one write, not hundreds.
@@ -2695,9 +2714,13 @@ final class AppModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.subtitleSyncDebounce, execute: item)
     }
 
-    /// Runs every pending write immediately. Called on quit and when the
-    /// selection moves off a job.
+    /// Waits for accepted writes on quit and at explicit durability barriers.
     func flushSubtitleSync() {
+        enqueuePendingSubtitleSync()
+        for result in subtitleFileWriter.flush() { applySubtitleWrite(result) }
+    }
+
+    private func enqueuePendingSubtitleSync() {
         let pending = subtitleSyncWorkItems
         subtitleSyncWorkItems.removeAll()
         for (key, item) in pending {
@@ -2710,6 +2733,7 @@ final class AppModel: ObservableObject {
     /// is gone.
     private func cancelSubtitleSync(jobID: UUID, slot: SubtitleSidecarScanner.Slot) {
         subtitleSyncWorkItems.removeValue(forKey: SubtitleSyncKey(jobID: jobID, slot: slot))?.cancel()
+        subtitleWriteRequests.removeValue(forKey: SubtitleSyncKey(jobID: jobID, slot: slot))?.cancellation.cancel()
     }
 
     func unlinkImportedSubtitles(slot: SubtitleSidecarScanner.Slot, jobID: UUID? = nil) {
@@ -2726,48 +2750,30 @@ final class AppModel: ObservableObject {
 
     private func writeBackImportedSubtitles(jobID: UUID, slot: SubtitleSidecarScanner.Slot) {
         guard let job = self.job(withID: jobID),
-            var source = job.importedSource(for: slot),
-            !source.syncPaused
+            let source = job.importedSource(for: slot), !source.syncPaused
         else { return }
-
         let segments = slot == .transcript ? job.transcriptSegments : job.translatedSegments
         guard !segments.isEmpty else { return }
-
-        // If the file changed under us, the user's other edits win. Pausing is
-        // recoverable; overwriting is not.
-        guard source.matchesFileOnDisk() else {
-            source.syncPaused = true
-            updateJob(jobID) { job in
-                job.setImportedSource(source, for: slot)
-                job.log += "\(source.fileName) changed outside Cue; sync paused.\n"
-            }
-            return
+        let key = SubtitleSyncKey(jobID: jobID, slot: slot)
+        let request = SubtitleFileWriter.Request(key: key, source: source, segments: segments)
+        subtitleWriteRequests[key]?.cancellation.cancel()
+        subtitleWriteRequests[key] = request
+        subtitleFileWriter.write(request) { [weak self] result in
+            Task { @MainActor [weak self] in self?.applySubtitleWrite(result) }
         }
+    }
 
-        do {
-            if !source.didBackup {
-                let backupURL = source.url.appendingPathExtension("bak")
-                if !FileManager.default.fileExists(atPath: backupURL.path) {
-                    try FileManager.default.copyItem(at: source.url, to: backupURL)
-                }
-                source.didBackup = true
-            }
-            // Written without the intro summary: applyingIntro is export-only,
-            // so the file mirrors exactly what the editor shows.
-            try SubtitleWriter.write(segments: segments, format: source.format, to: source.url)
-            // Re-baseline, or our own write looks like an external change next
-            // time round.
-            source.refreshFileState()
-            source.lastSyncError = nil
-            updateJob(jobID, debouncePersist: true) { job in
-                job.setImportedSource(source, for: slot)
-            }
-        } catch {
-            source.lastSyncError = error.localizedDescription
-            updateJob(jobID) { job in
-                job.setImportedSource(source, for: slot)
-                job.log += "Could not update \(source.fileName): \(error.localizedDescription)\n"
-            }
+    private func applySubtitleWrite(_ result: SubtitleFileWriter.Completion) {
+        let key = result.request.key
+        guard subtitleWriteRequests[key]?.id == result.request.id else { return }
+        subtitleWriteRequests.removeValue(forKey: key)
+        guard let source = job(withID: key.jobID)?.importedSource(for: key.slot),
+            source.path == result.request.source.path,
+            source.importedAt == result.request.source.importedAt
+        else { return }
+        updateJob(key.jobID, debouncePersist: true) { job in
+            job.setImportedSource(result.source, for: key.slot)
+            if let line = result.logLine { job.log += line + "\n" }
         }
     }
 
@@ -2831,6 +2837,28 @@ final class AppModel: ObservableObject {
 
     func updateTranscriptSegment(_ segment: TranscriptionSegment, text: String) {
         updateSegment(segment, text: text, keyPath: \.transcriptSegments)
+    }
+
+    func updateSubtitleSegments(_ edited: [TranscriptionSegment], slot: SubtitleSidecarScanner.Slot) {
+        guard let id = selectedJobID, let index = index(of: id), !edited.isEmpty else { return }
+        let texts = Dictionary(edited.map { ($0.id, $0.text) }, uniquingKeysWith: { _, latest in latest })
+        var job = jobs[index]
+        let path: WritableKeyPath<TranscriptionJob, [TranscriptionSegment]> =
+            slot == .transcript ? \.transcriptSegments : \.translatedSegments
+        var changed = false
+        for cueIndex in job[keyPath: path].indices {
+            guard let text = texts[job[keyPath: path][cueIndex].id],
+                text != job[keyPath: path][cueIndex].text else { continue }
+            job[keyPath: path][cueIndex].text = text
+            changed = true
+        }
+        guard changed else { return }
+        job.updatedAt = Date()
+        jobs[index] = job
+        jobRepository.save(job, debounced: true)
+        if let source = job.importedSource(for: slot), !source.syncPaused {
+            scheduleSubtitleSync(jobID: id, slot: slot)
+        }
     }
 
     func updateTranslatedSegment(_ segment: TranscriptionSegment, text: String) {

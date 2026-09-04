@@ -328,7 +328,8 @@ struct DetailView: View {
                     warnings: model.qualityWarnings(for: segments, slot: slot),
                     activeSegmentID: model.isPlayerVisible ? playerController.activeSegmentID : nil,
                     onEdit: onEdit,
-                    onSeek: model.isPlayerVisible ? { playerController.seek(to: $0.start) } : nil
+                    onSeek: model.isPlayerVisible ? { playerController.seek(to: $0.start) } : nil,
+                    onEditBatch: { model.updateSubtitleSegments($0, slot: slot) }
                 )
                 .padding(20)
             }

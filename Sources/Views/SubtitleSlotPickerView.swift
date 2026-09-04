@@ -15,7 +15,7 @@ struct SubtitleSlotPickerView: View {
 
             VStack(spacing: 10) {
                 Button {
-                    model.applySubtitleLoad(request, to: .transcript)
+                    Task { await model.applySubtitleLoad(request, to: .transcript) }
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "text.alignleft")
@@ -46,18 +46,18 @@ struct SubtitleSlotPickerView: View {
                 .disabled(!model.canApplySubtitleLoad(request, to: .transcript))
 
                 Button {
-                    model.applySubtitleLoad(request, to: .translation)
+                    Task { await model.applySubtitleLoad(request, to: .translation) }
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "character.bubble")
                             .font(.title3)
-                            .foregroundStyle(model.canLoadTranslationSubtitles ? Color.accentColor : Color.secondary)
+                            .foregroundStyle(!model.transcriptSegments.isEmpty ? Color.accentColor : Color.secondary)
                             .frame(width: 24)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Load as Translation")
                                 .font(.headline)
                             Text(
-                                model.canLoadTranslationSubtitles
+                                !model.transcriptSegments.isEmpty
                                     ? "Fills the translation tab for bilingual subtitles, export, and burn-in."
                                     : "Requires an existing transcript first."
                             )
@@ -65,7 +65,7 @@ struct SubtitleSlotPickerView: View {
                             .foregroundStyle(.secondary)
                         }
                         Spacer()
-                        if model.canLoadTranslationSubtitles {
+                        if !model.transcriptSegments.isEmpty {
                             Image(systemName: "chevron.right")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
@@ -74,12 +74,12 @@ struct SubtitleSlotPickerView: View {
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
-                        model.canLoadTranslationSubtitles ? AnyShapeStyle(.background.secondary) : AnyShapeStyle(.background.secondary.opacity(0.4)),
+                        !model.transcriptSegments.isEmpty ? AnyShapeStyle(.background.secondary) : AnyShapeStyle(.background.secondary.opacity(0.4)),
                         in: RoundedRectangle(cornerRadius: 10)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 10)
-                            .strokeBorder(.separator.opacity(model.canLoadTranslationSubtitles ? 1 : 0.5), lineWidth: 1)
+                            .strokeBorder(.separator.opacity(!model.transcriptSegments.isEmpty ? 1 : 0.5), lineWidth: 1)
                     )
                 }
                 .buttonStyle(.plain)
@@ -92,6 +92,8 @@ struct SubtitleSlotPickerView: View {
                     .keyboardShortcut(.cancelAction)
             }
         }
+        .disabled(model.isApplyingSubtitleLoad)
+        .interactiveDismissDisabled(model.isApplyingSubtitleLoad)
         .padding(20)
         .frame(width: 420)
     }

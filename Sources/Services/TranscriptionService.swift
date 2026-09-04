@@ -300,8 +300,10 @@ struct TranscriptionService {
         } else {
             progress(JobProgress(stage: .extractingAudio, detail: "Extracting audio.", fraction: 0.08))
             // The extractor throttles to 5% steps; mapped into the same
-            // 0.08–0.12 band the Python helper uses for extraction.
-            try await AudioExtractor.extract(from: videoURL, to: cachedWav) { fraction in
+            // 0.08–0.12 band the Python helper uses for extraction. A
+            // container AVFoundation cannot demux (MKV) falls back to ffmpeg
+            // when it is installed, instead of failing the job.
+            let route = try await AudioSourceExtractor.extract(from: videoURL, to: cachedWav) { fraction in
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
                         progress(
@@ -312,6 +314,14 @@ struct TranscriptionService {
                             ))
                     }
                 }
+            }
+            if route == .ffmpeg {
+                progress(
+                    JobProgress(
+                        stage: .extractingAudio,
+                        detail: "Extracted audio with ffmpeg (macOS could not read this container).",
+                        fraction: 0.12
+                    ))
             }
             AudioCache.prune(directory: AudioCache.directory, keeping: cachedWav)
         }

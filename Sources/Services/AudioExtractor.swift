@@ -102,18 +102,26 @@ enum AudioExtractor {
                 }
             }
             guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
-            var length = 0
-            var pointer: UnsafeMutablePointer<CChar>?
-            CMBlockBufferGetDataPointer(
-                blockBuffer, atOffset: 0, lengthAtOffsetOut: nil,
-                totalLengthOut: &length, dataPointerOut: &pointer)
-            if let pointer, length > 0 {
-                guard UInt64(pcmBytes) + UInt64(length) <= UInt64(UInt32.max) - 36 else {
-                    throw AudioExtractorError.readerFailed("audio exceeds the 4 GiB WAV limit")
-                }
-                try handle.write(contentsOf: Data(bytes: pointer, count: length))
-                pcmBytes += UInt32(length)
+            let length = CMBlockBufferGetDataLength(blockBuffer)
+            guard length > 0 else { continue }
+            guard UInt64(pcmBytes) + UInt64(length) <= UInt64(UInt32.max) - 36 else {
+                throw AudioExtractorError.readerFailed("audio exceeds the 4 GiB WAV limit")
             }
+            // CMBlockBufferCopyDataBytes gathers non-contiguous block buffers;
+            // reading a single data pointer for the total length would write
+            // garbage past the first contiguous range. For contiguous buffers
+            // (the default when the reader copies sample data) the bytes are
+            // identical.
+            var bytes = Data(count: length)
+            let status = bytes.withUnsafeMutableBytes { raw -> OSStatus in
+                guard let base = raw.baseAddress else { return kCMBlockBufferBadPointerParameterErr }
+                return CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: base)
+            }
+            guard status == kCMBlockBufferNoErr else {
+                throw AudioExtractorError.readerFailed("could not copy decoded samples (\(status))")
+            }
+            try handle.write(contentsOf: bytes)
+            pcmBytes += UInt32(length)
         }
         if reader.status == .failed {
             throw AudioExtractorError.readerFailed(reader.error?.localizedDescription ?? "unknown decode error")

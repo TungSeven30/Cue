@@ -3,6 +3,35 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
+## Unreleased
+
+- **MKV files work on the built-in engine.** macOS cannot read Matroska, so
+  the default engine used to fail those jobs with "The file has no audio
+  track"; with ffmpeg installed it now extracts the audio through ffmpeg
+  automatically, and without it the error says what to install.
+- **Model weights stay loaded between jobs.** The built-in whisper.cpp
+  engine keeps the model resident (freed after ten idle minutes or under
+  memory pressure), and the Python backends run in a resident helper process
+  that keeps its model loaded, so a batch of clips pays the load once. A
+  repeat mlx-whisper job on a short clip went from 1.25 s to 0.22 s.
+- **Long files transcribe reproducibly.** Every audio chunk now runs on a
+  fresh whisper.cpp inference state; the previous shared state drifted cue
+  timestamps by tens of milliseconds from chunk two onward.
+- **Launch is faster with a large history.** Job files decode in parallel
+  after the window is shown (0.95 s → 0.19 s for 574 jobs in the test
+  build), in a fixed, deterministic order.
+- **Watch folders react to nested drops in seconds** instead of waiting for
+  the 60-second rescan: the folder is watched recursively with FSEvents and
+  a follow-up scan runs as soon as a new file has held still.
+- Smoother UI while a job streams: quality warnings are cached instead of
+  recomputed on every progress tick, transcript rows skip unchanged
+  re-renders, the video overlay only syncs while the player is visible, and
+  the run log shows its tail without re-splitting the whole log.
+- Fixed a deadlock in the environment diagnostics probes that could wedge
+  the diagnostics pill (and hung the test suite): probes no longer block
+  cooperative threads while draining their pipes.
+- Faster chunk planning and audio loading (vDSP), bit-identical results.
+
 ## 2.5.0 — 2026-09-02
 
 - Added **shimmering skeleton loading states** for transcription and translation,

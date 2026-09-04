@@ -10,6 +10,15 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-03-engine-determinism-and-hot-paths-design.md`
 
+**Status (2026-09-03):** all twelve tasks landed on `perf/engine-determinism-and-hot-paths`.
+Deviations from the text below, made during implementation and recorded in
+the spec: the helper's `--serve` result line travels on stderr (one ordered
+pipe), the worker pool keys on script path rather than a hash, the Python
+worker benchmark lives in `BenchmarkTests` rather than a separate script,
+and the diagnostics probe was rewritten to await its pipes instead of
+blocking a cooperative thread (a pre-existing deadlock found by the
+baseline run). Before/after numbers: `2026-09-03-benchmarks.md`.
+
 ## Global Constraints
 
 - Swift language mode 6, macOS 14 deployment target; build must pass `swift build -c release -Xswiftc -warnings-as-errors`.

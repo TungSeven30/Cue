@@ -86,18 +86,21 @@ An actor owning resident model weights.
 - The embedded script gains a `--serve` mode: it reads one JSON job request
   per line from stdin and, per job, runs exactly the existing per-job code
   path (`prepare_audio` → backend loader → same stderr events) and finally
-  writes one line to stdout: `{"event":"result","backend":…,"segments":[…]}`
-  or `{"event":"error","message":…}`. Between jobs it keeps loaded model
+  writes one more **stderr** line: `{"event":"result","id":…,"backend":…,
+  "segments":[…]}` or `{"event":"error","id":…,"message":…}`. (Changed from
+  stdout during implementation: with two pipes the result could be observed
+  before the job's last `segments` event; one ordered stream makes the
+  ordering a property of the protocol rather than of scheduling.) Between jobs it keeps loaded model
   objects in a module-level cache keyed by `(backend, model)`; the backends
   are stateless across `transcribe` calls (faster-whisper's `WhisperModel`,
   mlx-whisper's `ModelHolder`, Qwen's `Session`/`ForcedAligner`, which the
   script already reuses across chunks inside one job). Nothing else is
   shared between jobs: temp dir, arguments, and counters are per job.
 - `PythonWorkerPool` (actor) keys workers by `(backend, model, script
-  hash)`; one worker is resident; requesting another key terminates the old
+  path)`; one worker is resident; requesting another key terminates the old
   worker first. `run(request)` writes the request, streams stderr events
-  through the existing `TranscriptionStreamEvent` decoder, and resolves on
-  the stdout result line. A worker that exits mid-job fails that job with
+  through the existing `TranscriptionStreamEvent` decoder in emission
+  order, and resolves on the stderr result line for the job's id. A worker that exits mid-job fails that job with
   the non-progress stderr text (same message shape as today) and is dropped.
 - Cancellation preserves today's semantics: SIGTERM, then SIGKILL after
   three seconds; the pool drops the worker and respawns lazily. Idle
@@ -160,7 +163,8 @@ An actor owning resident model weights.
   service schedules one follow-up scan at `stabilityInterval + 0.5 s`, so
   a new file is ingested a few seconds after it stops growing instead of on
   the next 60 s tick. The 60 s timer and the wake observer stay as the
-  reconciliation fallback.
+  reconciliation fallback. (Measured: a file created two folders deep after
+  `start` was reported in 2.7 s.)
 
 ### 7. Persistence batching
 

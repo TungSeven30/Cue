@@ -61,6 +61,7 @@ Transcription runs locally. Translation and summaries use only the cloud provide
 
 **Reliability**
 - Serial job queue for batch processing (one model on the GPU at a time) with per-job persistence — a crash or force-quit never loses finished work, and interrupted jobs resume
+- Model weights stay loaded between jobs (built-in engine and Python helpers alike), so a batch of short clips pays the model load once, and each job still runs on fresh inference state so results are reproducible
 - Built-in diagnostics report "Ready — nothing to install" for the default engine and verify the optional extras (Python backends, ffmpeg) only if you opt into them, with a setup sheet of copyable install commands
 - API keys are stored in the macOS Keychain, never in files or exports
 
@@ -114,7 +115,7 @@ python3 -m pip install --user --break-system-packages 'mlx-qwen3-asr[aligner]'  
 
 The flags matter on Homebrew's Python 3.12+, which rejects a plain `pip install` (PEP 668): `--user` keeps the packages in your home folder instead of Homebrew's, and `--break-system-packages` acknowledges the guard. On an older Python that doesn't recognize the flags, drop them.
 
-ffmpeg (`brew install ffmpeg`) is only needed for the **Clean audio** preprocessing option and for rare containers the system decoders can't read.
+ffmpeg (`brew install ffmpeg`) is only needed for the **Clean audio** preprocessing option and for containers the system decoders can't read — MKV in particular. With ffmpeg installed the built-in engine falls back to it automatically for those files; without it, the job explains what to install instead of failing with "no audio track".
 
 yt-dlp (`brew install yt-dlp`) is only needed for **Add from URL** and the CLI's `fetch` stage.
 
@@ -221,9 +222,9 @@ Other script modes:
 ## Architecture
 
 - **UI**: SwiftUI with AppKit panels, single-window, `@MainActor` state in `AppModel`
-- **Transcription**: the default backend calls whisper.cpp (pinned SwiftPM dependency, Metal) in-process; the optional Python backends use a self-contained helper script invoked as a subprocess. Qwen reads the cached PCM WAV once, vectorizes silence planning, passes NumPy chunks without temporary files, and streams segments plus structured performance metrics over stderr
+- **Transcription**: the default backend calls whisper.cpp (pinned SwiftPM dependency, Metal) in-process, keeping the model weights resident between jobs and running every chunk on a fresh inference state so long files transcribe deterministically; the optional Python backends run in a resident helper process (`--serve` mode of the same self-contained script) that keeps the model loaded between jobs. Qwen reads the cached PCM WAV once, vectorizes silence planning, passes NumPy chunks without temporary files, and streams segments plus structured performance metrics over stderr
 - **Translation/summaries**: direct HTTPS to the explicitly selected provider APIs—or the configured local server—with JSON-schema-constrained outputs and token-aware adaptive batching; no SDK dependencies
-- **Persistence**: one JSON file per job under `~/Library/Application Support/Cue/jobs/`, written atomically off the main thread and flushed on quit; corrupt files are quarantined, never overwritten
+- **Persistence**: one JSON file per job under `~/Library/Application Support/Cue/jobs/`, written atomically off the main thread and flushed on quit; the history is decoded concurrently and merged in after the window appears; corrupt files are quarantined, never overwritten
 - **Command line**: `Sources/CLI` — an argument-driven mode inside the shipped binary (dispatched from `CueApp.init` before any window exists), driving the same services the GUI does, with a JSON manifest as the handoff between stages
 - **Layout**: `Sources/` — `App`, `Views`, `Stores`, `Services`, `Models`, `Support`, `CLI`; `Tests/` — swift-testing suite; `script/` — build, test, and release tooling
 - **Audit/runbooks**: [architecture review](docs/architecture-review-2026-08-08.md), [security model](docs/security-model.md), [dependency policy](docs/dependency-policy.md), [release/rollback](docs/release-runbook.md), and [data recovery](docs/data-recovery.md)

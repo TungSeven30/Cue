@@ -43,6 +43,7 @@ struct SubtitleSlotPickerView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .disabled(!model.canApplySubtitleLoad(request, to: .transcript))
 
                 Button {
                     model.applySubtitleLoad(request, to: .translation)
@@ -82,7 +83,7 @@ struct SubtitleSlotPickerView: View {
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(!model.canLoadTranslationSubtitles)
+                .disabled(!model.canApplySubtitleLoad(request, to: .translation))
             }
 
             HStack {

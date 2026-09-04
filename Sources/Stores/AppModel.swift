@@ -2530,6 +2530,17 @@ final class AppModel: ObservableObject {
     struct SubtitleLoadRequest: Identifiable {
         let id: UUID
         let document: SubtitleImporter.Document
+        let jobID: UUID?
+        let sourcePath: String?
+        let updatedAt: Date?
+
+        init(id: UUID, document: SubtitleImporter.Document, job: TranscriptionJob? = nil) {
+            self.id = id
+            self.document = document
+            jobID = job?.id
+            sourcePath = job?.sourcePath
+            updatedAt = job?.updatedAt
+        }
     }
 
     var canLoadSubtitles: Bool {
@@ -2542,8 +2553,16 @@ final class AppModel: ObservableObject {
         canLoadSubtitles && !transcriptSegments.isEmpty
     }
 
+    func canApplySubtitleLoad(_ request: SubtitleLoadRequest, to slot: SubtitleSidecarScanner.Slot) -> Bool {
+        guard let id = request.jobID, id == selectedJobID,
+            let job = self.job(withID: id), job.sourcePath == request.sourcePath,
+            job.updatedAt == request.updatedAt, !job.status.isRunning, !isJobActive(id)
+        else { return false }
+        return slot == .transcript || !job.transcriptSegments.isEmpty
+    }
+
     func presentSubtitleLoadPanel() {
-        guard canLoadSubtitles else { return }
+        guard canLoadSubtitles, let target = currentJob else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = SubtitleSidecarScanner.supportedExtensions.compactMap {
             UTType(filenameExtension: $0, conformingTo: .plainText)
@@ -2562,7 +2581,7 @@ final class AppModel: ObservableObject {
             // slot picker below can still be cancelled, and a cancelled load
             // must not leave a .bak beside the user's file.
             let document = try SubtitleImporter.importFile(at: url, backingUp: false)
-            subtitleLoadRequest = SubtitleLoadRequest(id: UUID(), document: document)
+            subtitleLoadRequest = SubtitleLoadRequest(id: UUID(), document: document, job: target)
         } catch {
             presentExportError(
                 "Could not read \(url.lastPathComponent): \(error.localizedDescription)",
@@ -2572,7 +2591,9 @@ final class AppModel: ObservableObject {
     }
 
     func applySubtitleLoad(_ request: SubtitleLoadRequest, to slot: SubtitleSidecarScanner.Slot) {
-        guard let id = selectedJobID, let job = self.job(withID: id) else { return }
+        guard canApplySubtitleLoad(request, to: slot), let id = request.jobID,
+            let job = self.job(withID: id)
+        else { return }
         let segments: [TranscriptionSegment]
         if slot == .translation {
             segments = TranslationReconciliation.alignedTranslations(request.document.segments, to: job.transcriptSegments)
@@ -2585,6 +2606,9 @@ final class AppModel: ObservableObject {
         }
         let existing = slot == .transcript ? job.transcriptSegments : job.translatedSegments
         if !existing.isEmpty, !confirmReplacingSegments(slot: slot) { return }
+        // NSAlert runs a nested event loop: the queue and source file can
+        // change while confirmation is open, so validate again at commit.
+        guard canApplySubtitleLoad(request, to: slot), request.document.source.matchesFileOnDisk() else { return }
 
         let document = request.document
         // The manual path leaves the backup until here, so a cancelled slot

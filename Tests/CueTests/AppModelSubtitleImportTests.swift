@@ -348,7 +348,7 @@ struct AppModelSubtitleImportTests {
         #expect(model.isScanningForSubtitles(job.id))
 
         let document = try SubtitleImporter.importFile(at: elsewhere)
-        model.applySubtitleLoad(.init(id: UUID(), document: document), to: .transcript)
+        model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
 
         try await waitForAdoption(model, jobID: job.id)
 
@@ -374,7 +374,7 @@ struct AppModelSubtitleImportTests {
         #expect(model.isScanningForSubtitles(job.id))
 
         let document = try SubtitleImporter.importFile(at: elsewhere)
-        model.applySubtitleLoad(.init(id: UUID(), document: document), to: .transcript)
+        model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
         #expect(model.jobs.first?.status == .queued, "Fixture must reproduce the queued-after-load state")
 
         try await waitForAdoption(model, jobID: job.id)
@@ -641,13 +641,54 @@ struct AppModelSubtitleImportTests {
         try await waitForAdoption(model, jobID: jobID)
 
         let document = try SubtitleImporter.importFile(at: elsewhere)
-        model.applySubtitleLoad(.init(id: UUID(), document: document), to: .transcript)
+        model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
 
         let job = try #require(model.jobs.first)
         #expect(job.transcriptSegments.count == 2)
         #expect(job.status == .transcriptionComplete)
         #expect(job.importedTranscriptSource?.fileName == "elsewhere.srt")
         #expect(job.log.contains("Loaded subtitles from elsewhere.srt (2 cues)."))
+    }
+
+    @Test func subtitlePickerCannotApplyToAnotherSelectedJob() async throws {
+        let fixture = try await makeFixture(sidecars: [])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        let second = fixture.baseURL.appendingPathComponent("second.mp4")
+        try Data("media".utf8).write(to: second)
+        model.addVideos(urls: [fixture.mediaURL, second])
+        for job in model.jobs { try await waitForAdoption(model, jobID: job.id) }
+        let first = try #require(model.currentJob)
+        let url = fixture.baseURL.appendingPathComponent("manual.srt")
+        try Data(Self.srt.utf8).write(to: url)
+        let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+        let request = AppModel.SubtitleLoadRequest(id: UUID(), document: document, job: first)
+        model.selectJob(try #require(model.jobs.first(where: { $0.id != first.id })?.id))
+        model.applySubtitleLoad(request, to: .transcript)
+        print("AUDIT08 wrong_job_cues=\(model.currentJob?.transcriptSegments.count ?? -1)")
+        #expect(model.jobs.allSatisfy { $0.transcriptSegments.isEmpty })
+    }
+
+    @Test func subtitlePickerCannotOverwriteAJobThatStartedOrChanged() async throws {
+        let fixture = try await makeFixture(sidecars: [])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        model.addVideos(urls: [fixture.mediaURL])
+        let id = try #require(model.currentJob?.id)
+        try await waitForAdoption(model, jobID: id)
+        let url = fixture.baseURL.appendingPathComponent("manual.srt")
+        try Data(Self.srt.utf8).write(to: url)
+        let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+        let request = AppModel.SubtitleLoadRequest(id: UUID(), document: document, job: model.currentJob)
+        model.jobs[0].status = .transcribing
+        model.applySubtitleLoad(request, to: .transcript)
+        print("AUDIT08 running_job_cues=\(model.jobs[0].transcriptSegments.count)")
+        #expect(model.jobs[0].transcriptSegments.isEmpty)
+        model.jobs[0].status = .idle
+        model.jobs[0].transcriptSegments = []
+        model.jobs[0].updatedAt = Date().addingTimeInterval(1)
+        model.applySubtitleLoad(request, to: .transcript)
+        #expect(model.jobs[0].transcriptSegments.isEmpty)
     }
 
     @Test func manualTranscriptLoadInvalidatesEarlierDerivedContent() async throws {
@@ -666,7 +707,7 @@ struct AppModelSubtitleImportTests {
         model.jobs[0].summary = "Earlier summary"
         model.jobs[0].importedTranslationSource = document.source
         model.jobs[0].status = .translationComplete
-        model.applySubtitleLoad(.init(id: UUID(), document: document), to: .transcript)
+        model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
         let job = try #require(model.job(withID: id))
         let stale = [!job.translatedSegments.isEmpty, !job.partialTranslatedSegments.isEmpty,
                      !job.partialTranscriptSegments.isEmpty, job.summary != nil, job.importedTranslationSource != nil]
@@ -760,7 +801,7 @@ struct AppModelSubtitleImportTests {
         #expect(document.source.didBackup == false)
         #expect(FileManager.default.fileExists(atPath: backupURL.path) == false, "A cancelled load must leave no .bak")
 
-        model.applySubtitleLoad(.init(id: UUID(), document: document), to: .transcript)
+        model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
 
         #expect(try String(contentsOf: backupURL, encoding: .utf8) == Self.srt)
         #expect(model.jobs.first?.importedTranscriptSource?.didBackup == true)
@@ -791,7 +832,7 @@ struct AppModelSubtitleImportTests {
         // replace-confirmation alert, which no test can answer.
         model.jobs[0].transcriptSegments = []
         let document = try SubtitleImporter.importFile(at: elsewhere, backingUp: false)
-        model.applySubtitleLoad(.init(id: UUID(), document: document), to: .transcript)
+        model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
 
         model.flushSubtitleSync()
         #expect(try String(contentsOf: elsewhere, encoding: .utf8) == odd, "The freshly loaded file was rewritten with no edit")
@@ -886,7 +927,7 @@ struct AppModelSubtitleImportTests {
         #expect(model.isScanningForSubtitles(job.id))
 
         let document = try SubtitleImporter.importFile(at: elsewhere)
-        model.applySubtitleLoad(.init(id: UUID(), document: document), to: .transcript)
+        model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
 
         #expect(model.jobs.first?.status == .transcriptionComplete)
         #expect(model.jobs.first?.transcriptSegments.count == 2)

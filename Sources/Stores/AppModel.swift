@@ -153,7 +153,8 @@ final class AppModel: ObservableObject {
         // Tests inject a repository over a recording store; the app builds
         // one over the on-disk JobStore.
         self.jobRepository = jobRepository ?? JobRepository(store: jobStore ?? JobStore())
-        self.jobStoreNotificationToken = self.jobRepository.jobStoreNotificationToken
+        let observedJobStoreToken = self.jobRepository.jobStoreNotificationToken
+        self.jobStoreNotificationToken = observedJobStoreToken
         self.diagnosticsService = diagnosticsService
         self.translationService = translationService
         isPlayerVisible = UserDefaults.standard.object(forKey: "isPlayerVisible") as? Bool ?? true
@@ -170,8 +171,8 @@ final class AppModel: ObservableObject {
             .store(in: &cancellables)
         Publishers.Merge(
             NotificationCenter.default.publisher(for: JobStore.persistenceDidFail)
-                .compactMap { [jobStoreNotificationToken] notification -> String? in
-                    guard let token = jobStoreNotificationToken,
+                .compactMap { [observedJobStoreToken] notification -> String? in
+                    guard let token = observedJobStoreToken,
                           notification.object as? UUID == token
                     else { return nil }
                     return notification.userInfo?["message"] as? String

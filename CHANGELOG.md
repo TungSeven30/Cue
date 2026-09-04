@@ -3,7 +3,7 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
-## Unreleased
+## 2.6.0 — 2026-09-03
 
 - **MKV files work on the built-in engine.** macOS cannot read Matroska, so
   the default engine used to fail those jobs with "The file has no audio
@@ -13,12 +13,12 @@ here for the version being released and uses it as the GitHub release notes.
   engine keeps the model resident (freed after ten idle minutes or under
   memory pressure), and the Python backends run in a resident helper process
   that keeps its model loaded, so a batch of clips pays the load once. A
-  repeat mlx-whisper job on a short clip went from 1.25 s to 0.22 s.
+  repeat mlx-whisper job on a short clip went from 1.3 s to 0.2 s.
 - **Long files transcribe reproducibly.** Every audio chunk now runs on a
   fresh whisper.cpp inference state; the previous shared state drifted cue
   timestamps by tens of milliseconds from chunk two onward.
 - **Launch is faster with a large history.** Job files decode in parallel
-  after the window is shown (0.95 s → 0.19 s for 574 jobs in the test
+  after the window is shown (0.95 s → 0.16 s for 574 jobs in the test
   build), in a fixed, deterministic order.
 - **Watch folders react to nested drops in seconds** instead of waiting for
   the 60-second rescan: the folder is watched recursively with FSEvents and

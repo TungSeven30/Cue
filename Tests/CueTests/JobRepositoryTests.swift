@@ -19,6 +19,24 @@ struct JobRepositoryTests {
         func flush() { flushCount += 1 }
     }
 
+    /// Immutable snapshot payload so the store's nonisolated loader can run
+    /// off the main actor without touching mutable test state.
+    private final class SnapshotStore: JobPersisting {
+        var startupError: String?
+        private let snapshot: JobLoadSnapshot
+
+        init(snapshot: JobLoadSnapshot) {
+            self.snapshot = snapshot
+        }
+
+        func loadJobs() -> [TranscriptionJob] { snapshot.jobs }
+        nonisolated func loadJobsSnapshot() -> JobLoadSnapshot { snapshot }
+        func recordStartupFailures(_ failures: [String]) { startupError = failures.last }
+        func saveJob(_: TranscriptionJob) {}
+        func deleteJob(_: UUID) {}
+        func flush() {}
+    }
+
     private func makeJob() throws -> TranscriptionJob {
         let data = Data(
             """
@@ -77,6 +95,19 @@ struct JobRepositoryTests {
 
         #expect(Set(store.saved.map(\.id)) == Set(jobs.map(\.id)))
         #expect(store.saved.count == jobs.count)
+    }
+
+    @Test func loadJobsSnapshotRunsOffMainActor() async throws {
+        let job = try makeJob()
+        let expected = JobLoadSnapshot(jobs: [job], failures: ["startup warning"])
+        let repository = JobRepository(store: SnapshotStore(snapshot: expected))
+
+        let loaded = await Task.detached(priority: .userInitiated) {
+            repository.loadJobsSnapshot()
+        }.value
+
+        #expect(loaded.jobs.map(\.id) == [job.id])
+        #expect(loaded.failures == ["startup warning"])
     }
 
     @Test func deleteDropsAQueuedSnapshot() throws {

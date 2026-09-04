@@ -28,6 +28,9 @@ final class JobRepository {
     private let debounceNanoseconds: UInt64
     private var pendingJobs: [UUID: TranscriptionJob] = [:]
     private var persistTask: Task<Void, Never>?
+    /// How many times pending snapshots were handed to the store as one
+    /// group; lets tests prove a batch operation flushed once.
+    private(set) var flushCount = 0
 
     var startupError: String? { store.startupError }
 
@@ -94,6 +97,8 @@ final class JobRepository {
     private func flushPendingSnapshots() {
         persistTask?.cancel()
         persistTask = nil
+        guard !pendingJobs.isEmpty else { return }
+        flushCount += 1
         let snapshots = pendingJobs.values.sorted { $0.id.uuidString < $1.id.uuidString }
         pendingJobs.removeAll()
         for job in snapshots {

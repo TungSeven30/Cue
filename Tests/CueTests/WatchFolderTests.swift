@@ -115,6 +115,7 @@ struct WatchFolderLedgerTests {
         ledger.record("/w/a.mp4|1|2.0", outcome: .success)
         ledger.record("/w/b.mp4|3|4.0", outcome: .failure)
         #expect(ledger.contains("/w/a.mp4|1|2.0"))
+        ledger.flush()
 
         let reloaded = WatchFolderLedger(baseURL: base)
         #expect(reloaded.contains("/w/a.mp4|1|2.0"))
@@ -198,7 +199,23 @@ struct WatchFolderLedgerTests {
         ledger.record("/w/a.mp4|1|2.0", outcome: .success)
         ledger.clear()
         #expect(!ledger.contains("/w/a.mp4|1|2.0"))
+        ledger.flush()
         #expect(!WatchFolderLedger(baseURL: base).contains("/w/a.mp4|1|2.0"))
+    }
+
+    /// A burst of records coalesces into a write of the newest snapshot, and
+    /// flush() is what makes a reload see it.
+    @Test func burstOfRecordsPersistsTheNewestSnapshotAfterFlush() throws {
+        let base = try makeBase()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let ledger = WatchFolderLedger(baseURL: base)
+        for index in 0..<500 {
+            ledger.record("/w/clip-\(index).mp4|1|2.0", outcome: index % 2 == 0 ? .success : .failure)
+        }
+        ledger.flush()
+        let reloaded = WatchFolderLedger(baseURL: base)
+        #expect(reloaded.fingerprints.count == 500)
+        #expect(reloaded.contains("/w/clip-499.mp4|1|2.0"))
     }
 
     @Test func corruptLedgerIsPreservedAndReported() throws {

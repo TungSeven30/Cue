@@ -144,12 +144,14 @@ final class AppModel: ObservableObject {
     init(
         settings: AppSettingsStore? = nil,
         jobStore: JobStore? = nil,
+        jobRepository: JobRepository? = nil,
         diagnosticsService: any EnvironmentDiagnosing = EnvironmentDiagnosticsService(),
         translationService: TranslationService = TranslationService()
     ) {
         self.settings = settings ?? AppSettingsStore()
-        let resolvedJobStore = jobStore ?? JobStore()
-        jobRepository = JobRepository(store: resolvedJobStore)
+        // Tests inject a repository over a recording store; the app builds
+        // one over the on-disk JobStore.
+        self.jobRepository = jobRepository ?? JobRepository(store: jobStore ?? JobStore())
         self.diagnosticsService = diagnosticsService
         self.translationService = translationService
         isPlayerVisible = UserDefaults.standard.object(forKey: "isPlayerVisible") as? Bool ?? true
@@ -206,7 +208,7 @@ final class AppModel: ObservableObject {
         Self.current = self
         // Decoding a large history takes long enough to notice; do it off
         // the main actor and merge once it lands (see finishHydration).
-        let repository = jobRepository
+        let repository = self.jobRepository
         hydrationTask = Task { [weak self] in
             let snapshot = await Task.detached(priority: .userInitiated) {
                 repository.loadJobsSnapshot()
@@ -236,6 +238,7 @@ final class AppModel: ObservableObject {
     func flushPendingWork() {
         flushSubtitleSync()
         jobRepository.flush()
+        watchLedger.flush()
     }
 
     /// Stops every child process this instance owns, then flushes. Without
@@ -1345,20 +1348,26 @@ final class AppModel: ObservableObject {
         let profile =
             settings.watchFolders.first(where: { $0.id == folderID })?.profile
             ?? JobSettingsOverrides()
-        var addedIDs: [UUID] = []
+        // One base index for the batch and one repository save: a scan that
+        // finds a whole season must not flush the store once per episode or
+        // rescan every existing index per file.
+        var nextIndex = QueueOrdering.indexForWatchAdd(existing: jobs.map(\.orderIndex))
+        var newJobs: [TranscriptionJob] = []
+        newJobs.reserveCapacity(urls.count)
         for url in urls {
             var job = TranscriptionJob(sourceURL: url, settings: settings)
             job.origin = .watchFolder
             job.overrides = profile
-            job.orderIndex = QueueOrdering.indexForWatchAdd(existing: jobs.map(\.orderIndex))
+            job.orderIndex = nextIndex
+            nextIndex += 1
             job.status = .queued
             job.progress = JobProgress(stage: .queued, detail: "Waiting in queue.", fraction: nil)
             job.log = "Picked up from the watch folder: \(url.path(percentEncoded: false)).\n"
-            jobs.append(job)
-            addedIDs.append(job.id)
-            persistJob(job.id)
+            newJobs.append(job)
         }
-        adoptSidecars(for: addedIDs)
+        jobs.append(contentsOf: newJobs)
+        jobRepository.save(newJobs)
+        adoptSidecars(for: newJobs.map(\.id))
         processQueue()
     }
 

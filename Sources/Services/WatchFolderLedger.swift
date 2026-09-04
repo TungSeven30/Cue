@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Remembers which watch-folder files have already reached a terminal
 /// outcome, so scans never re-ingest them (spec §2.4). Keyed by the same
@@ -15,6 +16,11 @@ final class WatchFolderLedger {
     private var entries: [String: Outcome]
     private let fileURL: URL
     private(set) var startupError: String? = nil
+    /// Writes leave the main actor: the newest snapshot waits here and one
+    /// queued block writes whatever is newest when it runs, so a burst of
+    /// records produces one file write, and `flush()` waits for it.
+    private let ioQueue = DispatchQueue(label: "Cue.WatchFolderLedger", qos: .utility)
+    private let pendingSnapshot = OSAllocatedUnfairLock<[String: Outcome]?>(initialState: nil)
 
     init(baseURL: URL? = nil) {
         let resolvedBase =
@@ -83,14 +89,36 @@ final class WatchFolderLedger {
         fingerprint.components(separatedBy: "|").dropLast(2).joined(separator: "|")
     }
 
+    /// Blocks until every recorded change has reached the disk. Called on
+    /// app termination and by tests before they reload.
+    func flush() {
+        ioQueue.sync {}
+    }
+
     private func persist() {
-        do {
-            let data = try JSONEncoder().encode(entries)
-            try data.write(to: fileURL, options: .atomic)
-        } catch {
-            Self.reportFailure(
-                "Could not save watch-folder history: \(error.localizedDescription). Files may be queued again after relaunch."
-            )
+        let snapshot = entries
+        let url = fileURL
+        let pending = pendingSnapshot
+        let alreadyQueued = pending.withLock { current -> Bool in
+            defer { current = snapshot }
+            return current != nil
+        }
+        guard !alreadyQueued else { return }
+        ioQueue.async {
+            guard
+                let latest = pending.withLock({ current -> [String: Outcome]? in
+                    defer { current = nil }
+                    return current
+                })
+            else { return }
+            do {
+                let data = try JSONEncoder().encode(latest)
+                try data.write(to: url, options: .atomic)
+            } catch {
+                Self.reportFailure(
+                    "Could not save watch-folder history: \(error.localizedDescription). Files may be queued again after relaunch."
+                )
+            }
         }
     }
 

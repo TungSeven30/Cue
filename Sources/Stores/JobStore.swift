@@ -1,9 +1,18 @@
 import Foundation
 
+/// What a load produced: the jobs, plus the failure messages the caller
+/// must surface on the main actor. Built off the main actor so a large
+/// history never blocks first-window presentation.
+struct JobLoadSnapshot: Sendable {
+    let jobs: [TranscriptionJob]
+    let failures: [String]
+}
+
 /// Persists each job as its own file under Application Support/Cue/jobs/.
 /// Writes happen on a background queue from an immutable snapshot, so saving
 /// a large job never blocks the main thread, and one corrupt file can only
-/// lose one job instead of the whole history.
+/// lose one job instead of the whole history. Loading decodes files
+/// concurrently and returns them in a total, deterministic order.
 @MainActor
 final class JobStore {
     nonisolated static let persistenceDidFail = Notification.Name("Cue.JobStore.persistenceDidFail")
@@ -33,17 +42,19 @@ final class JobStore {
     private let folderURL: URL
     private let jobsFolderURL: URL
     private let legacyFileURL: URL
-    private let fileManager: FileManager
+    private let fileManagerBox: SendableFileManager
     private let failureInjector: FailureInjector
     private let ioQueue = DispatchQueue(label: "Cue.JobStore", qos: .utility)
     private(set) var startupError: String?
+
+    private nonisolated var fileManager: FileManager { fileManagerBox.value }
 
     init(
         fileManager: FileManager = .default,
         baseURL: URL? = nil,
         failureInjector: @escaping FailureInjector = { _, _ in }
     ) {
-        self.fileManager = fileManager
+        self.fileManagerBox = SendableFileManager(fileManager)
         self.failureInjector = failureInjector
         let resolvedBase =
             baseURL
@@ -62,52 +73,107 @@ final class JobStore {
         }
     }
 
+    /// Synchronous load on the main actor. Prefer `loadJobsSnapshot()` from a
+    /// background task plus `recordStartupFailures(_:)` when the caller can
+    /// afford to show its window first.
     func loadJobs() -> [TranscriptionJob] {
-        var jobs = migrateLegacyStoreIfNeeded()
+        let snapshot = loadJobsSnapshot()
+        recordStartupFailures(snapshot.failures)
+        return snapshot.jobs
+    }
+
+    /// The whole load, safe to run off the main actor: legacy migration,
+    /// concurrent decode of every per-job file, quarantine of unreadable
+    /// files, relaunch sanitising, and a deterministic final order.
+    nonisolated func loadJobsSnapshot() -> JobLoadSnapshot {
+        var failures: [String] = []
+        var jobs = migrateLegacyStoreIfNeeded(failures: &failures)
 
         let files: [URL]
         do {
             try failureInjector(.listDirectory, jobsFolderURL)
             files = try fileManager.contentsOfDirectory(at: jobsFolderURL, includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension == "json" && !$0.lastPathComponent.contains("corrupt") }
         } catch {
-            recordStartupFailure(
+            failures.append(
                 "Could not read job history at \(jobsFolderURL.path): \(error.localizedDescription). Existing jobs may be hidden."
             )
-            return jobs.map(Self.sanitizedAfterRelaunch).sorted { $0.updatedAt > $1.updatedAt }
+            return JobLoadSnapshot(
+                jobs: jobs.map(Self.sanitizedAfterRelaunch).sorted(by: JobLoadOrdering.storeOrder),
+                failures: failures
+            )
         }
-        for file in files where file.pathExtension == "json" && !file.lastPathComponent.contains("corrupt") {
-            do {
-                try failureInjector(.read, file)
-                let data = try Data(contentsOf: file)
-                let decoded = try Self.makeDecoder().decode(TranscriptionJob.self, from: data)
-                jobs.removeAll { $0.id == decoded.id }
-                jobs.append(decoded)
-            } catch {
+
+        // Decode in parallel into a slot per directory entry, then apply the
+        // results in listing order: the outcome cannot depend on which
+        // thread finished first, and quarantine messages keep their order.
+        let decoded = Self.decodeConcurrently(files, failureInjector: failureInjector)
+        for (file, result) in zip(files, decoded) {
+            switch result {
+            case .success(let job):
+                jobs.removeAll { $0.id == job.id }
+                jobs.append(job)
+            case .failure(let error):
                 // Preserve the unreadable job instead of overwriting it on
                 // the next save, so the data can still be recovered by hand.
                 let backupURL = file.deletingPathExtension().appendingPathExtension("corrupt.json")
                 do {
                     try injectedRemove(at: backupURL)
                     try injectedCopy(from: file, to: backupURL)
-                    recordStartupFailure(
+                    failures.append(
                         "Could not read job file \(file.lastPathComponent): \(error.localizedDescription). It was preserved at \(backupURL.path)."
                     )
                 } catch let backupError {
-                    recordStartupFailure(
+                    failures.append(
                         "Could not read job file \(file.lastPathComponent): \(error.localizedDescription). The original remains at \(file.path), but a recovery copy could not be created: \(backupError.localizedDescription)."
                     )
                 }
             }
         }
 
-        return jobs.map(Self.sanitizedAfterRelaunch).sorted { $0.updatedAt > $1.updatedAt }
+        return JobLoadSnapshot(
+            jobs: jobs.map(Self.sanitizedAfterRelaunch).sorted(by: JobLoadOrdering.storeOrder),
+            failures: failures
+        )
+    }
+
+    /// Surfaces the failures a background load collected, exactly as the
+    /// synchronous load would have as it went.
+    func recordStartupFailures(_ failures: [String]) {
+        for failure in failures {
+            recordStartupFailure(failure)
+        }
+    }
+
+    private nonisolated static func decodeConcurrently(
+        _ files: [URL],
+        failureInjector: @escaping FailureInjector
+    ) -> [Result<TranscriptionJob, Error>] {
+        guard !files.isEmpty else { return [] }
+        final class Slots: @unchecked Sendable {
+            var results: [Result<TranscriptionJob, Error>?]
+            init(count: Int) { results = Array(repeating: nil, count: count) }
+        }
+        let slots = Slots(count: files.count)
+        // Each iteration writes its own slot, so no synchronisation is needed
+        // beyond concurrentPerform's completion barrier.
+        DispatchQueue.concurrentPerform(iterations: files.count) { index in
+            let file = files[index]
+            let result = Result<TranscriptionJob, Error> {
+                try failureInjector(.read, file)
+                let data = try Data(contentsOf: file)
+                return try makeDecoder().decode(TranscriptionJob.self, from: data)
+            }
+            slots.results[index] = result
+        }
+        return slots.results.map { $0! }
     }
 
     /// A job persisted mid-run stays "Transcribing"/"Translating" forever
     /// after a crash or force-quit — unstartable, uncancelable, and only
     /// recoverable by deleting it. Mark it canceled instead so it can be
     /// re-run, keeping any segments it already produced.
-    static func sanitizedAfterRelaunch(_ job: TranscriptionJob) -> TranscriptionJob {
+    nonisolated static func sanitizedAfterRelaunch(_ job: TranscriptionJob) -> TranscriptionJob {
         guard job.status.isRunning else { return job }
         var job = job
         job.status = .canceled
@@ -142,7 +208,7 @@ final class JobStore {
 
     func deleteJob(_ id: UUID) {
         let url = fileURL(for: id)
-        let fileManager = SendableFileManager(self.fileManager)
+        let fileManager = fileManagerBox
         let failureInjector = self.failureInjector
         ioQueue.async {
             do {
@@ -156,7 +222,7 @@ final class JobStore {
         }
     }
 
-    private func fileURL(for id: UUID) -> URL {
+    private nonisolated func fileURL(for id: UUID) -> URL {
         jobsFolderURL.appendingPathComponent("\(id.uuidString).json")
     }
 
@@ -165,7 +231,7 @@ final class JobStore {
     /// survives even if something goes wrong later. A job that already has a
     /// per-job file is skipped — that file is newer than the legacy snapshot
     /// and must not be clobbered.
-    private func migrateLegacyStoreIfNeeded() -> [TranscriptionJob] {
+    private nonisolated func migrateLegacyStoreIfNeeded(failures: inout [String]) -> [TranscriptionJob] {
         guard let data = try? injectedRead(from: legacyFileURL) else {
             return []
         }
@@ -192,7 +258,7 @@ final class JobStore {
             let backupURL = folderURL.appendingPathComponent("jobs.corrupt.json")
             try? injectedRemove(at: backupURL)
             try? injectedCopy(from: legacyFileURL, to: backupURL)
-            recordStartupFailure(
+            failures.append(
                 "Could not finish migrating legacy job history: \(error.localizedDescription). The original remains at \(legacyFileURL.path)."
             )
             // If decoding succeeded but a later write/move failed, keep those
@@ -202,24 +268,24 @@ final class JobStore {
         }
     }
 
-    private func injectedRead(from url: URL) throws -> Data {
+    private nonisolated func injectedRead(from url: URL) throws -> Data {
         try failureInjector(.read, url)
         return try Data(contentsOf: url)
     }
 
-    private func injectedRemove(at url: URL) throws {
+    private nonisolated func injectedRemove(at url: URL) throws {
         try failureInjector(.remove, url)
         if fileManager.fileExists(atPath: url.path) {
             try fileManager.removeItem(at: url)
         }
     }
 
-    private func injectedCopy(from source: URL, to destination: URL) throws {
+    private nonisolated func injectedCopy(from source: URL, to destination: URL) throws {
         try failureInjector(.copy, destination)
         try fileManager.copyItem(at: source, to: destination)
     }
 
-    private func injectedMove(from source: URL, to destination: URL) throws {
+    private nonisolated func injectedMove(from source: URL, to destination: URL) throws {
         try failureInjector(.move, destination)
         try fileManager.moveItem(at: source, to: destination)
     }

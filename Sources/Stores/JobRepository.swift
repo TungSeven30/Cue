@@ -7,6 +7,10 @@ protocol JobPersisting: AnyObject {
     var startupError: String? { get }
 
     func loadJobs() -> [TranscriptionJob]
+    /// The same load, runnable off the main actor; the caller surfaces the
+    /// collected failures through `recordStartupFailures(_:)`.
+    nonisolated func loadJobsSnapshot() -> JobLoadSnapshot
+    func recordStartupFailures(_ failures: [String])
     func saveJob(_ job: TranscriptionJob)
     func deleteJob(_ id: UUID)
     func flush()
@@ -17,7 +21,10 @@ protocol JobPersisting: AnyObject {
 /// it no longer manages timers or dirty-id bookkeeping itself.
 @MainActor
 final class JobRepository {
-    private let store: any JobPersisting
+    // Immutable after init and only ever used off the main actor through the
+    // protocol's own nonisolated `loadJobsSnapshot()`, which the store
+    // guarantees is safe to call from any thread.
+    nonisolated(unsafe) private let store: any JobPersisting
     private let debounceNanoseconds: UInt64
     private var pendingJobs: [UUID: TranscriptionJob] = [:]
     private var persistTask: Task<Void, Never>?
@@ -31,6 +38,16 @@ final class JobRepository {
 
     func loadJobs() -> [TranscriptionJob] {
         store.loadJobs()
+    }
+
+    /// Loads on the calling thread without touching the main actor, so the
+    /// app can hydrate its job list after the window is up.
+    nonisolated func loadJobsSnapshot() -> JobLoadSnapshot {
+        store.loadJobsSnapshot()
+    }
+
+    func recordStartupFailures(_ failures: [String]) {
+        store.recordStartupFailures(failures)
     }
 
     func save(_ job: TranscriptionJob, debounced: Bool = false) {

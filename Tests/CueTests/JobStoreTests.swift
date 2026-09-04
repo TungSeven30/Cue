@@ -66,6 +66,53 @@ struct JobStoreTests {
         #expect(reloaded.filter { $0.status == .transcriptionComplete }.count == 1)
     }
 
+    /// Files decode in parallel; the result must not depend on which thread
+    /// finished first, including for jobs that share an updatedAt.
+    @Test func concurrentLoadReturnsEverySavedJobInDeterministicOrder() throws {
+        defer { cleanUp() }
+        let store = JobStore(baseURL: baseURL)
+        var expectedIDs = Set<UUID>()
+        for index in 0..<300 {
+            // Fifty jobs share the same updatedAt so the id tie-break matters.
+            let job = try makeJob(status: .transcriptionComplete, log: "job \(index)\n")
+            expectedIDs.insert(job.id)
+            store.saveJob(job)
+        }
+        store.flush()
+
+        let first = JobStore(baseURL: baseURL).loadJobs()
+        let second = JobStore(baseURL: baseURL).loadJobs()
+        let snapshot = JobStore(baseURL: baseURL).loadJobsSnapshot()
+
+        #expect(first.count == 300)
+        #expect(Set(first.map(\.id)) == expectedIDs)
+        #expect(first.map(\.id) == second.map(\.id), "load order must be identical across launches")
+        #expect(first.map(\.id) == snapshot.jobs.map(\.id))
+        #expect(snapshot.failures.isEmpty)
+        let sortedAgain = first.sorted(by: JobLoadOrdering.storeOrder)
+        #expect(sortedAgain.map(\.id) == first.map(\.id))
+    }
+
+    @Test func backgroundSnapshotCollectsFailuresForTheMainActorToSurface() throws {
+        defer { cleanUp() }
+        let job = try makeJob(status: .idle)
+        let writer = JobStore(baseURL: baseURL)
+        writer.saveJob(job)
+        writer.flush()
+        let expectedName = "\(job.id.uuidString).json"
+        let reader = JobStore(baseURL: baseURL) { operation, url in
+            if case .read = operation, url.lastPathComponent == expectedName { throw InjectedFailure() }
+        }
+
+        let snapshot = reader.loadJobsSnapshot()
+        #expect(snapshot.jobs.isEmpty)
+        #expect(snapshot.failures.count == 1)
+        #expect(reader.startupError == nil, "a snapshot must not touch actor state")
+
+        reader.recordStartupFailures(snapshot.failures)
+        #expect(reader.startupError?.contains("It was preserved") == true)
+    }
+
     @Test func flushCompletesPendingWrites() throws {
         defer { cleanUp() }
         let store = JobStore(baseURL: baseURL)

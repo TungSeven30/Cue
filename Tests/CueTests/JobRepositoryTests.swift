@@ -12,6 +12,8 @@ struct JobRepositoryTests {
         var flushCount = 0
 
         func loadJobs() -> [TranscriptionJob] { loaded }
+        nonisolated func loadJobsSnapshot() -> JobLoadSnapshot { JobLoadSnapshot(jobs: [], failures: []) }
+        func recordStartupFailures(_ failures: [String]) { startupError = failures.last }
         func saveJob(_ job: TranscriptionJob) { saved.append(job) }
         func deleteJob(_ id: UUID) { deleted.append(id) }
         func flush() { flushCount += 1 }

@@ -176,7 +176,8 @@ struct ExportCoordinator {
     static func bilingualSegments(
         transcript: [TranscriptionSegment], translated: [TranscriptionSegment]
     ) -> [TranscriptionSegment] {
-        let translatedByID = Dictionary(uniqueKeysWithValues: translated.map { ($0.id, $0.text) })
+        let aligned = TranslationReconciliation.alignedTranslations(translated, to: transcript)
+        let translatedByID = Dictionary(aligned.map { ($0.id, $0.text) }, uniquingKeysWith: { first, _ in first })
         return transcript.map { source in
             TranscriptionSegment(
                 id: source.id, start: source.start, end: source.end,

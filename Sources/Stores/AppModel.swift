@@ -2493,7 +2493,12 @@ final class AppModel: ObservableObject {
             // a translation adopted without a transcript would be silently
             // discarded by the ASR run that the empty transcript triggers.
             if let translation = result.translation, !job.transcriptSegments.isEmpty {
-                job.translatedSegments = translation.segments
+                let aligned = TranslationReconciliation.alignedTranslations(translation.segments, to: job.transcriptSegments)
+                guard aligned.count == translation.segments.count else {
+                    job.log += "Could not pair \(translation.source.fileName) with the transcript: cue timings differ or are ambiguous. The file was left unchanged.\n"
+                    return
+                }
+                job.translatedSegments = aligned
                 job.importedTranslationSource = translation.source
                 // Both slots filled: there is no work left, so leave the
                 // queue rather than sit there waiting to be re-translated.
@@ -2548,6 +2553,16 @@ final class AppModel: ObservableObject {
 
     func applySubtitleLoad(_ request: SubtitleLoadRequest, to slot: SubtitleSidecarScanner.Slot) {
         guard let id = selectedJobID, let job = self.job(withID: id) else { return }
+        let segments: [TranscriptionSegment]
+        if slot == .translation {
+            segments = TranslationReconciliation.alignedTranslations(request.document.segments, to: job.transcriptSegments)
+            guard segments.count == request.document.segments.count else {
+                presentExportError("The translation's cue timings do not match this transcript unambiguously. The file has not been changed.", title: "Could Not Pair Subtitles")
+                return
+            }
+        } else {
+            segments = request.document.segments
+        }
         let existing = slot == .transcript ? job.transcriptSegments : job.translatedSegments
         if !existing.isEmpty, !confirmReplacingSegments(slot: slot) { return }
 
@@ -2563,6 +2578,7 @@ final class AppModel: ObservableObject {
         // the newly loaded file moments later, rewriting it with renumbered
         // ids and normalized timestamps without the user editing anything.
         cancelSubtitleSync(jobID: id, slot: slot)
+        if slot == .transcript { cancelSubtitleSync(jobID: id, slot: .translation) }
         // Mirrors applyAdoption: a .queued job must stay .queued when
         // translation is configured, or PipelineScheduler.nextTranslationJob
         // (which only checks status/hasTranscript, not readiness) would pick
@@ -2571,17 +2587,23 @@ final class AppModel: ObservableObject {
         updateJob(id) { job in
             switch slot {
             case .transcript:
-                job.transcriptSegments = document.segments
+                job.transcriptSegments = segments
+                job.translatedSegments = []
+                job.partialTranslatedSegments = []
+                job.partialTranscriptSegments = []
+                job.importedTranslationSource = nil
+                job.summary = nil
+                job.transcriptionResumeThrough = 0
                 job.importedTranscriptSource = source
                 let wasQueued = job.status == .queued
                 if wasQueued {
                     job.status = translationReady ? .queued : .transcriptionComplete
-                } else if job.status == .idle || job.status == .canceled || job.status == .failed {
+                } else {
                     job.status = .transcriptionComplete
                 }
                 job.progress = JobProgress(stage: .complete, detail: "Loaded existing subtitles.", fraction: 1)
             case .translation:
-                job.translatedSegments = document.segments
+                job.translatedSegments = segments
                 job.importedTranslationSource = source
                 job.status = .translationComplete
             }

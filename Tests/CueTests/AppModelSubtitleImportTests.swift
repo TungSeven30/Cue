@@ -650,6 +650,31 @@ struct AppModelSubtitleImportTests {
         #expect(job.log.contains("Loaded subtitles from elsewhere.srt (2 cues)."))
     }
 
+    @Test func manualTranscriptLoadInvalidatesEarlierDerivedContent() async throws {
+        let fixture = try await makeFixture(sidecars: [])
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        model.addVideos(urls: [fixture.mediaURL])
+        let id = try #require(model.jobs.first?.id)
+        try await waitForAdoption(model, jobID: id)
+        let url = fixture.baseURL.appendingPathComponent("replacement.srt")
+        try Data(Self.srt.utf8).write(to: url)
+        let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+        model.jobs[0].translatedSegments = document.segments
+        model.jobs[0].partialTranslatedSegments = document.segments
+        model.jobs[0].partialTranscriptSegments = document.segments
+        model.jobs[0].summary = "Earlier summary"
+        model.jobs[0].importedTranslationSource = document.source
+        model.jobs[0].status = .translationComplete
+        model.applySubtitleLoad(.init(id: UUID(), document: document), to: .transcript)
+        let job = try #require(model.job(withID: id))
+        let stale = [!job.translatedSegments.isEmpty, !job.partialTranslatedSegments.isEmpty,
+                     !job.partialTranscriptSegments.isEmpty, job.summary != nil, job.importedTranslationSource != nil]
+        print("AUDIT03 stale_derived_fields=\(stale.filter { $0 }.count)")
+        #expect(stale.allSatisfy { !$0 })
+        #expect(job.status == .transcriptionComplete)
+    }
+
     // A batch add of one folder now lists that folder once and matches every
     // video against the same listing, so each job must still pick up its own
     // sidecar and only its own.

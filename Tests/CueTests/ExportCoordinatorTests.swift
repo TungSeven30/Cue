@@ -3,6 +3,18 @@ import Testing
 @testable import Cue
 
 struct ExportCoordinatorTests {
+    @Test func importedTranslationMissingFirstCuePairsByTimeNotRenumberedID() {
+        let transcript = [
+            TranscriptionSegment(id: 1, start: 0, end: 1, text: "First"),
+            TranscriptionSegment(id: 2, start: 2, end: 3, text: "Second"),
+        ]
+        let translated = [TranscriptionSegment(id: 1, start: 2, end: 3, text: "Hai")]
+        let result = ExportCoordinator.bilingualSegments(transcript: transcript, translated: translated)
+        let expected = ["First\n", "Second\nHai"]
+        print("AUDIT03 incorrect_bilingual_rows=\(zip(result.map(\.text), expected).filter { $0 != $1 }.count)")
+        #expect(result.map(\.text) == expected)
+    }
+
     private let segments = [TranscriptionSegment(id: 1, start: 1, end: 2, text: "Hello")]
 
     @Test func multiDocumentPlanUsesStableSafeNames() {

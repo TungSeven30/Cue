@@ -169,7 +169,8 @@ struct TranslationService: Sendable {
             throw TranslationServiceError.missingAPIKey(provider.label)
         }
 
-        var translatedByID = Dictionary(uniqueKeysWithValues: existingTranslations.map { ($0.id, $0.text) })
+        let aligned = TranslationReconciliation.alignedTranslations(existingTranslations, to: segments)
+        var translatedByID = Dictionary(aligned.map { ($0.id, $0.text) }, uniquingKeysWith: { first, _ in first })
         let targetIDs = Set(segments.map(\.id))
         translatedByID = translatedByID.filter { targetIDs.contains($0.key) }
         let chunks = TranslationBatchPlanner.pendingChunks(

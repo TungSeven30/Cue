@@ -146,17 +146,15 @@ struct EnvironmentDiagnosticsService: EnvironmentDiagnosing {
         repairCommand: String? = nil,
         optional: Bool = false
     ) async -> EnvironmentDiagnostic {
-        await Task.detached(priority: .utility) {
-            let result = runProcess(command)
-            return EnvironmentDiagnostic(
-                id: id,
-                title: title,
-                detail: result.output.isEmpty ? result.message : result.output,
-                recovery: recovery,
-                state: result.succeeded ? .passed : (optional ? .warning : .failed),
-                repairCommand: repairCommand
-            )
-        }.value
+        let result = await runProcess(command)
+        return EnvironmentDiagnostic(
+            id: id,
+            title: title,
+            detail: result.output.isEmpty ? result.message : result.output,
+            recovery: recovery,
+            state: result.succeeded ? .passed : (optional ? .warning : .failed),
+            repairCommand: repairCommand
+        )
     }
 
     private func pythonImportDiagnostic(
@@ -184,20 +182,25 @@ private struct ProcessProbeResult {
     let message: String
 }
 
-private final class PipeDataBox: @unchecked Sendable {
-    var data = Data()
-}
-
-private func runProcess(_ command: [String]) -> ProcessProbeResult {
+/// Runs one probe without ever blocking a Swift cooperative thread. The
+/// previous implementation parked a detached task in `waitUntilExit` and a
+/// dispatch-group wait while the pipe drains ran on the same QoS bucket's
+/// global queue; with several probes in flight that starved the pool and
+/// deadlocked (every cooperative thread waiting on drains that could not be
+/// scheduled). Pipes now drain on the file handles' own readability queue,
+/// and exit is awaited through the termination handler. Draining while the
+/// probe runs also keeps a long Python traceback from filling the ~64 KB pipe
+/// buffer and wedging the child.
+private func runProcess(_ command: [String]) async -> ProcessProbeResult {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: command[0])
     process.arguments = Array(command.dropFirst())
     process.environment = ProcessEnvironment.withToolPaths()
 
-    let outputPipe = Pipe()
-    let errorPipe = Pipe()
-    process.standardOutput = outputPipe
-    process.standardError = errorPipe
+    let output = PipeCollector()
+    let error = PipeCollector()
+    process.standardOutput = output.pipe
+    process.standardError = error.pipe
 
     do {
         try process.run()
@@ -205,38 +208,22 @@ private func runProcess(_ command: [String]) -> ProcessProbeResult {
         return ProcessProbeResult(succeeded: false, output: "", message: error.localizedDescription)
     }
 
-    // Drain both pipes while the probe runs. Waiting for exit before reading
-    // deadlocks when the probe writes more than the ~64KB pipe buffer (e.g.
-    // a long Python traceback): the child blocks on the full pipe and
-    // waitUntilExit never returns, wedging diagnostics for the session.
-    let outputBox = PipeDataBox()
-    let errorBox = PipeDataBox()
-    let drainGroup = DispatchGroup()
-    drainGroup.enter()
-    DispatchQueue.global(qos: .utility).async {
-        outputBox.data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        drainGroup.leave()
-    }
-    drainGroup.enter()
-    DispatchQueue.global(qos: .utility).async {
-        errorBox.data = errorPipe.fileHandleForReading.readDataToEndOfFile()
-        drainGroup.leave()
-    }
-    process.waitUntilExit()
-    drainGroup.wait()
+    let status = await process.waitForTermination()
+    await output.waitForEOF()
+    await error.waitForEOF()
+    output.close()
+    error.close()
 
-    let output =
-        String(data: outputBox.data, encoding: .utf8)?
+    let firstOutputLine =
+        output.text()
         .components(separatedBy: .newlines)
         .first?
         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    let error =
-        String(data: errorBox.data, encoding: .utf8)?
-        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let errorText = error.text().trimmingCharacters(in: .whitespacesAndNewlines)
 
     return ProcessProbeResult(
-        succeeded: process.terminationStatus == 0,
-        output: output,
-        message: error.isEmpty ? "Exited with status \(process.terminationStatus)." : error
+        succeeded: status == 0,
+        output: firstOutputLine,
+        message: errorText.isEmpty ? "Exited with status \(status)." : errorText
     )
 }

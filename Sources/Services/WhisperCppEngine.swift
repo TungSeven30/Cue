@@ -1,3 +1,4 @@
+import Accelerate
 import Foundation
 import whisper
 
@@ -313,15 +314,40 @@ actor WhisperCppEngine {
                 }
                 let sampleCount = chunkSize / 2
                 return data.withUnsafeBytes { raw in
-                    (0..<sampleCount).map { i in
-                        let sample = Int16(littleEndian: raw.loadUnaligned(fromByteOffset: body + i * 2, as: Int16.self))
-                        return Float(sample) / 32_768
-                    }
+                    Self.pcm16ToFloat(raw, byteOffset: body, sampleCount: sampleCount)
                 }
             }
             // RIFF chunks are word-aligned: odd sizes carry a pad byte.
             offset = body + chunkSize + (chunkSize & 1)
         }
         throw WhisperCppError.invalidWAV("no data chunk")
+    }
+
+    /// Little-endian 16-bit PCM to normalized Float32 via vDSP. Dividing by
+    /// 32768 and multiplying by 1/32768 are the same IEEE operation because
+    /// the scale is a power of two, so the result is bit-identical to the
+    /// per-sample `Float(sample) / 32_768` it replaces (asserted by
+    /// ChunkPlannerVectorTests). RIFF chunks are word-aligned, so the data
+    /// chunk is 2-byte aligned in practice; an unaligned offset takes one
+    /// memcpy into an aligned scratch buffer instead.
+    static func pcm16ToFloat(_ raw: UnsafeRawBufferPointer, byteOffset: Int, sampleCount: Int) -> [Float] {
+        var floats = [Float](repeating: 0, count: sampleCount)
+        guard sampleCount > 0, let base = raw.baseAddress else { return floats }
+        let source = base + byteOffset
+        var scale: Float = 1.0 / 32_768
+        floats.withUnsafeMutableBufferPointer { out in
+            guard let output = out.baseAddress else { return }
+            if Int(bitPattern: source) % MemoryLayout<Int16>.alignment == 0 {
+                let words = source.assumingMemoryBound(to: Int16.self)
+                vDSP_vflt16(words, 1, output, 1, vDSP_Length(sampleCount))
+            } else {
+                let scratch = UnsafeMutablePointer<Int16>.allocate(capacity: sampleCount)
+                defer { scratch.deallocate() }
+                memcpy(scratch, source, sampleCount * MemoryLayout<Int16>.size)
+                vDSP_vflt16(scratch, 1, output, 1, vDSP_Length(sampleCount))
+            }
+            vDSP_vsmul(output, 1, &scale, output, 1, vDSP_Length(sampleCount))
+        }
+        return floats
     }
 }

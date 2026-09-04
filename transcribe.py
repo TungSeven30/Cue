@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import hashlib
 import inspect
 import json
@@ -333,16 +334,18 @@ def plan_speech_chunks(
         if remaining <= max_chunk:
             chunks.append((start, total_seconds))
             break
-        in_window = [c for c in candidates if start + min_silence < c <= start + max_chunk]
+        # Candidates are ascending, so the window (start + min_silence,
+        # start + max_chunk] is a bisect range rather than a full scan.
+        lower = bisect.bisect_right(candidates, start + min_silence)
+        upper = bisect.bisect_right(candidates, start + max_chunk)
         desired = first_target if not chunks else target_chunk
-        if in_window:
-            cut = min(in_window, key=lambda c: abs(c - (start + desired)))
+        if lower < upper:
+            cut = min(candidates[lower:upper], key=lambda c: abs(c - (start + desired)))
+        elif upper < len(candidates):
+            cut = candidates[upper]  # first silence after the cap beats a mid-speech cut
         else:
-            later = [c for c in candidates if c > start + max_chunk]
-            if not later:
-                chunks.append((start, total_seconds))
-                break
-            cut = later[0]  # first silence after the cap beats a mid-speech cut
+            chunks.append((start, total_seconds))
+            break
         chunks.append((start, cut))
         start = cut
     return chunks

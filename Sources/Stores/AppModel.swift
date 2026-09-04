@@ -1255,7 +1255,7 @@ final class AppModel: ObservableObject {
     /// queuePaused (spec §2.3/2.6 — arriving files must not override an
     /// explicit stop), and ignores autoStartAddedJobs, which governs
     /// interactive adds only.
-    private func ingestWatchFolderFiles(_ urls: [URL], folderID: UUID) {
+    func ingestWatchFolderFiles(_ urls: [URL], folderID: UUID) {
         guard !urls.isEmpty else { return }
         // The profile is read at ingest time, so edits apply to the next
         // file without restarting the watcher.

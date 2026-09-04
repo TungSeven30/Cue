@@ -14,6 +14,7 @@ private actor EmptyHydrationDiagnostics: EnvironmentDiagnosing {
 
 /// The job history loads off the main actor after the window is up; these
 /// pin the merge rules and the gates that make that safe.
+@Suite(.serialized)
 @MainActor
 struct AppModelHydrationTests {
     @MainActor
@@ -180,11 +181,7 @@ struct AppModelHydrationTests {
         await model.hydration()
 
         #expect(model.jobs.count == 2)
-        #expect(model.jobStoreStartupError?.contains("It was preserved") == true)
-        // The notification bus is process-wide, so under parallel tests the
-        // displayed message may already belong to another fixture; only its
-        // presence is asserted here.
-        #expect(model.persistenceError != nil)
+        #expect(model.persistenceError?.contains("It was preserved") == true)
     }
 
     @Test func indexLookupSurvivesReorderInsertAndDelete() async throws {

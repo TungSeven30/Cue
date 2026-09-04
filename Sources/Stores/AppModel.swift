@@ -23,7 +23,13 @@ final class AppModel: ObservableObject {
     /// Every highlighted sidebar job. The detail pane continues to use
     /// `selectedJobID` as the primary member of this selection.
     @Published private(set) var selectedJobIDs: Set<UUID> = []
-    @Published private(set) var selectedJobID: UUID?
+    @Published private(set) var selectedJobID: UUID? {
+        didSet {
+            guard selectedJobID != oldValue else { return }
+            playerController.pause()
+            if selectedJobID == nil { playerController.clear() }
+        }
+    }
     @Published var diagnostics: [EnvironmentDiagnostic] = []
     @Published var isRunningDiagnostics = false
     @Published var persistenceError: String?

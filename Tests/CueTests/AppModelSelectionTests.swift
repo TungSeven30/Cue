@@ -14,6 +14,29 @@ private actor EmptySelectionDiagnostics: EnvironmentDiagnosing {
 
 @MainActor
 struct AppModelSelectionTests {
+    @Test func clearingEitherSelectionAPIReleasesThePlayerAndOverlay() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.cleanUp() }
+        let model = fixture.model
+        model.addVideos(urls: [fixture.sourceURL(1)])
+        let id = try #require(model.currentJob?.id)
+        var retainedItems = 0
+        for multiSelection in [false, true] {
+            model.selectJob(id)
+            model.playerController.load(url: fixture.sourceURL(1))
+            model.playerController.updateSegments([TranscriptionSegment(id: 1, start: 0, end: 10, text: "Visible")])
+            model.playerController.seek(to: 1)
+            model.playerController.player.play()
+            if multiSelection { model.selectJobs([]) } else { model.selectJob(nil) }
+            if model.playerController.player.currentItem != nil { retainedItems += 1 }
+            #expect(model.playerController.player.currentItem == nil)
+            #expect(model.playerController.player.rate == 0)
+            #expect(model.playerController.overlayText.isEmpty)
+            #expect(model.playerController.activeSegmentID == nil)
+        }
+        print("AUDIT10 deselected_player_items_retained=\(retainedItems)/2")
+    }
+
     @Test func multiSelectionKeepsOnePrimaryJobForTheDetailPane() async throws {
         let fixture = try await makeFixture()
         defer { fixture.cleanUp() }

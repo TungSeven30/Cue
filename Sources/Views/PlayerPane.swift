@@ -121,6 +121,15 @@ final class PlayerController: ObservableObject {
         player.pause()
     }
 
+    func clear() {
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        currentURL = nil
+        updateSegments([])
+        activeSegmentID = nil
+        overlayText = ""
+    }
+
     private func refresh(at time: Double) {
         let segment = time.isFinite ? segment(at: time) : nil
         if segment?.id != activeSegmentID {

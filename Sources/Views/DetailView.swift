@@ -71,7 +71,11 @@ struct DetailView: View {
     }
 
     private func syncPlayer() {
-        guard model.isPlayerVisible, let url = model.selectedVideoURL else { return }
+        guard let url = model.selectedVideoURL else {
+            playerController.clear()
+            return
+        }
+        guard model.isPlayerVisible else { return }
         playerController.load(url: url)
         syncOverlaySegments()
     }

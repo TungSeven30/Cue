@@ -88,7 +88,7 @@ final class AppModel: ObservableObject {
     /// Memoised quality warnings for the displayed transcript/translation;
     /// see SubtitleWarningCache for why per-render recomputation was O(n²).
     private let warningCache = SubtitleWarningCache()
-    private let watchLedger = WatchFolderLedger()
+    private let watchLedger: WatchFolderLedger
     private lazy var watchCoordinator = WatchFolderCoordinator(
         makeService: { [weak self] id in
             self?.makeWatchService(folderID: id) ?? WatchFolderService()
@@ -155,17 +155,19 @@ final class AppModel: ObservableObject {
         settings: AppSettingsStore? = nil,
         jobStore: JobStore? = nil,
         jobRepository: JobRepository? = nil,
+        watchLedger: WatchFolderLedger? = nil,
         diagnosticsService: any EnvironmentDiagnosing = EnvironmentDiagnosticsService(),
         translationService: TranslationService = TranslationService()
     ) {
         self.settings = settings ?? AppSettingsStore()
+        self.watchLedger = watchLedger ?? WatchFolderLedger()
         // Tests inject a repository over a recording store; the app builds
         // one over the on-disk JobStore.
         self.jobRepository = jobRepository ?? JobRepository(store: jobStore ?? JobStore())
         self.diagnosticsService = diagnosticsService
         self.translationService = translationService
         isPlayerVisible = UserDefaults.standard.object(forKey: "isPlayerVisible") as? Bool ?? true
-        persistenceError = watchLedger.startupError
+        persistenceError = self.watchLedger.startupError
         // `settings` is a nested ObservableObject; changes to its fields do not
         // fire AppModel's objectWillChange on their own, so forward them.
         self.settings.objectWillChange

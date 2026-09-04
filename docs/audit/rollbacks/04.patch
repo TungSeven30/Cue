@@ -1,0 +1,302 @@
+diff --git a/Sources/Services/SubtitleImporter.swift b/Sources/Services/SubtitleImporter.swift
+index a98159f..35d5f20 100644
+--- a/Sources/Services/SubtitleImporter.swift
++++ b/Sources/Services/SubtitleImporter.swift
+@@ -96,16 +96,11 @@ enum SubtitleImporter {
+         else {
+             throw SubtitleReader.ReadError.unreadable
+         }
+-        let parsed = try SubtitleReader.parseDocument(decoded.text, format: format)
+-        let segments = parsed.segments
++        let segments = try SubtitleReader.parse(decoded.text, format: format)
+         if decoded.requiresEncodingReview {
+             source.syncPaused = true
+             source.lastSyncError = "Legacy text encoding is uncertain. Review the text and export a UTF-8 copy before syncing edits."
+         }
+-        if parsed.hasUnrepresentedContent {
+-            source.syncPaused = true
+-            source.lastSyncError = "Some source content or formatting cannot be preserved. Export a separate copy to keep the original intact."
+-        }
+         if backingUp {
+             source.didBackup = backUpOriginal(at: url)
+         }
+diff --git a/Sources/Services/SubtitleReader.swift b/Sources/Services/SubtitleReader.swift
+index 1fd24af..f6fe08b 100644
+--- a/Sources/Services/SubtitleReader.swift
++++ b/Sources/Services/SubtitleReader.swift
+@@ -104,15 +104,6 @@ enum SubtitleReader {
+     }
+ 
+     static func parse(_ text: String, format: SubtitleExportFormat) throws -> [TranscriptionSegment] {
+-        try parseDocument(text, format: format).segments
+-    }
+-
+-    struct ParsedDocument {
+-        let segments: [TranscriptionSegment]
+-        let hasUnrepresentedContent: Bool
+-    }
+-
+-    static func parseDocument(_ text: String, format: SubtitleExportFormat) throws -> ParsedDocument {
+         let normalized =
+             text
+             .replacingOccurrences(of: "\r\n", with: "\n")
+@@ -126,64 +117,43 @@ enum SubtitleReader {
+             .replacingOccurrences(of: "\n[ \t]+(?=\n)", with: "\n", options: .regularExpression)
+ 
+         var segments: [TranscriptionSegment] = []
+-        var hasUnrepresentedContent = false
+         for block in normalized.components(separatedBy: "\n\n") {
+             let lines =
+                 block
+                 .components(separatedBy: "\n")
+                 .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+             guard let first = lines.first else { continue }
+-            if format == .vtt, isVTTMetadata(first) {
+-                if !first.hasPrefix("WEBVTT") { hasUnrepresentedContent = true }
+-                continue
+-            }
++            if format == .vtt, isVTTMetadata(first) { continue }
+ 
+             // A malformed block is skipped rather than fatal: real files carry
+             // junk tails, and losing the whole transcript to one bad cue is
+             // the worse failure.
+-            let timings = lines.indices.compactMap { index -> (Int, Timing)? in
+-                guard lines[index].contains("-->"), let timing = parseTimingLine(lines[index]) else { return nil }
+-                return (index, timing)
+-            }
+-            guard !timings.isEmpty else {
+-                hasUnrepresentedContent = true
+-                continue
+-            }
+-            if timings.count > 1 { hasUnrepresentedContent = true }
+-            for (position, entry) in timings.enumerated() {
+-                let (timingIndex, timing) = entry
+-                var bodyEnd = position + 1 < timings.count ? timings[position + 1].0 : lines.count
+-                if bodyEnd < lines.count, bodyEnd > timingIndex + 1, Int(lines[bodyEnd - 1]) != nil {
+-                    bodyEnd -= 1
+-                }
+-                let body = lines[(timingIndex + 1)..<bodyEnd].joined(separator: "\n")
+-                let cleaned = SubtitleWriter.sanitizedCueText(body)
+-                guard !cleaned.isEmpty else {
+-                    hasUnrepresentedContent = true
+-                    continue
+-                }
+-                let endTokens = lines[timingIndex].components(separatedBy: "-->").last?.split(whereSeparator: \.isWhitespace) ?? []
+-                if endTokens.count > 1 || timing.end < timing.start || (timingIndex > 0 && Int(lines[timingIndex - 1]) == nil) {
+-                    hasUnrepresentedContent = true
+-                }
+-                segments.append(
+-                    TranscriptionSegment(
+-                        id: segments.count + 1,
+-                        start: timing.start,
+-                        end: max(timing.end, timing.start),
+-                        text: cleaned
+-                    )
++            guard let timingIndex = lines.firstIndex(where: { $0.contains("-->") }),
++                let timing = parseTimingLine(lines[timingIndex])
++            else { continue }
++
++            let body = lines[lines.index(after: timingIndex)...].joined(separator: "\n")
++            let cleaned = SubtitleWriter.sanitizedCueText(body)
++            guard !cleaned.isEmpty else { continue }
++
++            // Ids are assigned here, never read from the file: they double as
++            // the join key for bilingual export and translation reconciliation,
++            // and third-party files routinely repeat or skip indices.
++            segments.append(
++                TranscriptionSegment(
++                    id: segments.count + 1,
++                    start: timing.start,
++                    end: max(timing.end, timing.start),
++                    text: cleaned
+                 )
+-            }
++            )
+         }
+         guard !segments.isEmpty else { throw ReadError.noCues }
+-        return ParsedDocument(segments: segments, hasUnrepresentedContent: hasUnrepresentedContent)
++        return segments
+     }
+ 
+     private static func isVTTMetadata(_ line: String) -> Bool {
+-        ["WEBVTT", "NOTE", "STYLE", "REGION"].contains {
+-            line == $0 || line.hasPrefix($0 + " ") || line.hasPrefix($0 + "\t")
+-        }
++        ["WEBVTT", "NOTE", "STYLE", "REGION"].contains { line.hasPrefix($0) }
+     }
+ 
+     struct Timing: Equatable {
+@@ -199,10 +169,10 @@ enum SubtitleReader {
+         let endToken =
+             parts[1]
+             .trimmingCharacters(in: .whitespaces)
+-            .split(whereSeparator: \.isWhitespace)
++            .components(separatedBy: " ")
+             .first ?? ""
+         guard let start = parseTimestamp(parts[0].trimmingCharacters(in: .whitespaces)),
+-            let end = parseTimestamp(String(endToken))
++            let end = parseTimestamp(endToken)
+         else { return nil }
+         return Timing(start: start, end: end)
+     }
+diff --git a/Sources/Services/SubtitleWriter.swift b/Sources/Services/SubtitleWriter.swift
+index 87262b4..28fd128 100644
+--- a/Sources/Services/SubtitleWriter.swift
++++ b/Sources/Services/SubtitleWriter.swift
+@@ -31,29 +31,6 @@ enum SubtitleExportFormat: String, Codable, CaseIterable, Identifiable {
+ }
+ 
+ enum SubtitleWriter {
+-    /// Only presentation strips supported subtitle markup; the editor and
+-    /// exported source retain the original cue text for lossless round trips.
+-    static func plainCueText(_ text: String) -> String {
+-        let withoutTags = text
+-            .replacingOccurrences(of: #"</?(?:b|i|u|c|v|lang|ruby|rt|font)(?:[ \t.][^<>]*)?>"#, with: "", options: .regularExpression)
+-            .replacingOccurrences(of: #"<(?:\d+:)?\d{2}:\d{2}\.\d{3}>"#, with: "", options: .regularExpression)
+-        guard let expression = try? NSRegularExpression(pattern: #"&(?:amp|lt|gt|nbsp|lrm|rlm|quot|apos|#[0-9]+|#x[0-9a-fA-F]+);"#) else { return withoutTags }
+-        let result = NSMutableString(string: withoutTags)
+-        let names = ["amp": "&", "lt": "<", "gt": ">", "nbsp": "\u{00A0}", "lrm": "\u{200E}", "rlm": "\u{200F}", "quot": "\"", "apos": "'"]
+-        for match in expression.matches(in: withoutTags, range: NSRange(location: 0, length: result.length)).reversed() {
+-            let entity = result.substring(with: match.range).dropFirst().dropLast()
+-            var replacement = names[String(entity)]
+-            if entity.hasPrefix("#") {
+-                let hex = entity.hasPrefix("#x")
+-                if let value = UInt32(entity.dropFirst(hex ? 2 : 1), radix: hex ? 16 : 10), value != 0,
+-                    let scalar = UnicodeScalar(value)
+-                { replacement = String(scalar) }
+-            }
+-            if let replacement { result.replaceCharacters(in: match.range, with: replacement) }
+-        }
+-        return result as String
+-    }
+-
+     static func write(segments: [TranscriptionSegment], format: SubtitleExportFormat, to url: URL) throws {
+         switch format {
+         case .srt:
+diff --git a/Sources/Views/PlayerPane.swift b/Sources/Views/PlayerPane.swift
+index 606c4fb..cd8fcd6 100644
+--- a/Sources/Views/PlayerPane.swift
++++ b/Sources/Views/PlayerPane.swift
+@@ -28,7 +28,6 @@ final class PlayerController: ObservableObject {
+     let player: AVPlayer
+     @Published private(set) var activeSegmentID: Int?
+     @Published private(set) var overlayText = ""
+-    private var overlaySourceText: String?
+ 
+     private var segments: [TranscriptionSegment] = []
+     private var maximumEnds: [Double] = []
+@@ -57,7 +56,6 @@ final class PlayerController: ObservableObject {
+         player.replaceCurrentItem(with: AVPlayerItem(url: url))
+         activeSegmentID = nil
+         overlayText = ""
+-        overlaySourceText = nil
+     }
+ 
+     /// The segments the overlay and highlight follow — the original
+@@ -135,9 +133,9 @@ final class PlayerController: ObservableObject {
+         if segment?.id != activeSegmentID {
+             activeSegmentID = segment?.id
+         }
+-        if segment?.text != overlaySourceText {
+-            overlaySourceText = segment?.text
+-            overlayText = segment.map { SubtitleWriter.plainCueText($0.text) } ?? ""
++        let text = segment?.text ?? ""
++        if text != overlayText {
++            overlayText = text
+         }
+     }
+ 
+diff --git a/Tests/CueTests/PlayerControllerTests.swift b/Tests/CueTests/PlayerControllerTests.swift
+index 4f1a07e..3cf3867 100644
+--- a/Tests/CueTests/PlayerControllerTests.swift
++++ b/Tests/CueTests/PlayerControllerTests.swift
+@@ -5,16 +5,6 @@ import Testing
+ 
+ @MainActor
+ struct PlayerControllerTests {
+-    @Test func previewRendersPlainTextWithoutChangingStoredMarkup() {
+-        let controller = PlayerController()
+-        let cue = TranscriptionSegment(id: 1, start: 0, end: 2, text: "<v Alice><i>Xin chào &amp; tạm biệt</i></v>")
+-        controller.updateSegments([cue])
+-        controller.seek(to: 1)
+-        print("AUDIT04 preview_markup_visible=\(controller.overlayText.contains("<i>"))")
+-        #expect(controller.overlayText == "Xin chào & tạm biệt")
+-        #expect(cue.text.contains("<i>"))
+-    }
+-
+     @Test func cueMembershipUsesExactHalfOpenBoundaries() {
+         let controller = PlayerController()
+         controller.updateSegments([TranscriptionSegment(id: 1, start: 1, end: 2, text: "Việt Nam")])
+diff --git a/Tests/CueTests/SubtitleImporterTests.swift b/Tests/CueTests/SubtitleImporterTests.swift
+index a14416a..73b5414 100644
+--- a/Tests/CueTests/SubtitleImporterTests.swift
++++ b/Tests/CueTests/SubtitleImporterTests.swift
+@@ -4,19 +4,6 @@ import Testing
+ @testable import Cue
+ 
+ struct SubtitleImporterTests {
+-    @Test func skippedSourceContentPausesAutomaticWriteBack() throws {
+-        let dir = try makeFolder([])
+-        defer { try? FileManager.default.removeItem(at: dir) }
+-        let url = dir.appendingPathComponent("partial.srt")
+-        let bytes = Data((srt + "\n\nBroken cue without timestamps\n").utf8)
+-        try bytes.write(to: url)
+-        let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+-        print("AUDIT04 lossy_source_writeback_enabled=\(!document.source.syncPaused)")
+-        #expect(document.segments.count == 2)
+-        #expect(document.source.syncPaused)
+-        #expect(try Data(contentsOf: url) == bytes)
+-    }
+-
+     @Test func ambiguousLegacyEncodingCannotAutomaticallyRewriteTheSource() throws {
+         let dir = try makeFolder([])
+         defer { try? FileManager.default.removeItem(at: dir) }
+diff --git a/Tests/CueTests/SubtitleReaderTests.swift b/Tests/CueTests/SubtitleReaderTests.swift
+index bc20db0..6c5e611 100644
+--- a/Tests/CueTests/SubtitleReaderTests.swift
++++ b/Tests/CueTests/SubtitleReaderTests.swift
+@@ -4,27 +4,6 @@ import Testing
+ @testable import Cue
+ 
+ struct SubtitleReaderTests {
+-    @Test func vttTabsAndKeywordPrefixedIdentifiersRetainCues() throws {
+-        let fixtures = [
+-            "WEBVTT\n\n00:00.000 --> 00:02.000\talign:start\nHello\n",
+-            "WEBVTT\n\nNOTEBOOK\n00:00.000 --> 00:02.000\nHello\n",
+-        ]
+-        var retained = 0
+-        for fixture in fixtures {
+-            let cues = (try? SubtitleReader.parse(fixture, format: .vtt)) ?? []
+-            retained += cues.count
+-            #expect(cues.first?.text == "Hello")
+-        }
+-        print("AUDIT04 valid_vtt_cues_retained=\(retained)/2")
+-    }
+-
+-    @Test func missingSRTSeparatorDoesNotSwallowTheNextCue() throws {
+-        let text = "1\n00:00:00,000 --> 00:00:01,000\nHello\n2\n00:00:02,000 --> 00:00:03,000\nWorld\n"
+-        let cues = try SubtitleReader.parse(text, format: .srt)
+-        print("AUDIT04 adjacent_srt_cues_retained=\(cues.count)/2")
+-        #expect(cues.map(\.text) == ["Hello", "World"])
+-    }
+-
+     @Test func decodesVietnameseWindows1258ToneMarks() throws {
+         // Windows-1258 Viê + COMBINING DOT BELOW + t.
+         #expect(SubtitleReader.decode(Data([86, 105, 234, 242, 116])) == "Việt")
+diff --git a/Tests/CueTests/SubtitleWriterTests.swift b/Tests/CueTests/SubtitleWriterTests.swift
+index 901dd4b..ba37a32 100644
+--- a/Tests/CueTests/SubtitleWriterTests.swift
++++ b/Tests/CueTests/SubtitleWriterTests.swift
+@@ -10,12 +10,6 @@ private func makeTempDirectory() throws -> URL {
+ }
+ 
+ struct SubtitleWriterTests {
+-    @Test func plainPreviewDecodesEntitiesOnceAndPreservesLiteralAngleBrackets() {
+-        #expect(SubtitleWriter.plainCueText("2 < 3 &amp;lt; &#x1F600;") == "2 < 3 &lt; 😀")
+-        #expect(SubtitleWriter.plainCueText("<c.green>Việt</c><00:01.000> Nam") == "Việt Nam")
+-        #expect(SubtitleWriter.plainCueText("&#xD800; &unknown;") == "&#xD800; &unknown;")
+-    }
+-
+     // A blank line inside a cue terminates it in every SRT parser, so embedded
+     // newline runs from LLM translations must be collapsed.
+     @Test func srtCollapsesBlankLinesInsideCueText() throws {

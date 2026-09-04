@@ -87,6 +87,30 @@ struct AppModelHydrationTests {
         return ids
     }
 
+    @Test func isolatedModelUsesItsInjectedWatchLedger() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        let firstPath = fixture.baseURL.appendingPathComponent("first").path
+        let secondPath = fixture.baseURL.appendingPathComponent("second").path
+        var folder = WatchFolder(path: firstPath)
+        folder.enabled = false
+        fixture.settings.watchFolders = [folder]
+        let ledgerRoot = fixture.baseURL.appendingPathComponent("isolated-ledger")
+        let ledger = WatchFolderLedger(baseURL: ledgerRoot)
+        let first = firstPath + "/a.mp4|1|1"
+        let second = secondPath + "/b.mp4|1|1"
+        ledger.record(first, outcome: .success)
+        ledger.record(second, outcome: .success)
+        let model = AppModel(settings: fixture.settings, jobStore: JobStore(baseURL: fixture.baseURL),
+            watchLedger: ledger, diagnosticsService: EmptyHydrationDiagnostics())
+        await model.hydration()
+        model.clearWatchHistory(for: folder.id)
+        model.flushPendingWork()
+        let reloaded = WatchFolderLedger(baseURL: ledgerRoot)
+        #expect(!reloaded.contains(first))
+        #expect(reloaded.contains(second))
+    }
+
     @Test func jobsAddedDuringHydrationStayOnTopAndAreNotDuplicated() async throws {
         let fixture = try makeFixture()
         defer { fixture.cleanUp() }

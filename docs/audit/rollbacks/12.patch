@@ -1,0 +1,359 @@
+diff --git a/Sources/Services/BurnInService.swift b/Sources/Services/BurnInService.swift
+index 4aa75a7..2a1701d 100644
+--- a/Sources/Services/BurnInService.swift
++++ b/Sources/Services/BurnInService.swift
+@@ -124,41 +124,30 @@ struct BurnInService {
+ 
+     /// Runs a command via /usr/bin/env with tool paths; nil if launch fails
+     /// or it exits non-zero.
+-    static func runCapturingOutput(arguments: [String], timeout: Duration = .seconds(10)) async -> String? {
+-        let box = ProcessBox(killGrace: 0.25)
+-        let stdout = PipeCollector()
+-        let stderr = PipeCollector(retainsData: false)
+-        defer { stdout.close(); stderr.close() }
+-        return await withTaskCancellationHandler {
+-            guard !Task.isCancelled else { return nil }
+-            let process = Process()
+-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+-            process.environment = ProcessEnvironment.withToolPaths()
+-            process.arguments = arguments
+-            process.standardOutput = stdout.pipe
+-            process.standardError = stderr.pipe
+-            box.process = process
+-            do { try process.run() } catch { return nil }
+-            if Task.isCancelled { box.terminate() }
+-            return await withTaskGroup(of: String?.self) { group in
+-                group.addTask {
+-                    let status = await process.waitForTermination()
+-                    await stdout.waitForEOF()
+-                    await stderr.waitForEOF()
+-                    return status == 0 && !Task.isCancelled ? stdout.text() : nil
++    private static func runCapturingOutput(arguments: [String]) async -> String? {
++        await withCheckedContinuation { continuation in
++            DispatchQueue.global(qos: .userInitiated).async {
++                let process = Process()
++                process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
++                process.environment = ProcessEnvironment.withToolPaths()
++                process.arguments = arguments
++                let pipe = Pipe()
++                process.standardOutput = pipe
++                process.standardError = Pipe()
++                do {
++                    try process.run()
++                } catch {
++                    continuation.resume(returning: nil)
++                    return
+                 }
+-                group.addTask {
+-                    do { try await Task.sleep(for: timeout) }
+-                    catch { return nil }
+-                    box.terminate()
+-                    return nil
++                let data = pipe.fileHandleForReading.readDataToEndOfFile()
++                process.waitUntilExit()
++                guard process.terminationStatus == 0 else {
++                    continuation.resume(returning: nil)
++                    return
+                 }
+-                let output = await group.next() ?? nil
+-                group.cancelAll()
+-                return output
++                continuation.resume(returning: String(decoding: data, as: UTF8.self))
+             }
+-        } onCancel: {
+-            box.terminate()
+         }
+     }
+ 
+diff --git a/Sources/Services/PythonWorkerPool.swift b/Sources/Services/PythonWorkerPool.swift
+index b556141..b76d8d4 100644
+--- a/Sources/Services/PythonWorkerPool.swift
++++ b/Sources/Services/PythonWorkerPool.swift
+@@ -127,18 +127,6 @@ actor PythonWorkerPool {
+         private let lock = NSLock()
+         private var eventSink: (@Sendable (TranscriptionStreamEvent) -> Void)?
+         private var errorLines: [String] = []
+-        private var pendingResults: [ServeEnvelope] = []
+-
+-        func recordResult(_ envelope: ServeEnvelope) {
+-            lock.withLock { pendingResults.append(envelope) }
+-        }
+-
+-        func takeResults() -> [ServeEnvelope] {
+-            lock.withLock {
+-                defer { pendingResults.removeAll() }
+-                return pendingResults
+-            }
+-        }
+         private static let maxErrorLines = 200
+ 
+         init(key: WorkerKey, process: Process, stdin: FileHandle) {
+@@ -319,11 +307,6 @@ actor PythonWorkerPool {
+         process.environment = environment
+ 
+         let stdinPipe = Pipe()
+-        // A worker may exit between isRunning and a request/shutdown write.
+-        // Turn a broken pipe into a catchable write error, not app-wide SIGPIPE.
+-        guard fcntl(stdinPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else {
+-            throw TranscriptionServiceError.pythonFailed("Could not configure the transcription helper input pipe.")
+-        }
+         process.standardInput = stdinPipe
+         // stdout carries nothing in --serve mode; stray library prints are
+         // discarded rather than accumulated for the worker's lifetime.
+@@ -333,8 +316,7 @@ actor PythonWorkerPool {
+         let stderr = PipeCollector(retainsData: false) { [weak self, weak worker] line in
+             guard let worker else { return }
+             if let envelope = ServeEnvelope.decode(line) {
+-                worker.recordResult(envelope)
+-                Task { await self?.drainResults(from: worker) }
++                Task { await self?.complete(envelope, from: worker) }
+                 return
+             }
+             if let event = TranscriptionStreamEvent.decode(line) {
+@@ -373,10 +355,6 @@ actor PythonWorkerPool {
+         }
+     }
+ 
+-    private func drainResults(from worker: Worker) {
+-        for envelope in worker.takeResults() { complete(envelope, from: worker) }
+-    }
+-
+     private func complete(_ envelope: ServeEnvelope, from worker: Worker) {
+         guard worker === self.worker, let job = activeJob, envelope.id == job.id else { return }
+         if envelope.event == "result", let backend = envelope.backend, let segments = envelope.segments {
+@@ -389,18 +367,17 @@ actor PythonWorkerPool {
+ 
+     private func workerExited(_ exited: Worker?, status: Int32) async {
+         guard let exited, exited === worker else { return }
+-        let job = activeJob
+-        // Keep the identity until all final lines have been received. Results
+-        // are recorded synchronously by the pipe before its EOF notification,
+-        // so this drain does not depend on the scheduling order of actor tasks.
+-        if let collector = exited.stderrCollector {
+-            await Self.waitForEOF(of: collector, timeout: .seconds(2))
+-        }
+-        guard exited === worker else { return }
+-        drainResults(from: exited)
+         worker = nil
+         liveProcess.process = nil
+-        if let job, activeJob === job {
++        if let job = activeJob {
++            // The exit notification and the last stderr lines arrive on
++            // different queues; let the pipe drain (bounded, in case a
++            // grandchild still holds it open) so the failure message carries
++            // the helper's own words, as the one-shot path guaranteed.
++            if let collector = exited.stderrCollector {
++                await Self.waitForEOF(of: collector, timeout: .seconds(2))
++            }
++            guard activeJob === job else { return }
+             let text = exited.errorText
+             finish(
+                 job,
+diff --git a/Sources/Support/PipeCollector.swift b/Sources/Support/PipeCollector.swift
+index ee14a02..d249419 100644
+--- a/Sources/Support/PipeCollector.swift
++++ b/Sources/Support/PipeCollector.swift
+@@ -23,7 +23,7 @@ final class PipeCollector: @unchecked Sendable {
+     /// only needs its lines delivered; retaining them would grow forever.
+     private let retainsData: Bool
+     private var didReachEOF = false
+-    private var eofContinuations: [UUID: CheckedContinuation<Void, Never>] = [:]
++    private var eofContinuation: CheckedContinuation<Void, Never>?
+ 
+     init(retainsData: Bool = true, onLine: (@Sendable (String) -> Void)? = nil) {
+         self.onLine = onLine
+@@ -47,7 +47,6 @@ final class PipeCollector: @unchecked Sendable {
+     /// open indefinitely; callers that must not hang race this against a
+     /// timeout).
+     func waitForEOF() async {
+-        let id = UUID()
+         await withTaskCancellationHandler {
+             await withCheckedContinuation { continuation in
+                 lock.lock()
+@@ -56,32 +55,25 @@ final class PipeCollector: @unchecked Sendable {
+                     continuation.resume()
+                     return
+                 }
+-                eofContinuations[id] = continuation
++                eofContinuation = continuation
+                 lock.unlock()
+             }
+         } onCancel: {
+             lock.lock()
+-            let continuation = eofContinuations.removeValue(forKey: id)
++            let continuation = eofContinuation
++            eofContinuation = nil
+             lock.unlock()
+             continuation?.resume()
+         }
+     }
+ 
+     private func signalEOF() {
+-        lock.lock()
+-        // Deliver the unterminated final line before notifying drain waiters.
+-        // Readability callbacks are serialized on the file handle's queue.
+-        let tail = pendingData.isEmpty ? nil : String(decoding: pendingData, as: UTF8.self)
+-        pendingData.removeAll()
+-        scannedCount = 0
+-        lock.unlock()
+-        if let tail { onLine?(tail) }
+         lock.lock()
+         didReachEOF = true
+-        let continuations = Array(eofContinuations.values)
+-        eofContinuations.removeAll()
++        let continuation = eofContinuation
++        eofContinuation = nil
+         lock.unlock()
+-        continuations.forEach { $0.resume() }
++        continuation?.resume()
+     }
+ 
+     func data() -> Data {
+diff --git a/Tests/CueTests/BurnInTests.swift b/Tests/CueTests/BurnInTests.swift
+index d81946c..e74c818 100644
+--- a/Tests/CueTests/BurnInTests.swift
++++ b/Tests/CueTests/BurnInTests.swift
+@@ -99,61 +99,3 @@ struct BurnInPreflightParsingTests {
+         #expect(!BurnInService.hasSubtitlesFilter(inFiltersOutput: ""))
+     }
+ }
+-
+-struct BurnInProcessTests {
+-    @Test func preflightDrainsFloodedStderr() async {
+-        let start = ContinuousClock.now
+-        let output = await BurnInService.runCapturingOutput(arguments: [
+-            "/usr/bin/python3", "-c",
+-            "import os, signal; signal.alarm(3); os.write(2, b'x' * 1048576); print(' subtitles ')",
+-        ])
+-        print("AUDIT12 flood_seconds=\(ContinuousClock.now - start) success=\(output != nil)")
+-        #expect(output?.contains(" subtitles ") == true)
+-    }
+-
+-    @Test func preflightCancellationStopsTheChild() async throws {
+-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+-        defer { try? FileManager.default.removeItem(at: directory) }
+-        let pidFile = directory.appendingPathComponent("pid")
+-        let task = Task {
+-            await BurnInService.runCapturingOutput(arguments: [
+-                "/usr/bin/python3", "-c",
+-                "import os, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(30)",
+-                pidFile.path,
+-            ])
+-        }
+-        let deadline = ContinuousClock.now + .seconds(5)
+-        while !FileManager.default.fileExists(atPath: pidFile.path), ContinuousClock.now < deadline {
+-            try await Task.sleep(for: .milliseconds(10))
+-        }
+-        let pid = try #require(Int32(try String(contentsOf: pidFile, encoding: .utf8)))
+-        let start = ContinuousClock.now
+-        task.cancel()
+-        #expect(await task.value == nil)
+-        #expect(ContinuousClock.now - start < .seconds(2))
+-        #expect(kill(pid, 0) == -1 && errno == ESRCH)
+-    }
+-
+-    @Test func preflightDoesNotWaitForAnInheritedPipe() async {
+-        let start = ContinuousClock.now
+-        let output = await BurnInService.runCapturingOutput(arguments: [
+-            "/usr/bin/python3", "-c",
+-            "import os, time; pid = os.fork(); time.sleep(1.5) if pid == 0 else None; os._exit(0)",
+-        ], timeout: .milliseconds(100))
+-        #expect(output == nil)
+-        #expect(ContinuousClock.now - start < .seconds(1))
+-    }
+-
+-    @Test func preflightTimeoutBoundsAnUnresponsiveChild() async {
+-        let start = ContinuousClock.now
+-        let output = await BurnInService.runCapturingOutput(arguments: [
+-            "/usr/bin/python3", "-c",
+-            "import signal, time; signal.alarm(3); signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)",
+-        ], timeout: .milliseconds(100))
+-        let elapsed = ContinuousClock.now - start
+-        print("AUDIT12 timeout_seconds=\(elapsed)")
+-        #expect(output == nil)
+-        #expect(elapsed < .seconds(2))
+-    }
+-}
+diff --git a/Tests/CueTests/PipeCollectorTests.swift b/Tests/CueTests/PipeCollectorTests.swift
+index 3a34935..a6b4e0d 100644
+--- a/Tests/CueTests/PipeCollectorTests.swift
++++ b/Tests/CueTests/PipeCollectorTests.swift
+@@ -84,32 +84,6 @@ import Testing
+         #expect(seconds < 2.0, "incremental scan took \(seconds)s")
+     }
+ 
+-    @Test func concurrentDrainWaitersAndCancellationDoNotLoseContinuations() async throws {
+-        let collector = PipeCollector()
+-        let started = Lines()
+-        let completed = Lines()
+-        let tasks = (0..<3).map { index in
+-            Task {
+-                started.append("\(index)")
+-                await collector.waitForEOF()
+-                completed.append("\(index)")
+-            }
+-        }
+-        let startedDeadline = ContinuousClock.now + .seconds(2)
+-        while started.all.count < 3 && ContinuousClock.now < startedDeadline { await Task.yield() }
+-        try await Task.sleep(for: .milliseconds(50))
+-        tasks[0].cancel()
+-        let cancelDeadline = ContinuousClock.now + .seconds(1)
+-        while completed.all.isEmpty && ContinuousClock.now < cancelDeadline { await Task.yield() }
+-        #expect(completed.all == ["0"], "Cancellation must resume only its own drain waiter")
+-        try collector.pipe.fileHandleForWriting.close()
+-        let eofDeadline = ContinuousClock.now + .seconds(2)
+-        while completed.all.count < 3 && ContinuousClock.now < eofDeadline { await Task.yield() }
+-        #expect(Set(completed.all) == Set(["0", "1", "2"]))
+-        tasks.forEach { $0.cancel() }
+-        collector.close()
+-    }
+-
+     @Test func drainsARealProcessAndReportsEOF() async throws {
+         let lines = Lines()
+         let collector = PipeCollector { lines.append($0) }
+@@ -122,7 +96,7 @@ import Testing
+         await collector.waitForEOF()
+         collector.close()
+         #expect(status == 0)
+-        #expect(lines.all == ["a", "b", "tail-without-newline"])
++        #expect(lines.all == ["a", "b"])
+         #expect(collector.text() == "a\nb\ntail-without-newline")
+     }
+ }
+diff --git a/Tests/CueTests/PythonWorkerPoolTests.swift b/Tests/CueTests/PythonWorkerPoolTests.swift
+index 9d4242f..b2776dc 100644
+--- a/Tests/CueTests/PythonWorkerPoolTests.swift
++++ b/Tests/CueTests/PythonWorkerPoolTests.swift
+@@ -39,9 +39,6 @@ import Testing
+                 continue
+             segment = {"id": 1, "start": 0.0, "end": 1.0, "text": f"job {count} pid {os.getpid()} {name}"}
+             emit({"event": "segments", "segments": [segment]})
+-            if "exit-result" in name:
+-                os.write(2, json.dumps({"event": "result", "id": job_id, "backend": "fake", "segments": [segment]}).encode())
+-                os._exit(0)
+             emit({"event": "result", "id": job_id, "backend": "fake", "segments": [segment]})
+         """
+ 
+@@ -105,21 +102,6 @@ import Testing
+         return kill(pid, 0) != 0 && errno == ESRCH
+     }
+ 
+-    @Test func finalResultSurvivesImmediateExitWithoutNewline() async throws {
+-        let harness = try makeHarness()
+-        defer { harness.cleanUp() }
+-        var successes = 0
+-        for _ in 0..<20 {
+-            do {
+-                let result = try await harness.pool.run(harness.request("exit-result.mp4")) { _ in }
+-                if result.segments.first?.text.contains("exit-result.mp4") == true { successes += 1 }
+-            } catch { }
+-            await harness.pool.shutdown()
+-        }
+-        print("AUDIT12 worker_results=\(successes)/20")
+-        #expect(successes == 20)
+-    }
+-
+     @Test func workerIsReusedAcrossJobsAndEventsStayWithTheirJob() async throws {
+         let harness = try makeHarness()
+         defer { harness.cleanUp() }

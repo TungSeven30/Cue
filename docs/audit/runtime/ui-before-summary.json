@@ -1,0 +1,43 @@
+{
+  "scope": "Debug Cue objects, synthetic workspace, new process, warm filesystem. Markers begin at SwiftUI App initialization; not cold launch or first rendered pixels.",
+  "trials": 10,
+  "viewAppearedMs": {
+    "count": 10,
+    "median": 229.83462500000002,
+    "mean": 225.54273750000002,
+    "min": 196.026375,
+    "max": 242.463917
+  },
+  "overlayModelReadyMs": {
+    "count": 10,
+    "median": 677.7278965,
+    "mean": 683.2233084,
+    "min": 652.116625,
+    "max": 720.135625
+  },
+  "idleFootprintMiB": {
+    "count": 50,
+    "median": 67.56366729736328,
+    "mean": 67.71615814208984,
+    "min": 67.21989440917969,
+    "max": 68.51679229736328
+  },
+  "playbackFootprintMiB": {
+    "count": 200,
+    "median": 71.75119018554688,
+    "mean": 71.7271189880371,
+    "min": 70.61054229736328,
+    "max": 73.50116729736328
+  },
+  "playbackCPUPercent": {
+    "count": 200,
+    "median": 7.174232300001508,
+    "mean": 7.209753130563322,
+    "min": 3.0572437295141657,
+    "max": 9.924652865825495
+  },
+  "displayMinimumRefreshInterval": 0.008333333,
+  "displayMaximumRefreshInterval": 0.041666667,
+  "droppedFrames60Hz": null,
+  "droppedFrames120Hz": null
+}

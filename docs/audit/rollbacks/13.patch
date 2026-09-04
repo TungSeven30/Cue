@@ -1,0 +1,267 @@
+diff --git a/Sources/Views/DetailView.swift b/Sources/Views/DetailView.swift
+index cfc6e1e..c4d895c 100644
+--- a/Sources/Views/DetailView.swift
++++ b/Sources/Views/DetailView.swift
+@@ -27,7 +27,6 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
+ 
+ struct DetailView: View {
+     @ObservedObject var model: AppModel
+-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+     @ObservedObject var playerController: PlayerController
+     @State private var tab: WorkspaceTab = .transcript
+     @AppStorage("followPlayback") private var followPlayback = true
+@@ -62,10 +61,7 @@ struct DetailView: View {
+             }
+             return added > 0
+         }
+-        .onAppear {
+-            playerHeight = PreviewHeightControl.clamped(playerHeight)
+-            syncPlayer()
+-        }
++        .onAppear { syncPlayer() }
+         .onChange(of: model.selectedJobID) { syncPlayer() }
+         .onChange(of: model.isPlayerVisible) { syncPlayer() }
+         .onChange(of: tab) { syncOverlaySegments() }
+@@ -128,20 +124,12 @@ struct DetailView: View {
+                     .padding(.horizontal, 20)
+                     .padding(.top, 12)
+                 PlayerPane(controller: playerController)
+-                    .frame(height: PreviewHeightControl.clamped(playerHeight))
++                    .frame(height: playerHeight)
+                     .padding(.horizontal, 20)
+                     .padding(.top, 10)
+ 
+-                HStack(spacing: 8) {
+-                    playerResizeHandle
+-                    Text("Preview size")
+-                        .font(.caption)
+-                        .foregroundStyle(.secondary)
+-                    PreviewHeightControl(height: $playerHeight)
+-                        .frame(width: 24, height: 28)
+-                }
+-                .padding(.horizontal, 20)
+-                .padding(.bottom, 2)
++                playerResizeHandle
++                    .padding(.bottom, 2)
+             } else {
+                 HeaderCard(model: model)
+                     .padding(20)
+@@ -173,7 +161,6 @@ struct DetailView: View {
+                 }
+                 .opacity(0)
+                 .allowsHitTesting(false)
+-                .accessibilityHidden(true)
+             }
+ 
+             Divider()
+@@ -188,11 +175,11 @@ struct DetailView: View {
+             .fill(.tertiary)
+             .frame(width: 44, height: 5)
+             .frame(maxWidth: .infinity)
+-            .padding(.vertical, 11.5)
++            .padding(.vertical, 4)
+             .contentShape(Rectangle())
+-            // The adjacent native stepper exposes this operation to assistive
+-            // technologies; the pointer-only drag affordance is redundant.
+-            .accessibilityHidden(true)
++            .accessibilityElement()
++            .accessibilityLabel("Resize video preview")
++            .accessibilityValue("\(Int(playerHeight)) points")
+             .onHover { inside in
+                 isHoveringResizeHandle = inside
+                 if inside {
+@@ -348,7 +335,7 @@ struct DetailView: View {
+             }
+             .onChange(of: playerController.activeSegmentID) { _, newID in
+                 guard followPlayback, model.isPlayerVisible, let newID else { return }
+-                withTransaction(TranscriptMotion.followTransaction(reduceMotion: reduceMotion)) {
++                withAnimation(.easeInOut(duration: 0.2)) {
+                     proxy.scrollTo(newID, anchor: .center)
+                 }
+             }
+@@ -1113,7 +1100,6 @@ private struct WelcomeWorkspaceView: View {
+ // MARK: - Skeletons & Queued Placeholders
+ 
+ private struct TranscriptLoadingSkeletonView: View {
+-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+     let title: String
+     let detail: String
+     var fraction: Double? = nil
+@@ -1156,8 +1142,8 @@ private struct TranscriptLoadingSkeletonView: View {
+                         skeletonRow(index: index)
+                     }
+                 }
+-                .opacity(reduceMotion ? 0.65 : (isShimmering ? 0.35 : 0.85))
+-                .animation(reduceMotion ? nil : .easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: isShimmering)
++                .opacity(isShimmering ? 0.35 : 0.85)
++                .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: isShimmering)
+             }
+             .padding(20)
+         }
+diff --git a/Sources/Views/PreviewHeightControl.swift b/Sources/Views/PreviewHeightControl.swift
+deleted file mode 100644
+index b0b1e77..0000000
+--- a/Sources/Views/PreviewHeightControl.swift
++++ /dev/null
+@@ -1,75 +0,0 @@
+-import AppKit
+-import SwiftUI
+-
+-/// Native stepper provides a focus ring and a keyboard/VoiceOver alternative
+-/// to the preview's drag handle. Height remains stored in the existing key.
+-struct PreviewHeightControl: NSViewRepresentable {
+-    @Binding var height: Double
+-
+-    static func clamped(_ value: Double) -> Double {
+-        value.isFinite ? min(640, max(140, value)) : 280
+-    }
+-
+-    func makeNSView(context: Context) -> Control { Control() }
+-
+-    func updateNSView(_ control: Control, context: Context) {
+-        control.doubleValue = Self.clamped(height)
+-        control.onChange = { height = $0 }
+-    }
+-
+-    final class Control: NSStepper {
+-        var onChange: ((Double) -> Void)?
+-
+-        init() {
+-            super.init(frame: NSRect(x: 0, y: 0, width: 24, height: 28))
+-            minValue = 140
+-            maxValue = 640
+-            increment = 20
+-            valueWraps = false
+-            doubleValue = 280
+-            target = self
+-            action = #selector(valueChanged)
+-            setAccessibilityElement(true)
+-            setAccessibilityRole(.incrementor)
+-            setAccessibilityLabel("Video preview height")
+-            toolTip = "Resize the video preview. Use Up or Down when focused."
+-        }
+-
+-        required init?(coder: NSCoder) { nil }
+-
+-        @objc private func valueChanged() { onChange?(doubleValue) }
+-
+-        private func adjust(by delta: Double) {
+-            doubleValue = PreviewHeightControl.clamped(doubleValue + delta)
+-            valueChanged()
+-            NSAccessibility.post(element: self, notification: .valueChanged)
+-        }
+-
+-        override func accessibilityValue() -> Any? { doubleValue }
+-        override func accessibilityPerformIncrement() -> Bool { adjust(by: increment); return true }
+-        override func accessibilityPerformDecrement() -> Bool { adjust(by: -increment); return true }
+-
+-        override func mouseDown(with event: NSEvent) {
+-            super.mouseDown(with: event)
+-            // AppKit steppers do not retain keyboard focus after a mouse click
+-            // by default; make the advertised arrow-key alternative reachable.
+-            window?.makeFirstResponder(self)
+-        }
+-
+-        override func keyDown(with event: NSEvent) {
+-            switch event.keyCode {
+-            case 126: adjust(by: increment)
+-            case 125: adjust(by: -increment)
+-            default: super.keyDown(with: event)
+-            }
+-        }
+-    }
+-}
+-
+-enum TranscriptMotion {
+-    static func followTransaction(reduceMotion: Bool) -> Transaction {
+-        var transaction = Transaction(animation: reduceMotion ? nil : .easeInOut(duration: 0.2))
+-        transaction.disablesAnimations = reduceMotion
+-        return transaction
+-    }
+-}
+diff --git a/Sources/Views/SidebarView.swift b/Sources/Views/SidebarView.swift
+index 0719265..a6536d2 100644
+--- a/Sources/Views/SidebarView.swift
++++ b/Sources/Views/SidebarView.swift
+@@ -1043,7 +1043,7 @@ private struct JobFilterChip: View {
+     let action: () -> Void
+ 
+     var body: some View {
+-        Toggle(isOn: Binding(get: { isSelected }, set: { _ in action() })) {
++        Button(action: action) {
+             HStack(spacing: 4) {
+                 Text(label)
+                 Text("\(count)")
+@@ -1051,10 +1051,15 @@ private struct JobFilterChip: View {
+                     .opacity(0.8)
+             }
+             .font(.caption)
+-
++            .padding(.horizontal, 8)
++            .padding(.vertical, 4)
++            .foregroundStyle(isSelected ? Color.white : Color.primary)
++            .background(
++                isSelected ? Color.accentColor : Color.secondary.opacity(0.14),
++                in: Capsule()
++            )
+         }
+-        .toggleStyle(.button)
+-        .controlSize(.small)
++        .buttonStyle(.plain)
+         .accessibilityLabel("\(label), \(count) jobs")
+         .accessibilityAddTraits(isSelected ? .isSelected : [])
+     }
+diff --git a/Tests/CueTests/PreviewAccessibilityTests.swift b/Tests/CueTests/PreviewAccessibilityTests.swift
+deleted file mode 100644
+index 37c0e17..0000000
+--- a/Tests/CueTests/PreviewAccessibilityTests.swift
++++ /dev/null
+@@ -1,48 +0,0 @@
+-import AppKit
+-import SwiftUI
+-import Testing
+-@testable import Cue
+-
+-@MainActor
+-struct PreviewAccessibilityTests {
+-    @Test func nativeResizeControlSupportsVoiceOverAndKeyboard() throws {
+-        _ = NSApplication.shared
+-        let control = PreviewHeightControl.Control()
+-        var changes: [Double] = []
+-        control.onChange = { changes.append($0) }
+-        #expect(control.accessibilityRole() == .incrementor)
+-        #expect(control.accessibilityLabel() == "Video preview height")
+-        #expect(control.acceptsFirstResponder)
+-        #expect(control.accessibilityPerformIncrement())
+-        #expect(control.doubleValue == 300)
+-        #expect(control.accessibilityPerformDecrement())
+-        #expect(control.doubleValue == 280)
+-        let up = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+-            windowNumber: 0, context: nil, characters: "\u{F700}", charactersIgnoringModifiers: "\u{F700}", isARepeat: false, keyCode: 126))
+-        control.keyDown(with: up)
+-        #expect(control.doubleValue == 300)
+-        #expect(changes == [300, 280, 300])
+-        #expect(control.frame.width >= 20 && control.frame.height >= 20)
+-        for _ in 0..<100 { _ = control.accessibilityPerformIncrement() }
+-        #expect(control.doubleValue == 640)
+-        for _ in 0..<100 { _ = control.accessibilityPerformDecrement() }
+-        #expect(control.doubleValue == 140)
+-    }
+-
+-    @Test func corruptSavedHeightCannotBecomeInvalidLayout() {
+-        #expect(PreviewHeightControl.clamped(.nan) == 280)
+-        #expect(PreviewHeightControl.clamped(.infinity) == 280)
+-        #expect(PreviewHeightControl.clamped(-1) == 140)
+-        #expect(PreviewHeightControl.clamped(900) == 640)
+-        #expect(PreviewHeightControl.clamped(321) == 321)
+-    }
+-
+-    @Test func reducedMotionDisablesInheritedFollowAnimations() {
+-        let reduced = TranscriptMotion.followTransaction(reduceMotion: true)
+-        #expect(reduced.animation == nil)
+-        #expect(reduced.disablesAnimations)
+-        let normal = TranscriptMotion.followTransaction(reduceMotion: false)
+-        #expect(normal.animation != nil)
+-        #expect(!normal.disablesAnimations)
+-    }
+-}

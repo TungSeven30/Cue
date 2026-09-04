@@ -1,0 +1,118 @@
+diff --git a/Sources/Stores/AppModel.swift b/Sources/Stores/AppModel.swift
+index 71f3f0e..e91d8ac 100644
+--- a/Sources/Stores/AppModel.swift
++++ b/Sources/Stores/AppModel.swift
+@@ -2566,10 +2566,7 @@ final class AppModel: ObservableObject {
+     }
+ 
+     func canApplySubtitleLoad(_ request: SubtitleLoadRequest, to slot: SubtitleSidecarScanner.Slot) -> Bool {
+-        guard let id = request.jobID, id == selectedJobID,
+-            let job = self.job(withID: id), job.sourcePath == request.sourcePath,
+-            job.updatedAt == request.updatedAt, !job.status.isRunning, !isJobActive(id)
+-        else { return false }
++        guard let job = currentJob else { return false }
+         return slot == .transcript || !job.transcriptSegments.isEmpty
+     }
+ 
+@@ -2618,7 +2615,7 @@ final class AppModel: ObservableObject {
+         _ request: SubtitleLoadRequest, to slot: SubtitleSidecarScanner.Slot,
+         beforeBackup: @escaping @Sendable () -> Void = {}
+     ) async {
+-        guard !isApplyingSubtitleLoad, canApplySubtitleLoad(request, to: slot), let id = request.jobID,
++        guard !isApplyingSubtitleLoad, let id = selectedJobID,
+             let job = self.job(withID: id)
+         else { return }
+         let segments: [TranscriptionSegment]
+@@ -2635,7 +2632,6 @@ final class AppModel: ObservableObject {
+         if !existing.isEmpty, !confirmReplacingSegments(slot: slot) { return }
+         // Both confirmation and disk I/O can let the queue or selection move.
+         // Keep the sheet busy, perform the backup off-main, then revalidate.
+-        guard canApplySubtitleLoad(request, to: slot) else { return }
+         isApplyingSubtitleLoad = true
+         defer { isApplyingSubtitleLoad = false }
+         let document = request.document
+@@ -2647,7 +2643,10 @@ final class AppModel: ObservableObject {
+             guard source.matchesFileOnDisk() else { return nil }
+             return source
+         }.value
+-        guard let source = preparedSource, canApplySubtitleLoad(request, to: slot) else { return }
++        // Retain item 11's validation across its asynchronous backup only.
++        guard let source = preparedSource, selectedJobID == id,
++            self.job(withID: id)?.updatedAt == job.updatedAt
++        else { return }
+         // A queued write for the slot being replaced would otherwise fire at
+         // the newly loaded file moments later, rewriting it with renumbered
+         // ids and normalized timestamps without the user editing anything.
+diff --git a/Sources/Views/SubtitleSlotPickerView.swift b/Sources/Views/SubtitleSlotPickerView.swift
+index 0731ea2..de938c3 100644
+--- a/Sources/Views/SubtitleSlotPickerView.swift
++++ b/Sources/Views/SubtitleSlotPickerView.swift
+@@ -43,7 +43,6 @@ struct SubtitleSlotPickerView: View {
+                     )
+                 }
+                 .buttonStyle(.plain)
+-                .disabled(!model.canApplySubtitleLoad(request, to: .transcript))
+ 
+                 Button {
+                     Task { await model.applySubtitleLoad(request, to: .translation) }
+@@ -83,7 +82,7 @@ struct SubtitleSlotPickerView: View {
+                     )
+                 }
+                 .buttonStyle(.plain)
+-                .disabled(!model.canApplySubtitleLoad(request, to: .translation))
++                .disabled(!model.canLoadTranslationSubtitles)
+             }
+ 
+             HStack {
+diff --git a/Tests/CueTests/AppModelSubtitleImportTests.swift b/Tests/CueTests/AppModelSubtitleImportTests.swift
+index e8477cc..2795f55 100644
+--- a/Tests/CueTests/AppModelSubtitleImportTests.swift
++++ b/Tests/CueTests/AppModelSubtitleImportTests.swift
+@@ -733,47 +733,6 @@ struct AppModelSubtitleImportTests {
+         #expect(job.log.contains("Loaded subtitles from elsewhere.srt (2 cues)."))
+     }
+ 
+-    @Test func subtitlePickerCannotApplyToAnotherSelectedJob() async throws {
+-        let fixture = try await makeFixture(sidecars: [])
+-        defer { fixture.cleanUp() }
+-        let model = fixture.model
+-        let second = fixture.baseURL.appendingPathComponent("second.mp4")
+-        try Data("media".utf8).write(to: second)
+-        model.addVideos(urls: [fixture.mediaURL, second])
+-        for job in model.jobs { try await waitForAdoption(model, jobID: job.id) }
+-        let first = try #require(model.currentJob)
+-        let url = fixture.baseURL.appendingPathComponent("manual.srt")
+-        try Data(Self.srt.utf8).write(to: url)
+-        let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+-        let request = AppModel.SubtitleLoadRequest(id: UUID(), document: document, job: first)
+-        model.selectJob(try #require(model.jobs.first(where: { $0.id != first.id })?.id))
+-        await model.applySubtitleLoad(request, to: .transcript)
+-        print("AUDIT08 wrong_job_cues=\(model.currentJob?.transcriptSegments.count ?? -1)")
+-        #expect(model.jobs.allSatisfy { $0.transcriptSegments.isEmpty })
+-    }
+-
+-    @Test func subtitlePickerCannotOverwriteAJobThatStartedOrChanged() async throws {
+-        let fixture = try await makeFixture(sidecars: [])
+-        defer { fixture.cleanUp() }
+-        let model = fixture.model
+-        model.addVideos(urls: [fixture.mediaURL])
+-        let id = try #require(model.currentJob?.id)
+-        try await waitForAdoption(model, jobID: id)
+-        let url = fixture.baseURL.appendingPathComponent("manual.srt")
+-        try Data(Self.srt.utf8).write(to: url)
+-        let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+-        let request = AppModel.SubtitleLoadRequest(id: UUID(), document: document, job: model.currentJob)
+-        model.jobs[0].status = .transcribing
+-        await model.applySubtitleLoad(request, to: .transcript)
+-        print("AUDIT08 running_job_cues=\(model.jobs[0].transcriptSegments.count)")
+-        #expect(model.jobs[0].transcriptSegments.isEmpty)
+-        model.jobs[0].status = .idle
+-        model.jobs[0].transcriptSegments = []
+-        model.jobs[0].updatedAt = Date().addingTimeInterval(1)
+-        await model.applySubtitleLoad(request, to: .transcript)
+-        #expect(model.jobs[0].transcriptSegments.isEmpty)
+-    }
+-
+     @Test func manualTranscriptLoadInvalidatesEarlierDerivedContent() async throws {
+         let fixture = try await makeFixture(sidecars: [])
+         defer { fixture.cleanUp() }

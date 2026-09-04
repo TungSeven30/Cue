@@ -1,0 +1,101 @@
+diff --git a/Sources/Models/TranscriptionJob.swift b/Sources/Models/TranscriptionJob.swift
+index 2b64541..192d061 100644
+--- a/Sources/Models/TranscriptionJob.swift
++++ b/Sources/Models/TranscriptionJob.swift
+@@ -41,44 +41,6 @@ struct ImportedSubtitleSource: Codable, Hashable {
+         self.lastSyncError = nil
+     }
+ 
+-    private enum CodingKeys: String, CodingKey {
+-        case path, importedAt, format, fileSize, modifiedAt, didBackup, syncPaused, lastSyncError
+-        case modifiedAtReferenceSeconds
+-    }
+-
+-    init(from decoder: Decoder) throws {
+-        let values = try decoder.container(keyedBy: CodingKeys.self)
+-        path = try values.decode(String.self, forKey: .path)
+-        importedAt = try values.decode(Date.self, forKey: .importedAt)
+-        format = try values.decode(SubtitleExportFormat.self, forKey: .format)
+-        fileSize = try values.decode(Int.self, forKey: .fileSize)
+-        modifiedAt = try values.decode(Date.self, forKey: .modifiedAt)
+-        if let precise = try values.decodeIfPresent(Double.self, forKey: .modifiedAtReferenceSeconds) {
+-            guard precise.isFinite else {
+-                throw DecodingError.dataCorruptedError(forKey: .modifiedAtReferenceSeconds, in: values, debugDescription: "Invalid subtitle modification time")
+-            }
+-            modifiedAt = Date(timeIntervalSinceReferenceDate: precise)
+-        }
+-        didBackup = try values.decode(Bool.self, forKey: .didBackup)
+-        syncPaused = try values.decode(Bool.self, forKey: .syncPaused)
+-        lastSyncError = try values.decodeIfPresent(String.self, forKey: .lastSyncError)
+-    }
+-
+-    func encode(to encoder: Encoder) throws {
+-        var values = encoder.container(keyedBy: CodingKeys.self)
+-        try values.encode(path, forKey: .path)
+-        try values.encode(importedAt, forKey: .importedAt)
+-        try values.encode(format, forKey: .format)
+-        try values.encode(fileSize, forKey: .fileSize)
+-        // Keep the original date field for older readers. JobStore's ISO-8601
+-        // strategy drops fractions, so retain full precision in an optional key.
+-        try values.encode(modifiedAt, forKey: .modifiedAt)
+-        try values.encode(modifiedAt.timeIntervalSinceReferenceDate, forKey: .modifiedAtReferenceSeconds)
+-        try values.encode(didBackup, forKey: .didBackup)
+-        try values.encode(syncPaused, forKey: .syncPaused)
+-        try values.encodeIfPresent(lastSyncError, forKey: .lastSyncError)
+-    }
+-
+     /// True when the file on disk is byte-count and mtime identical to what we
+     /// recorded. A missing file reads as changed.
+     func matchesFileOnDisk() -> Bool {
+diff --git a/Tests/CueTests/ImportedSubtitleSourceTests.swift b/Tests/CueTests/ImportedSubtitleSourceTests.swift
+index 3c9e9a9..38be799 100644
+--- a/Tests/CueTests/ImportedSubtitleSourceTests.swift
++++ b/Tests/CueTests/ImportedSubtitleSourceTests.swift
+@@ -4,17 +4,6 @@ import Testing
+ @testable import Cue
+ 
+ struct ImportedSubtitleSourceTests {
+-    @Test func preciseDatesDoNotLoseBitsThroughEpochConversion() throws {
+-        let url = try makeFile("subtitle")
+-        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+-        var source = try #require(ImportedSubtitleSource(url: url, format: .srt))
+-        for index in 0..<100 {
+-            source.modifiedAt = Date(timeIntervalSinceReferenceDate: Double(index) + 0.123456789)
+-            let data = try JSONEncoder().encode(source)
+-            #expect(try JSONDecoder().decode(ImportedSubtitleSource.self, from: data).modifiedAt == source.modifiedAt)
+-        }
+-    }
+-
+     private func makeFile(_ contents: String) throws -> URL {
+         let dir = FileManager.default.temporaryDirectory
+             .appendingPathComponent("cue-provenance-\(UUID().uuidString)")
+diff --git a/Tests/CueTests/JobStoreTests.swift b/Tests/CueTests/JobStoreTests.swift
+index d55ad71..5f1754e 100644
+--- a/Tests/CueTests/JobStoreTests.swift
++++ b/Tests/CueTests/JobStoreTests.swift
+@@ -119,25 +119,6 @@ struct JobStoreTests {
+         print("AUDIT06 validated_job_payloads=\(snapshots.reduce(0) { $0 + $1.jobs.count })/1600")
+     }
+ 
+-    @Test func fractionalSubtitleModificationTimeSurvivesTheRealStore() throws {
+-        defer { cleanUp() }
+-        let subtitle = baseURL.appendingPathComponent("timing.vi.srt")
+-        try Data("1\n00:00:00,000 --> 00:00:01,000\nViệt\n".utf8).write(to: subtitle)
+-        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_720_000_000.765432)], ofItemAtPath: subtitle.path)
+-        var job = try makeJob(status: .transcriptionComplete)
+-        let source = try #require(ImportedSubtitleSource(url: subtitle, format: .srt))
+-        job.importedTranscriptSource = source
+-        let store = JobStore(baseURL: baseURL)
+-        store.saveJob(job)
+-        store.flush()
+-        let reloaded = try #require(store.loadJobs().first?.importedTranscriptSource)
+-        print("AUDIT07 mtime_roundtrip_error_seconds=\(abs(reloaded.modifiedAt.timeIntervalSince(source.modifiedAt))) unchanged_file_matches=\(reloaded.matchesFileOnDisk())")
+-        #expect(reloaded.matchesFileOnDisk())
+-        #expect(abs(reloaded.modifiedAt.timeIntervalSince(source.modifiedAt)) < 0.001)
+-        try FileManager.default.setAttributes([.modificationDate: source.modifiedAt.addingTimeInterval(0.1)], ofItemAtPath: subtitle.path)
+-        #expect(!reloaded.matchesFileOnDisk(), "Same-size edits within a second still need to pause sync")
+-    }
+-
+     @Test func backgroundSnapshotCollectsFailuresForTheMainActorToSurface() throws {
+         defer { cleanUp() }
+         let job = try makeJob(status: .idle)

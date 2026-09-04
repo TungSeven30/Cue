@@ -1,0 +1,90 @@
+diff --git a/Sources/Stores/AppModel.swift b/Sources/Stores/AppModel.swift
+index 71f3f0e..f3e0d46 100644
+--- a/Sources/Stores/AppModel.swift
++++ b/Sources/Stores/AppModel.swift
+@@ -23,13 +23,7 @@ final class AppModel: ObservableObject {
+     /// Every highlighted sidebar job. The detail pane continues to use
+     /// `selectedJobID` as the primary member of this selection.
+     @Published private(set) var selectedJobIDs: Set<UUID> = []
+-    @Published private(set) var selectedJobID: UUID? {
+-        didSet {
+-            guard selectedJobID != oldValue else { return }
+-            playerController.pause()
+-            if selectedJobID == nil { playerController.clear() }
+-        }
+-    }
++    @Published private(set) var selectedJobID: UUID?
+     @Published var diagnostics: [EnvironmentDiagnostic] = []
+     @Published var isRunningDiagnostics = false
+     @Published var persistenceError: String?
+diff --git a/Sources/Views/DetailView.swift b/Sources/Views/DetailView.swift
+index cfc6e1e..ec4ddb0 100644
+--- a/Sources/Views/DetailView.swift
++++ b/Sources/Views/DetailView.swift
+@@ -75,11 +75,7 @@ struct DetailView: View {
+     }
+ 
+     private func syncPlayer() {
+-        guard let url = model.selectedVideoURL else {
+-            playerController.clear()
+-            return
+-        }
+-        guard model.isPlayerVisible else { return }
++        guard model.isPlayerVisible, let url = model.selectedVideoURL else { return }
+         playerController.load(url: url)
+         syncOverlaySegments()
+     }
+diff --git a/Sources/Views/PlayerPane.swift b/Sources/Views/PlayerPane.swift
+index 606c4fb..70ea8cb 100644
+--- a/Sources/Views/PlayerPane.swift
++++ b/Sources/Views/PlayerPane.swift
+@@ -121,15 +121,6 @@ final class PlayerController: ObservableObject {
+         player.pause()
+     }
+ 
+-    func clear() {
+-        player.pause()
+-        player.replaceCurrentItem(with: nil)
+-        currentURL = nil
+-        updateSegments([])
+-        activeSegmentID = nil
+-        overlayText = ""
+-    }
+-
+     private func refresh(at time: Double) {
+         let segment = time.isFinite ? segment(at: time) : nil
+         if segment?.id != activeSegmentID {
+diff --git a/Tests/CueTests/AppModelSelectionTests.swift b/Tests/CueTests/AppModelSelectionTests.swift
+index c5d5ff6..05c8f36 100644
+--- a/Tests/CueTests/AppModelSelectionTests.swift
++++ b/Tests/CueTests/AppModelSelectionTests.swift
+@@ -14,29 +14,6 @@ private actor EmptySelectionDiagnostics: EnvironmentDiagnosing {
+ 
+ @MainActor
+ struct AppModelSelectionTests {
+-    @Test func clearingEitherSelectionAPIReleasesThePlayerAndOverlay() async throws {
+-        let fixture = try await makeFixture()
+-        defer { fixture.cleanUp() }
+-        let model = fixture.model
+-        model.addVideos(urls: [fixture.sourceURL(1)])
+-        let id = try #require(model.currentJob?.id)
+-        var retainedItems = 0
+-        for multiSelection in [false, true] {
+-            model.selectJob(id)
+-            model.playerController.load(url: fixture.sourceURL(1))
+-            model.playerController.updateSegments([TranscriptionSegment(id: 1, start: 0, end: 10, text: "Visible")])
+-            model.playerController.seek(to: 1)
+-            model.playerController.player.play()
+-            if multiSelection { model.selectJobs([]) } else { model.selectJob(nil) }
+-            if model.playerController.player.currentItem != nil { retainedItems += 1 }
+-            #expect(model.playerController.player.currentItem == nil)
+-            #expect(model.playerController.player.rate == 0)
+-            #expect(model.playerController.overlayText.isEmpty)
+-            #expect(model.playerController.activeSegmentID == nil)
+-        }
+-        print("AUDIT10 deselected_player_items_retained=\(retainedItems)/2")
+-    }
+-
+     @Test func multiSelectionKeepsOnePrimaryJobForTheDetailPane() async throws {
+         let fixture = try await makeFixture()
+         defer { fixture.cleanUp() }

@@ -1,0 +1,109 @@
+diff --git a/Sources/Services/SubtitleImporter.swift b/Sources/Services/SubtitleImporter.swift
+index a98159f..523fb43 100644
+--- a/Sources/Services/SubtitleImporter.swift
++++ b/Sources/Services/SubtitleImporter.swift
+@@ -98,10 +98,6 @@ enum SubtitleImporter {
+         }
+         let parsed = try SubtitleReader.parseDocument(decoded.text, format: format)
+         let segments = parsed.segments
+-        if decoded.requiresEncodingReview {
+-            source.syncPaused = true
+-            source.lastSyncError = "Legacy text encoding is uncertain. Review the text and export a UTF-8 copy before syncing edits."
+-        }
+         if parsed.hasUnrepresentedContent {
+             source.syncPaused = true
+             source.lastSyncError = "Some source content or formatting cannot be preserved. Export a separate copy to keep the original intact."
+diff --git a/Sources/Services/SubtitleReader.swift b/Sources/Services/SubtitleReader.swift
+index 1fd24af..b694644 100644
+--- a/Sources/Services/SubtitleReader.swift
++++ b/Sources/Services/SubtitleReader.swift
+@@ -1,4 +1,3 @@
+-import CoreFoundation
+ import Foundation
+ 
+ /// Parse-only counterpart to `SubtitleWriter`. Reads SRT and WebVTT into the
+@@ -57,8 +56,7 @@ enum SubtitleReader {
+     /// not end the attempt. Order matters: UTF-16 BOM must be checked first
+     /// (Foundation's `.utf16` decoder is lenient and will claim non-UTF-16 bytes
+     /// as valid, shadowing other encodings), then UTF-8 (the modern default),
+-    /// then Vietnamese tone-mark evidence, then Windows-1252. Legacy choices
+-    /// are ambiguous; the importer pauses write-back until explicitly reviewed.
++    /// then Windows-1252.
+     static func decode(_ data: Data) -> String? {
+         // Check for UTF-16 BOM explicitly: FF FE (LE) or FE FF (BE).
+         // Only try UTF-16 if the BOM is present; raw UTF-16 detection is too
+@@ -70,7 +68,6 @@ enum SubtitleReader {
+                 if let text = String(data: data, encoding: .utf16) {
+                     return stripBOM(text)
+                 }
+-                return nil
+             }
+         }
+ 
+@@ -79,19 +76,7 @@ enum SubtitleReader {
+             return stripBOM(text)
+         }
+ 
+-        // Windows-1258 encodes Vietnamese tones as combining marks. Decode
+-        // those sequences before CP1252 can turn them into visible Latin letters.
+-        let vietnamese = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(
+-            CFStringEncoding(CFStringEncodings.windowsVietnamese.rawValue)
+-        ))
+-        if let text = String(data: data, encoding: vietnamese),
+-            text.range(of: "[aăâeêioôơuưyAĂÂEÊIOÔƠUƯY][\\u0300\\u0301\\u0303\\u0309\\u0323]", options: .regularExpression) != nil
+-        {
+-            return text.precomposedStringWithCanonicalMapping
+-        }
+-
+-        // Preserve the existing Western fallback, but never treat it as a
+-        // confirmed encoding for automatic writes to an imported source.
++        // Fall back to the original Western decoder.
+         if let text = String(data: data, encoding: .windowsCP1252) {
+             return stripBOM(text)
+         }
+diff --git a/Tests/CueTests/SubtitleImporterTests.swift b/Tests/CueTests/SubtitleImporterTests.swift
+index a14416a..8356768 100644
+--- a/Tests/CueTests/SubtitleImporterTests.swift
++++ b/Tests/CueTests/SubtitleImporterTests.swift
+@@ -17,23 +17,6 @@ struct SubtitleImporterTests {
+         #expect(try Data(contentsOf: url) == bytes)
+     }
+ 
+-    @Test func ambiguousLegacyEncodingCannotAutomaticallyRewriteTheSource() throws {
+-        let dir = try makeFolder([])
+-        defer { try? FileManager.default.removeItem(at: dir) }
+-        let url = dir.appendingPathComponent("movie.vi.srt")
+-        var bytes = Data("1\n00:00:01,000 --> 00:00:02,000\n".utf8)
+-        bytes.append(contentsOf: [86, 105, 234, 242, 116])
+-        try bytes.write(to: url)
+-        let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+-        #expect(document.segments.first?.text == "Việt")
+-        #expect(document.source.syncPaused)
+-        #expect(document.source.lastSyncError != nil)
+-        #expect(try Data(contentsOf: url) == bytes)
+-
+-        try Data("1\n00:00:01,000 --> 00:00:02,000\nTiếng Việt\n".utf8).write(to: url)
+-        #expect(try !SubtitleImporter.importFile(at: url, backingUp: false).source.syncPaused)
+-    }
+-
+     private let srt = """
+         1
+         00:00:01,000 --> 00:00:02,000
+diff --git a/Tests/CueTests/SubtitleReaderTests.swift b/Tests/CueTests/SubtitleReaderTests.swift
+index bc20db0..6c2f33b 100644
+--- a/Tests/CueTests/SubtitleReaderTests.swift
++++ b/Tests/CueTests/SubtitleReaderTests.swift
+@@ -25,13 +25,6 @@ struct SubtitleReaderTests {
+         #expect(cues.map(\.text) == ["Hello", "World"])
+     }
+ 
+-    @Test func decodesVietnameseWindows1258ToneMarks() throws {
+-        // Windows-1258 Viê + COMBINING DOT BELOW + t.
+-        #expect(SubtitleReader.decode(Data([86, 105, 234, 242, 116])) == "Việt")
+-        #expect(SubtitleReader.decode(Data("Tiếng Việt — 日本語".utf8)) == "Tiếng Việt — 日本語")
+-        #expect(SubtitleReader.decode(Data([67, 97, 102, 233])) == "Café")
+-    }
+-
+     @Test func parsesStandardSRT() throws {
+         let srt = """
+             1

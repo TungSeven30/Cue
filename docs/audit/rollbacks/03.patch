@@ -1,0 +1,231 @@
+diff --git a/Sources/Services/ExportCoordinator.swift b/Sources/Services/ExportCoordinator.swift
+index 1dc5fdf..1e1ff04 100644
+--- a/Sources/Services/ExportCoordinator.swift
++++ b/Sources/Services/ExportCoordinator.swift
+@@ -176,8 +176,7 @@ struct ExportCoordinator {
+     static func bilingualSegments(
+         transcript: [TranscriptionSegment], translated: [TranscriptionSegment]
+     ) -> [TranscriptionSegment] {
+-        let aligned = TranslationReconciliation.alignedTranslations(translated, to: transcript)
+-        let translatedByID = Dictionary(aligned.map { ($0.id, $0.text) }, uniquingKeysWith: { first, _ in first })
++        let translatedByID = Dictionary(uniqueKeysWithValues: translated.map { ($0.id, $0.text) })
+         return transcript.map { source in
+             TranscriptionSegment(
+                 id: source.id, start: source.start, end: source.end,
+diff --git a/Sources/Services/TranslationReconciliation.swift b/Sources/Services/TranslationReconciliation.swift
+index 4c8cb2a..9e058cf 100644
+--- a/Sources/Services/TranslationReconciliation.swift
++++ b/Sources/Services/TranslationReconciliation.swift
+@@ -5,45 +5,6 @@ import Foundation
+ /// matching is by exact (start, end, text); anything that does not match is
+ /// dropped and re-translated by the completion tail call.
+ enum TranslationReconciliation {
+-    private struct TimingKey: Hashable {
+-        let start: Double
+-        let end: Double
+-
+-        init?(_ segment: TranscriptionSegment) {
+-            guard segment.start.isFinite, segment.end.isFinite,
+-                segment.start >= 0, segment.end >= segment.start,
+-                segment.end < SubtitleReader.maximumTimestampSeconds
+-            else { return nil }
+-            start = (segment.start * 1000).rounded()
+-            end = (segment.end * 1000).rounded()
+-        }
+-    }
+-
+-    /// Imported files have independently numbered IDs. Only an unambiguous
+-    /// timestamp pair at subtitle-file precision can establish correspondence.
+-    static func alignedTranslations(
+-        _ translated: [TranscriptionSegment], to source: [TranscriptionSegment]
+-    ) -> [TranscriptionSegment] {
+-        var byTiming: [TimingKey: [TranscriptionSegment]] = [:]
+-        for segment in source {
+-            guard let key = TimingKey(segment) else { continue }
+-            byTiming[key, default: []].append(segment)
+-        }
+-        var matches: [Int: [TranscriptionSegment]] = [:]
+-        for segment in translated {
+-            guard let key = TimingKey(segment), let candidates = byTiming[key], candidates.count == 1,
+-                let original = candidates.first
+-            else { continue }
+-            matches[original.id, default: []].append(TranscriptionSegment(
+-                id: original.id, start: original.start, end: original.end, text: segment.text
+-            ))
+-        }
+-        return source.compactMap { original in
+-            guard let candidates = matches[original.id], candidates.count == 1 else { return nil }
+-            return candidates.first
+-        }
+-    }
+-
+     private struct Key: Hashable {
+         let start: Double
+         let end: Double
+diff --git a/Sources/Services/TranslationService.swift b/Sources/Services/TranslationService.swift
+index 4dc7d8f..a60f51c 100644
+--- a/Sources/Services/TranslationService.swift
++++ b/Sources/Services/TranslationService.swift
+@@ -169,8 +169,7 @@ struct TranslationService: Sendable {
+             throw TranslationServiceError.missingAPIKey(provider.label)
+         }
+ 
+-        let aligned = TranslationReconciliation.alignedTranslations(existingTranslations, to: segments)
+-        var translatedByID = Dictionary(aligned.map { ($0.id, $0.text) }, uniquingKeysWith: { first, _ in first })
++        var translatedByID = Dictionary(uniqueKeysWithValues: existingTranslations.map { ($0.id, $0.text) })
+         let targetIDs = Set(segments.map(\.id))
+         translatedByID = translatedByID.filter { targetIDs.contains($0.key) }
+         let chunks = TranslationBatchPlanner.pendingChunks(
+diff --git a/Sources/Stores/AppModel.swift b/Sources/Stores/AppModel.swift
+index 71f3f0e..455ef76 100644
+--- a/Sources/Stores/AppModel.swift
++++ b/Sources/Stores/AppModel.swift
+@@ -2525,12 +2525,7 @@ final class AppModel: ObservableObject {
+             // a translation adopted without a transcript would be silently
+             // discarded by the ASR run that the empty transcript triggers.
+             if let translation = result.translation, !job.transcriptSegments.isEmpty {
+-                let aligned = TranslationReconciliation.alignedTranslations(translation.segments, to: job.transcriptSegments)
+-                guard aligned.count == translation.segments.count else {
+-                    job.log += "Could not pair \(translation.source.fileName) with the transcript: cue timings differ or are ambiguous. The file was left unchanged.\n"
+-                    return
+-                }
+-                job.translatedSegments = aligned
++                job.translatedSegments = translation.segments
+                 job.importedTranslationSource = translation.source
+                 // Both slots filled: there is no work left, so leave the
+                 // queue rather than sit there waiting to be re-translated.
+@@ -2621,16 +2616,6 @@ final class AppModel: ObservableObject {
+         guard !isApplyingSubtitleLoad, canApplySubtitleLoad(request, to: slot), let id = request.jobID,
+             let job = self.job(withID: id)
+         else { return }
+-        let segments: [TranscriptionSegment]
+-        if slot == .translation {
+-            segments = TranslationReconciliation.alignedTranslations(request.document.segments, to: job.transcriptSegments)
+-            guard segments.count == request.document.segments.count else {
+-                presentExportError("The translation's cue timings do not match this transcript unambiguously. The file has not been changed.", title: "Could Not Pair Subtitles")
+-                return
+-            }
+-        } else {
+-            segments = request.document.segments
+-        }
+         let existing = slot == .transcript ? job.transcriptSegments : job.translatedSegments
+         if !existing.isEmpty, !confirmReplacingSegments(slot: slot) { return }
+         // Both confirmation and disk I/O can let the queue or selection move.
+@@ -2652,7 +2637,6 @@ final class AppModel: ObservableObject {
+         // the newly loaded file moments later, rewriting it with renumbered
+         // ids and normalized timestamps without the user editing anything.
+         cancelSubtitleSync(jobID: id, slot: slot)
+-        if slot == .transcript { cancelSubtitleSync(jobID: id, slot: .translation) }
+         // Mirrors applyAdoption: a .queued job must stay .queued when
+         // translation is configured, or PipelineScheduler.nextTranslationJob
+         // (which only checks status/hasTranscript, not readiness) would pick
+@@ -2661,23 +2645,17 @@ final class AppModel: ObservableObject {
+         updateJob(id) { job in
+             switch slot {
+             case .transcript:
+-                job.transcriptSegments = segments
+-                job.translatedSegments = []
+-                job.partialTranslatedSegments = []
+-                job.partialTranscriptSegments = []
+-                job.importedTranslationSource = nil
+-                job.summary = nil
+-                job.transcriptionResumeThrough = 0
++                job.transcriptSegments = document.segments
+                 job.importedTranscriptSource = source
+                 let wasQueued = job.status == .queued
+                 if wasQueued {
+                     job.status = translationReady ? .queued : .transcriptionComplete
+-                } else {
++                } else if job.status == .idle || job.status == .canceled || job.status == .failed {
+                     job.status = .transcriptionComplete
+                 }
+                 job.progress = JobProgress(stage: .complete, detail: "Loaded existing subtitles.", fraction: 1)
+             case .translation:
+-                job.translatedSegments = segments
++                job.translatedSegments = document.segments
+                 job.importedTranslationSource = source
+                 job.status = .translationComplete
+             }
+diff --git a/Tests/CueTests/AppModelSubtitleImportTests.swift b/Tests/CueTests/AppModelSubtitleImportTests.swift
+index e8477cc..0e74e49 100644
+--- a/Tests/CueTests/AppModelSubtitleImportTests.swift
++++ b/Tests/CueTests/AppModelSubtitleImportTests.swift
+@@ -774,31 +774,6 @@ struct AppModelSubtitleImportTests {
+         #expect(model.jobs[0].transcriptSegments.isEmpty)
+     }
+ 
+-    @Test func manualTranscriptLoadInvalidatesEarlierDerivedContent() async throws {
+-        let fixture = try await makeFixture(sidecars: [])
+-        defer { fixture.cleanUp() }
+-        let model = fixture.model
+-        model.addVideos(urls: [fixture.mediaURL])
+-        let id = try #require(model.jobs.first?.id)
+-        try await waitForAdoption(model, jobID: id)
+-        let url = fixture.baseURL.appendingPathComponent("replacement.srt")
+-        try Data(Self.srt.utf8).write(to: url)
+-        let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+-        model.jobs[0].translatedSegments = document.segments
+-        model.jobs[0].partialTranslatedSegments = document.segments
+-        model.jobs[0].partialTranscriptSegments = document.segments
+-        model.jobs[0].summary = "Earlier summary"
+-        model.jobs[0].importedTranslationSource = document.source
+-        model.jobs[0].status = .translationComplete
+-        await model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
+-        let job = try #require(model.job(withID: id))
+-        let stale = [!job.translatedSegments.isEmpty, !job.partialTranslatedSegments.isEmpty,
+-                     !job.partialTranscriptSegments.isEmpty, job.summary != nil, job.importedTranslationSource != nil]
+-        print("AUDIT03 stale_derived_fields=\(stale.filter { $0 }.count)")
+-        #expect(stale.allSatisfy { !$0 })
+-        #expect(job.status == .transcriptionComplete)
+-    }
+-
+     @Test func translationFailureRetryPreservesTheImportedTranscript() async throws {
+         let fixture = try await makeFixture(sidecars: ["movie.ja.srt"])
+         defer { fixture.model.cancelActiveJob(); fixture.cleanUp() }
+diff --git a/Tests/CueTests/ExportCoordinatorTests.swift b/Tests/CueTests/ExportCoordinatorTests.swift
+index 78e14d9..e3426c6 100644
+--- a/Tests/CueTests/ExportCoordinatorTests.swift
++++ b/Tests/CueTests/ExportCoordinatorTests.swift
+@@ -3,18 +3,6 @@ import Testing
+ @testable import Cue
+ 
+ struct ExportCoordinatorTests {
+-    @Test func importedTranslationMissingFirstCuePairsByTimeNotRenumberedID() {
+-        let transcript = [
+-            TranscriptionSegment(id: 1, start: 0, end: 1, text: "First"),
+-            TranscriptionSegment(id: 2, start: 2, end: 3, text: "Second"),
+-        ]
+-        let translated = [TranscriptionSegment(id: 1, start: 2, end: 3, text: "Hai")]
+-        let result = ExportCoordinator.bilingualSegments(transcript: transcript, translated: translated)
+-        let expected = ["First\n", "Second\nHai"]
+-        print("AUDIT03 incorrect_bilingual_rows=\(zip(result.map(\.text), expected).filter { $0 != $1 }.count)")
+-        #expect(result.map(\.text) == expected)
+-    }
+-
+     private let segments = [TranscriptionSegment(id: 1, start: 1, end: 2, text: "Hello")]
+ 
+     @Test func multiDocumentPlanUsesStableSafeNames() {
+diff --git a/Tests/CueTests/TranslationReconciliationTests.swift b/Tests/CueTests/TranslationReconciliationTests.swift
+index b6c158f..55e989f 100644
+--- a/Tests/CueTests/TranslationReconciliationTests.swift
++++ b/Tests/CueTests/TranslationReconciliationTests.swift
+@@ -2,19 +2,6 @@ import Testing
+ @testable import Cue
+ 
+ @Suite struct TranslationReconciliationTests {
+-    @Test func independentImportsRejectResegmentedAndAmbiguousCues() {
+-        let source = [
+-            TranscriptionSegment(id: 1, start: 0, end: 1, text: "A"),
+-            TranscriptionSegment(id: 2, start: 2, end: 3, text: "B"),
+-        ]
+-        let partial = [TranscriptionSegment(id: 1, start: 2, end: 3, text: "Hai")]
+-        #expect(TranslationReconciliation.alignedTranslations(partial, to: source).map(\.id) == [2])
+-        let merged = [TranscriptionSegment(id: 1, start: 0, end: 3, text: "Merged")]
+-        #expect(TranslationReconciliation.alignedTranslations(merged, to: source).isEmpty)
+-        #expect(TranslationReconciliation.alignedTranslations(partial + partial, to: source).isEmpty)
+-        #expect(TranslationReconciliation.alignedTranslations(partial, to: source + source).isEmpty)
+-    }
+-
+     @Test func remapsExactMatchesOntoFinalIDs() {
+         let streamed = [
+             TranscriptionSegment(id: 5, start: 0.0, end: 2.0, text: "hola"),

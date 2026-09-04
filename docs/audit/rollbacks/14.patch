@@ -1,0 +1,342 @@
+diff --git a/Sources/Stores/AppModel.swift b/Sources/Stores/AppModel.swift
+index 71f3f0e..34a859e 100644
+--- a/Sources/Stores/AppModel.swift
++++ b/Sources/Stores/AppModel.swift
+@@ -88,7 +88,7 @@ final class AppModel: ObservableObject {
+     /// Memoised quality warnings for the displayed transcript/translation;
+     /// see SubtitleWarningCache for why per-render recomputation was O(n²).
+     private let warningCache = SubtitleWarningCache()
+-    private let watchLedger: WatchFolderLedger
++    private let watchLedger = WatchFolderLedger()
+     private lazy var watchCoordinator = WatchFolderCoordinator(
+         makeService: { [weak self] id in
+             self?.makeWatchService(folderID: id) ?? WatchFolderService()
+@@ -155,19 +155,17 @@ final class AppModel: ObservableObject {
+         settings: AppSettingsStore? = nil,
+         jobStore: JobStore? = nil,
+         jobRepository: JobRepository? = nil,
+-        watchLedger: WatchFolderLedger? = nil,
+         diagnosticsService: any EnvironmentDiagnosing = EnvironmentDiagnosticsService(),
+         translationService: TranslationService = TranslationService()
+     ) {
+         self.settings = settings ?? AppSettingsStore()
+-        self.watchLedger = watchLedger ?? WatchFolderLedger()
+         // Tests inject a repository over a recording store; the app builds
+         // one over the on-disk JobStore.
+         self.jobRepository = jobRepository ?? JobRepository(store: jobStore ?? JobStore())
+         self.diagnosticsService = diagnosticsService
+         self.translationService = translationService
+         isPlayerVisible = UserDefaults.standard.object(forKey: "isPlayerVisible") as? Bool ?? true
+-        persistenceError = self.watchLedger.startupError
++        persistenceError = watchLedger.startupError
+         // `settings` is a nested ObservableObject; changes to its fields do not
+         // fire AppModel's objectWillChange on their own, so forward them.
+         self.settings.objectWillChange
+diff --git a/Tests/CueTests/AppModelHydrationTests.swift b/Tests/CueTests/AppModelHydrationTests.swift
+index 7e7df04..b6772c1 100644
+--- a/Tests/CueTests/AppModelHydrationTests.swift
++++ b/Tests/CueTests/AppModelHydrationTests.swift
+@@ -87,30 +87,6 @@ struct AppModelHydrationTests {
+         return ids
+     }
+ 
+-    @Test func isolatedModelUsesItsInjectedWatchLedger() async throws {
+-        let fixture = try makeFixture()
+-        defer { fixture.cleanUp() }
+-        let firstPath = fixture.baseURL.appendingPathComponent("first").path
+-        let secondPath = fixture.baseURL.appendingPathComponent("second").path
+-        var folder = WatchFolder(path: firstPath)
+-        folder.enabled = false
+-        fixture.settings.watchFolders = [folder]
+-        let ledgerRoot = fixture.baseURL.appendingPathComponent("isolated-ledger")
+-        let ledger = WatchFolderLedger(baseURL: ledgerRoot)
+-        let first = firstPath + "/a.mp4|1|1"
+-        let second = secondPath + "/b.mp4|1|1"
+-        ledger.record(first, outcome: .success)
+-        ledger.record(second, outcome: .success)
+-        let model = AppModel(settings: fixture.settings, jobStore: JobStore(baseURL: fixture.baseURL),
+-            watchLedger: ledger, diagnosticsService: EmptyHydrationDiagnostics())
+-        await model.hydration()
+-        model.clearWatchHistory(for: folder.id)
+-        model.flushPendingWork()
+-        let reloaded = WatchFolderLedger(baseURL: ledgerRoot)
+-        #expect(!reloaded.contains(first))
+-        #expect(reloaded.contains(second))
+-    }
+-
+     @Test func jobsAddedDuringHydrationStayOnTopAndAreNotDuplicated() async throws {
+         let fixture = try makeFixture()
+         defer { fixture.cleanUp() }
+diff --git a/script/audit/CueAuditHarness.swift b/script/audit/CueAuditHarness.swift
+deleted file mode 100644
+index 94f9d5e..0000000
+--- a/script/audit/CueAuditHarness.swift
++++ /dev/null
+@@ -1,135 +0,0 @@
+-import AppKit
+-import AVKit
+-import Combine
+-import Darwin
+-import SwiftUI
+-@testable import Cue
+-
+-private actor FixtureDiagnostics: EnvironmentDiagnosing {
+-    func run(translationAPIKey: String, translationProvider: TranslationProvider, selectedBackend: WhisperBackend) async -> [EnvironmentDiagnostic] { [] }
+-}
+-
+-/// Links the current Cue objects and actual ContentView, replacing only the
+-/// entry point. Never shipped in Cue.app. No Keychain, updater, or orphan sweep.
+-@main
+-struct CueAuditHarness: App {
+-    @StateObject private var model: AppModel
+-    private let started = DispatchTime.now().uptimeNanoseconds
+-    private let root: URL
+-    private let measure: Bool
+-
+-    init() {
+-        let data = try! Data(contentsOf: Bundle.main.url(forResource: "Fixture", withExtension: "plist")!)
+-        let configuration = try! PropertyListSerialization.propertyList(from: data, options: [], format: nil) as! [String: String]
+-        root = URL(fileURLWithPath: configuration["root"]!)
+-        measure = CommandLine.arguments.contains("--measure")
+-        precondition(Bundle.main.bundleIdentifier == "org.codex.CueAuditHarness", "Refusing to run in the production bundle")
+-        let defaults = UserDefaults.standard
+-        defaults.set(false, forKey: "autoStartAddedJobs")
+-        defaults.set(false, forKey: "followPlayback")
+-        defaults.set(true, forKey: "isPlayerVisible")
+-        defaults.set(280.0, forKey: "playerHeight")
+-        let settings = AppSettingsStore(defaults: defaults, readSecret: { _ in nil }, writeSecret: { _, _ in false })
+-        settings.sourceLanguage = "ja"
+-        settings.translationTargetLanguage = "Vietnamese"
+-        let store = JobStore(baseURL: root.appendingPathComponent("history"))
+-        var job = TranscriptionJob(sourceURL: URL(fileURLWithPath: configuration["media"]!), settings: settings)
+-        job.status = .translationComplete
+-        job.progress = JobProgress(stage: .complete, detail: "Japanese → Vietnamese", fraction: 1)
+-        job.transcriptSegments = (0..<45).map {
+-            TranscriptionSegment(id: $0 + 1, start: Double($0 * 2), end: Double($0 * 2) + 1.8,
+-                text: ["今日はとてもいい天気ですね。", "一緒に散歩に行きましょう。", "この景色は本当に美しいです。"][$0 % 3])
+-        }
+-        job.translatedSegments = job.transcriptSegments.enumerated().map { offset, cue in
+-            TranscriptionSegment(id: cue.id, start: cue.start, end: cue.end,
+-                text: ["Hôm nay thời tiết thật đẹp.", "Chúng ta cùng đi dạo nhé.", "Phong cảnh ở đây thật sự rất đẹp."][offset % 3])
+-        }
+-        job.log = "Synthetic Japanese → Vietnamese audit fixture. No inference or network requests.\n"
+-        store.saveJob(job)
+-        let ledger = WatchFolderLedger(baseURL: root.appendingPathComponent("history"))
+-        _model = StateObject(wrappedValue: AppModel(settings: settings, jobStore: store, watchLedger: ledger, diagnosticsService: FixtureDiagnostics()))
+-        NSApplication.shared.setActivationPolicy(.regular)
+-    }
+-
+-    var body: some Scene {
+-        Window("Cue Audit", id: "main") {
+-            ContentView(model: model)
+-                .frame(minWidth: 1080, minHeight: 720)
+-                .task {
+-                    NSApplication.shared.activate(ignoringOtherApps: true)
+-                    guard measure else { return }
+-                    await recordMeasurements()
+-                }
+-        }
+-        .defaultSize(width: 1200, height: 860)
+-        .commands {
+-            CommandMenu("Audit Appearance") {
+-                Button("Light") { NSApp.appearance = NSAppearance(named: .aqua) }
+-                Button("Dark") { NSApp.appearance = NSAppearance(named: .darkAqua) }
+-                Button("High Contrast Light") { NSApp.appearance = NSAppearance(named: .accessibilityHighContrastAqua) }
+-                Button("High Contrast Dark") { NSApp.appearance = NSAppearance(named: .accessibilityHighContrastDarkAqua) }
+-            }
+-        }
+-    }
+-
+-    @MainActor
+-    private func recordMeasurements() async {
+-        func milliseconds() -> Double { Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6 }
+-        let appeared = milliseconds()
+-        while model.isHydratingJobs { try? await Task.sleep(for: .milliseconds(1)) }
+-        model.playerController.player.isMuted = true
+-        // These markers describe model/view lifecycle, never first pixels.
+-        while model.playerController.overlayText.isEmpty && milliseconds() < 10_000 {
+-            try? await Task.sleep(for: .milliseconds(1))
+-        }
+-        let overlayReady = model.playerController.overlayText.isEmpty ? nil : milliseconds()
+-        try? await Task.sleep(for: .seconds(2))
+-        var idle: [Double] = []
+-        for _ in 0..<5 {
+-            idle.append(Self.footprintMiB())
+-            try? await Task.sleep(for: .milliseconds(200))
+-        }
+-        model.playerController.player.play()
+-        var samples: [[String: Double]] = []
+-        var priorCPU = Self.cpuSeconds()
+-        var priorTime = DispatchTime.now().uptimeNanoseconds
+-        for _ in 0..<20 {
+-            try? await Task.sleep(for: .seconds(1))
+-            let now = DispatchTime.now().uptimeNanoseconds
+-            let cpu = Self.cpuSeconds()
+-            samples.append(["footprintMiB": Self.footprintMiB(), "cpuPercent": (cpu - priorCPU) / (Double(now - priorTime) / 1e9) * 100])
+-            priorCPU = cpu
+-            priorTime = now
+-        }
+-        model.playerController.player.pause()
+-        let values: [String: Any] = [
+-            "viewAppearedMs": appeared, "overlayModelReadyMs": overlayReady as Any? ?? NSNull(),
+-            "idleFootprintMiB": idle, "playbackSamples": samples,
+-            "mediaTimeSeconds": model.playerController.player.currentTime().seconds,
+-            "minimumRefreshInterval": NSScreen.main?.minimumRefreshInterval as Any? ?? NSNull(),
+-            "maximumRefreshInterval": NSScreen.main?.maximumRefreshInterval as Any? ?? NSNull(),
+-        ]
+-        if let data = try? JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted, .sortedKeys]) {
+-            try? data.write(to: root.appendingPathComponent("metrics.json"), options: .atomic)
+-        }
+-        NSApplication.shared.terminate(nil)
+-    }
+-
+-    private static func cpuSeconds() -> Double {
+-        var usage = rusage()
+-        getrusage(RUSAGE_SELF, &usage)
+-        return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec)
+-            + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1e6
+-    }
+-
+-    private static func footprintMiB() -> Double {
+-        var info = task_vm_info_data_t()
+-        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+-        let status = withUnsafeMutablePointer(to: &info) { pointer in
+-            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+-                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+-            }
+-        }
+-        return status == KERN_SUCCESS ? Double(info.phys_footprint) / 1_048_576 : -1
+-    }
+-}
+diff --git a/script/audit/build_harness.py b/script/audit/build_harness.py
+deleted file mode 100644
+index b9010e4..0000000
+--- a/script/audit/build_harness.py
++++ /dev/null
+@@ -1,55 +0,0 @@
+-#!/usr/bin/env python3
+-"""Build a local-only app from existing debug Cue objects; never installs it.
+-Run ./script/run_tests.sh first. Usage: build_harness.py OUTPUT_ROOT MEDIA_PATH
+-"""
+-import json
+-import pathlib
+-import plistlib
+-import shutil
+-import subprocess
+-import sys
+-
+-repository = pathlib.Path(__file__).resolve().parents[2]
+-root = pathlib.Path(sys.argv[1]).resolve()
+-media = pathlib.Path(sys.argv[2]).resolve()
+-if not media.is_file():
+-    raise SystemExit("Media fixture does not exist")
+-root.mkdir(parents=True, exist_ok=True)
+-(root / "home").mkdir(exist_ok=True)
+-build = (repository / ".build/debug").resolve()
+-app = root / "Cue Audit.app"
+-contents = app / "Contents"
+-for part in ("MacOS", "Resources", "Frameworks"):
+-    (contents / part).mkdir(parents=True, exist_ok=True)
+-objects = (build / "Cue.product/Objects.LinkFileList").read_text().splitlines()
+-# SwiftPM names Cue's entry point Cue_main. The harness supplies its own
+-# main without the production linker's Cue_main-to-main alias; retaining
+-# CueApp.swift.o also retains the shared OpenFileRequests implementation.
+-linkfile = root / "objects.txt"
+-linkfile.write_text("\n".join(objects) + "\n")
+-subprocess.run([
+-    "swiftc", str(repository / "script/audit/CueAuditHarness.swift"), "-parse-as-library",
+-    "-module-name", "CueAuditHarness", "-swift-version", "6", "-target", "arm64-apple-macosx14.0",
+-    "-I", str(build / "Modules"), "-F", str(build), "-framework", "Sparkle", "-framework", "Accelerate", "-lc++",
+-    "-Xcc", "-fmodule-map-file=" + str(build / "whisper.build/module.modulemap"),
+-    "-Xcc", "-I" + str(repository / ".build/checkouts/whisper.cpp/spm-headers"),
+-    "-Xcc", "-Wno-incomplete-umbrella",
+-    "-module-cache-path", str(root / "module-cache"),
+-    "@" + str(linkfile), "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
+-    "-o", str(contents / "MacOS/CueAuditHarness"),
+-], check=True)
+-framework = contents / "Frameworks/Sparkle.framework"
+-if framework.exists():
+-    shutil.rmtree(framework)
+-shutil.copytree(build / "Sparkle.framework", framework, symlinks=True)
+-with (contents / "Resources/Fixture.plist").open("wb") as output:
+-    plistlib.dump({"root": str(root), "media": str(media)}, output)
+-with (contents / "Info.plist").open("wb") as output:
+-    plistlib.dump({
+-        "CFBundleExecutable": "CueAuditHarness", "CFBundleIdentifier": "org.codex.CueAuditHarness",
+-        "CFBundleName": "Cue Audit", "CFBundlePackageType": "APPL", "CFBundleVersion": "1",
+-        "LSMinimumSystemVersion": "14.0", "NSHighResolutionCapable": True, "NSPrincipalClass": "NSApplication",
+-        "LSEnvironment": {"CFFIXED_USER_HOME": str(root / "home")},
+-    }, output)
+-subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app)], check=True)
+-print(app)
+diff --git a/script/audit/measure_harness.py b/script/audit/measure_harness.py
+deleted file mode 100644
+index c1bf13b..0000000
+--- a/script/audit/measure_harness.py
++++ /dev/null
+@@ -1,65 +0,0 @@
+-#!/usr/bin/env python3
+-"""Measure fresh synthetic harness processes; does not measure first pixels.
+-Usage: measure_harness.py OUTPUT_ROOT [TRIALS=10]
+-Only generated fixture history under the validated temporary root is reset.
+-"""
+-import json
+-import math
+-import pathlib
+-import plistlib
+-import shutil
+-import statistics
+-import subprocess
+-import sys
+-import tempfile
+-
+-root = pathlib.Path(sys.argv[1]).resolve()
+-trials = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+-if not 1 <= trials <= 100:
+-    raise SystemExit("Trial count must be between 1 and 100")
+-if not any(root.is_relative_to(p.resolve()) for p in [pathlib.Path('/private/tmp'), pathlib.Path(tempfile.gettempdir())]):
+-    raise SystemExit("The audit root must be inside a temporary directory")
+-app = root / "Cue Audit.app"
+-with (app / "Contents/Resources/Fixture.plist").open("rb") as source:
+-    fixture = plistlib.load(source)
+-if pathlib.Path(fixture['root']).resolve() != root:
+-    raise SystemExit("Fixture root does not match the requested audit root")
+-records = []
+-for trial in range(trials):
+-    history = root / "history"
+-    if history.exists():
+-        shutil.rmtree(history)
+-    metrics = root / "metrics.json"
+-    metrics.unlink(missing_ok=True)
+-    with (root / f"trial-{trial + 1:02}.log").open("w") as output:
+-        subprocess.run([str(app / "Contents/MacOS/CueAuditHarness"), "--measure"],
+-                       stdout=output, stderr=subprocess.STDOUT, timeout=45, check=True)
+-    record = json.loads(metrics.read_text())
+-    if not 18 <= record['mediaTimeSeconds'] <= 24:
+-        raise SystemExit("Playback did not advance as expected; refusing an invalid baseline")
+-    if record['overlayModelReadyMs'] is None:
+-        raise SystemExit("No subtitle overlay was prepared")
+-    records.append(record)
+-    (root / "trials.json").write_text(json.dumps(records, indent=2))
+-    print(f"Completed {trial + 1}/{trials}: view={record['viewAppearedMs']:.2f} ms, overlay model={record['overlayModelReadyMs']:.2f} ms", flush=True)
+-
+-
+-def distribution(values):
+-    if not all(math.isfinite(v) and v >= 0 for v in values):
+-        raise SystemExit("A measurement was unavailable or invalid")
+-    return {'count': len(values), 'median': statistics.median(values), 'mean': statistics.mean(values), 'min': min(values), 'max': max(values)}
+-
+-summary = {
+-    'scope': 'Debug Cue objects, synthetic workspace, new process, warm filesystem. Markers begin at SwiftUI App initialization; not cold launch or first rendered pixels.',
+-    'trials': trials,
+-    'viewAppearedMs': distribution([r['viewAppearedMs'] for r in records]),
+-    'overlayModelReadyMs': distribution([r['overlayModelReadyMs'] for r in records]),
+-    'idleFootprintMiB': distribution([v for r in records for v in r['idleFootprintMiB']]),
+-    'playbackFootprintMiB': distribution([s['footprintMiB'] for r in records for s in r['playbackSamples']]),
+-    'playbackCPUPercent': distribution([s['cpuPercent'] for r in records for s in r['playbackSamples']]),
+-    'displayMinimumRefreshInterval': records[-1]['minimumRefreshInterval'],
+-    'displayMaximumRefreshInterval': records[-1]['maximumRefreshInterval'],
+-    'droppedFrames60Hz': None, 'droppedFrames120Hz': None,
+-}
+-(root / 'summary.json').write_text(json.dumps(summary, indent=2))
+-print(json.dumps(summary, indent=2))

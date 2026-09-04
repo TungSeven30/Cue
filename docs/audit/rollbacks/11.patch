@@ -1,0 +1,694 @@
+diff --git a/Sources/Services/SubtitleFileWriter.swift b/Sources/Services/SubtitleFileWriter.swift
+deleted file mode 100644
+index 3cbe565..0000000
+--- a/Sources/Services/SubtitleFileWriter.swift
++++ /dev/null
+@@ -1,90 +0,0 @@
+-import Foundation
+-
+-/// Serializes source-file I/O without holding the main actor. A later edit
+-/// uses the mtime of our preceding write, even before its UI callback arrives.
+-final class SubtitleFileWriter: @unchecked Sendable {
+-    struct Key: Hashable, Sendable {
+-        let jobID: UUID
+-        let slot: SubtitleSidecarScanner.Slot
+-    }
+-
+-    final class Cancellation: @unchecked Sendable {
+-        private let lock = NSLock()
+-        private var canceled = false
+-        func cancel() { lock.withLock { canceled = true } }
+-        var isCanceled: Bool { lock.withLock { canceled } }
+-    }
+-
+-    struct Request: Sendable {
+-        let id = UUID()
+-        let key: Key
+-        let source: ImportedSubtitleSource
+-        let segments: [TranscriptionSegment]
+-        let cancellation = Cancellation()
+-    }
+-
+-    struct Completion: Sendable {
+-        let request: Request
+-        let source: ImportedSubtitleSource
+-        let logLine: String?
+-    }
+-
+-    private let queue = DispatchQueue(label: "Cue.SubtitleFileWriter", qos: .userInitiated)
+-    private let beforeWrite: @Sendable () -> Void
+-    // Accessed only on queue.
+-    private var latest: [Key: ImportedSubtitleSource] = [:]
+-    private var completed: [Key: Completion] = [:]
+-
+-    init(beforeWrite: @escaping @Sendable () -> Void = {}) {
+-        self.beforeWrite = beforeWrite
+-    }
+-
+-    func write(_ request: Request, completion: @escaping @Sendable (Completion) -> Void) {
+-        queue.async { [self] in
+-            beforeWrite()
+-            guard !request.cancellation.isCanceled else { return }
+-            var source = request.source
+-            if let previous = latest[request.key], previous.path == source.path, previous.importedAt == source.importedAt {
+-                source = previous
+-            }
+-            var logLine: String?
+-            if !source.syncPaused {
+-                if !source.matchesFileOnDisk() {
+-                    source.syncPaused = true
+-                    logLine = "\(source.fileName) changed outside Cue; sync paused."
+-                } else {
+-                    do {
+-                        guard !request.cancellation.isCanceled else { return }
+-                        if !source.didBackup {
+-                            let backup = source.url.appendingPathExtension("bak")
+-                            if !FileManager.default.fileExists(atPath: backup.path) {
+-                                try FileManager.default.copyItem(at: source.url, to: backup)
+-                            }
+-                            source.didBackup = true
+-                        }
+-                        guard !request.cancellation.isCanceled else { return }
+-                        try SubtitleWriter.write(segments: request.segments, format: source.format, to: source.url)
+-                        source.refreshFileState()
+-                        source.lastSyncError = nil
+-                    } catch {
+-                        source.lastSyncError = error.localizedDescription
+-                        logLine = "Could not update \(source.fileName): \(error.localizedDescription)"
+-                    }
+-                }
+-            }
+-            latest[request.key] = source
+-            let result = Completion(request: request, source: source, logLine: logLine)
+-            completed[request.key] = result
+-            completion(result)
+-        }
+-    }
+-
+-    /// Explicit durability barrier for quit/tests, never used by selection or
+-    /// the normal edit debounce. No main-actor callback is needed to finish.
+-    func flush() -> [Completion] {
+-        queue.sync {
+-            defer { completed.removeAll() }
+-            return Array(completed.values)
+-        }
+-    }
+-}
+diff --git a/Sources/Stores/AppModel.swift b/Sources/Stores/AppModel.swift
+index 71f3f0e..0ea1e17 100644
+--- a/Sources/Stores/AppModel.swift
++++ b/Sources/Stores/AppModel.swift
+@@ -47,10 +47,6 @@ final class AppModel: ObservableObject {
+     private var ytDlpInstallTask: Task<Void, Never>?
+     /// Set when a subtitle file has been parsed and needs a slot chosen.
+     @Published var subtitleLoadRequest: SubtitleLoadRequest?
+-    @Published private(set) var isReadingSubtitleFile = false
+-    @Published private(set) var isApplyingSubtitleLoad = false
+-    private let subtitleFileWriter = SubtitleFileWriter()
+-    private var subtitleWriteRequests: [SubtitleFileWriter.Key: SubtitleFileWriter.Request] = [:]
+     /// nil = not yet checked; cached until Recheck (spec §3.1).
+     @Published var burnInPreflight: BurnInService.PreflightResult?
+     /// The setup guide auto-opens once per launch (when something required is
+@@ -547,7 +543,7 @@ final class AppModel: ObservableObject {
+     }
+ 
+     func selectJob(_ id: UUID?) {
+-        enqueuePendingSubtitleSync()
++        flushSubtitleSync()
+         selectedJobID = id
+         selectedJobIDs = id.map { [$0] } ?? []
+     }
+@@ -2556,7 +2552,7 @@ final class AppModel: ObservableObject {
+     }
+ 
+     var canLoadSubtitles: Bool {
+-        currentJob != nil && !isSelectedJobRunning && !isReadingSubtitleFile && !isApplyingSubtitleLoad
++        currentJob != nil && !isSelectedJobRunning
+     }
+ 
+     /// A translation with no transcript is a state the rest of the app cannot
+@@ -2587,24 +2583,12 @@ final class AppModel: ObservableObject {
+         panel.directoryURL = selectedVideoURL?.deletingLastPathComponent()
+         guard panel.runModal() == .OK, let url = panel.url else { return }
+ 
+-        Task { [weak self] in
+-            await self?.loadSubtitleFile(at: url, for: target)
+-        }
+-    }
+-
+-    func loadSubtitleFile(
+-        at url: URL, for target: TranscriptionJob,
+-        reader: @escaping @Sendable (URL) throws -> SubtitleImporter.Document = { try SubtitleImporter.importFile(at: $0, backingUp: false) }
+-    ) async {
+-        guard !isReadingSubtitleFile else { return }
+-        isReadingSubtitleFile = true
+-        defer { isReadingSubtitleFile = false }
+         do {
+             // Unlike auto-detect, this was an explicit request, so a failure
+             // gets a dialog rather than a quiet log line. No backup yet: the
+             // slot picker below can still be cancelled, and a cancelled load
+             // must not leave a .bak beside the user's file.
+-            let document = try await Task.detached(priority: .userInitiated) { try reader(url) }.value
++            let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+             subtitleLoadRequest = SubtitleLoadRequest(id: UUID(), document: document, job: target)
+         } catch {
+             presentExportError(
+@@ -2614,11 +2598,8 @@ final class AppModel: ObservableObject {
+         }
+     }
+ 
+-    func applySubtitleLoad(
+-        _ request: SubtitleLoadRequest, to slot: SubtitleSidecarScanner.Slot,
+-        beforeBackup: @escaping @Sendable () -> Void = {}
+-    ) async {
+-        guard !isApplyingSubtitleLoad, canApplySubtitleLoad(request, to: slot), let id = request.jobID,
++    func applySubtitleLoad(_ request: SubtitleLoadRequest, to slot: SubtitleSidecarScanner.Slot) {
++        guard canApplySubtitleLoad(request, to: slot), let id = request.jobID,
+             let job = self.job(withID: id)
+         else { return }
+         let segments: [TranscriptionSegment]
+@@ -2633,21 +2614,18 @@ final class AppModel: ObservableObject {
+         }
+         let existing = slot == .transcript ? job.transcriptSegments : job.translatedSegments
+         if !existing.isEmpty, !confirmReplacingSegments(slot: slot) { return }
+-        // Both confirmation and disk I/O can let the queue or selection move.
+-        // Keep the sheet busy, perform the backup off-main, then revalidate.
+-        guard canApplySubtitleLoad(request, to: slot) else { return }
+-        isApplyingSubtitleLoad = true
+-        defer { isApplyingSubtitleLoad = false }
++        // NSAlert runs a nested event loop: the queue and source file can
++        // change while confirmation is open, so validate again at commit.
++        guard canApplySubtitleLoad(request, to: slot), request.document.source.matchesFileOnDisk() else { return }
++
+         let document = request.document
+-        let preparedSource = await Task.detached(priority: .userInitiated) { () -> ImportedSubtitleSource? in
+-            beforeBackup()
+-            var source = document.source
+-            guard source.matchesFileOnDisk() else { return nil }
+-            if !source.didBackup { source.didBackup = SubtitleImporter.backUpOriginal(at: source.url) }
+-            guard source.matchesFileOnDisk() else { return nil }
+-            return source
+-        }.value
+-        guard let source = preparedSource, canApplySubtitleLoad(request, to: slot) else { return }
++        // The manual path leaves the backup until here, so a cancelled slot
++        // picker writes nothing. Adoption still backs up at import time: it
++        // has no cancel step and no later commit to hang the backup on.
++        var source = document.source
++        if !source.didBackup {
++            source.didBackup = SubtitleImporter.backUpOriginal(at: source.url)
++        }
+         // A queued write for the slot being replaced would otherwise fire at
+         // the newly loaded file moments later, rewriting it with renumbered
+         // ids and normalized timestamps without the user editing anything.
+@@ -2699,7 +2677,10 @@ final class AppModel: ObservableObject {
+ 
+     // MARK: - Imported subtitle sync
+ 
+-    private typealias SubtitleSyncKey = SubtitleFileWriter.Key
++    private struct SubtitleSyncKey: Hashable {
++        let jobID: UUID
++        let slot: SubtitleSidecarScanner.Slot
++    }
+ 
+     /// Edits are written back on a debounce so a Replace All firing hundreds of
+     /// edits produces one write, not hundreds.
+@@ -2716,13 +2697,9 @@ final class AppModel: ObservableObject {
+         DispatchQueue.main.asyncAfter(deadline: .now() + Self.subtitleSyncDebounce, execute: item)
+     }
+ 
+-    /// Waits for accepted writes on quit and at explicit durability barriers.
++    /// Runs every pending write immediately. Called on quit and when the
++    /// selection moves off a job.
+     func flushSubtitleSync() {
+-        enqueuePendingSubtitleSync()
+-        for result in subtitleFileWriter.flush() { applySubtitleWrite(result) }
+-    }
+-
+-    private func enqueuePendingSubtitleSync() {
+         let pending = subtitleSyncWorkItems
+         subtitleSyncWorkItems.removeAll()
+         for (key, item) in pending {
+@@ -2735,7 +2712,6 @@ final class AppModel: ObservableObject {
+     /// is gone.
+     private func cancelSubtitleSync(jobID: UUID, slot: SubtitleSidecarScanner.Slot) {
+         subtitleSyncWorkItems.removeValue(forKey: SubtitleSyncKey(jobID: jobID, slot: slot))?.cancel()
+-        subtitleWriteRequests.removeValue(forKey: SubtitleSyncKey(jobID: jobID, slot: slot))?.cancellation.cancel()
+     }
+ 
+     func unlinkImportedSubtitles(slot: SubtitleSidecarScanner.Slot, jobID: UUID? = nil) {
+@@ -2752,30 +2728,48 @@ final class AppModel: ObservableObject {
+ 
+     private func writeBackImportedSubtitles(jobID: UUID, slot: SubtitleSidecarScanner.Slot) {
+         guard let job = self.job(withID: jobID),
+-            let source = job.importedSource(for: slot), !source.syncPaused
++            var source = job.importedSource(for: slot),
++            !source.syncPaused
+         else { return }
++
+         let segments = slot == .transcript ? job.transcriptSegments : job.translatedSegments
+         guard !segments.isEmpty else { return }
+-        let key = SubtitleSyncKey(jobID: jobID, slot: slot)
+-        let request = SubtitleFileWriter.Request(key: key, source: source, segments: segments)
+-        subtitleWriteRequests[key]?.cancellation.cancel()
+-        subtitleWriteRequests[key] = request
+-        subtitleFileWriter.write(request) { [weak self] result in
+-            Task { @MainActor [weak self] in self?.applySubtitleWrite(result) }
++
++        // If the file changed under us, the user's other edits win. Pausing is
++        // recoverable; overwriting is not.
++        guard source.matchesFileOnDisk() else {
++            source.syncPaused = true
++            updateJob(jobID) { job in
++                job.setImportedSource(source, for: slot)
++                job.log += "\(source.fileName) changed outside Cue; sync paused.\n"
++            }
++            return
+         }
+-    }
+ 
+-    private func applySubtitleWrite(_ result: SubtitleFileWriter.Completion) {
+-        let key = result.request.key
+-        guard subtitleWriteRequests[key]?.id == result.request.id else { return }
+-        subtitleWriteRequests.removeValue(forKey: key)
+-        guard let source = job(withID: key.jobID)?.importedSource(for: key.slot),
+-            source.path == result.request.source.path,
+-            source.importedAt == result.request.source.importedAt
+-        else { return }
+-        updateJob(key.jobID, debouncePersist: true) { job in
+-            job.setImportedSource(result.source, for: key.slot)
+-            if let line = result.logLine { job.log += line + "\n" }
++        do {
++            if !source.didBackup {
++                let backupURL = source.url.appendingPathExtension("bak")
++                if !FileManager.default.fileExists(atPath: backupURL.path) {
++                    try FileManager.default.copyItem(at: source.url, to: backupURL)
++                }
++                source.didBackup = true
++            }
++            // Written without the intro summary: applyingIntro is export-only,
++            // so the file mirrors exactly what the editor shows.
++            try SubtitleWriter.write(segments: segments, format: source.format, to: source.url)
++            // Re-baseline, or our own write looks like an external change next
++            // time round.
++            source.refreshFileState()
++            source.lastSyncError = nil
++            updateJob(jobID, debouncePersist: true) { job in
++                job.setImportedSource(source, for: slot)
++            }
++        } catch {
++            source.lastSyncError = error.localizedDescription
++            updateJob(jobID) { job in
++                job.setImportedSource(source, for: slot)
++                job.log += "Could not update \(source.fileName): \(error.localizedDescription)\n"
++            }
+         }
+     }
+ 
+@@ -2841,28 +2835,6 @@ final class AppModel: ObservableObject {
+         updateSegment(segment, text: text, keyPath: \.transcriptSegments)
+     }
+ 
+-    func updateSubtitleSegments(_ edited: [TranscriptionSegment], slot: SubtitleSidecarScanner.Slot) {
+-        guard let id = selectedJobID, let index = index(of: id), !edited.isEmpty else { return }
+-        let texts = Dictionary(edited.map { ($0.id, $0.text) }, uniquingKeysWith: { _, latest in latest })
+-        var job = jobs[index]
+-        let path: WritableKeyPath<TranscriptionJob, [TranscriptionSegment]> =
+-            slot == .transcript ? \.transcriptSegments : \.translatedSegments
+-        var changed = false
+-        for cueIndex in job[keyPath: path].indices {
+-            guard let text = texts[job[keyPath: path][cueIndex].id],
+-                text != job[keyPath: path][cueIndex].text else { continue }
+-            job[keyPath: path][cueIndex].text = text
+-            changed = true
+-        }
+-        guard changed else { return }
+-        job.updatedAt = Date()
+-        jobs[index] = job
+-        jobRepository.save(job, debounced: true)
+-        if let source = job.importedSource(for: slot), !source.syncPaused {
+-            scheduleSubtitleSync(jobID: id, slot: slot)
+-        }
+-    }
+-
+     func updateTranslatedSegment(_ segment: TranscriptionSegment, text: String) {
+         updateSegment(segment, text: text, keyPath: \.translatedSegments)
+     }
+diff --git a/Sources/Views/DetailView.swift b/Sources/Views/DetailView.swift
+index cfc6e1e..6d836e9 100644
+--- a/Sources/Views/DetailView.swift
++++ b/Sources/Views/DetailView.swift
+@@ -341,8 +341,7 @@ struct DetailView: View {
+                     warnings: model.qualityWarnings(for: segments, slot: slot),
+                     activeSegmentID: model.isPlayerVisible ? playerController.activeSegmentID : nil,
+                     onEdit: onEdit,
+-                    onSeek: model.isPlayerVisible ? { playerController.seek(to: $0.start) } : nil,
+-                    onEditBatch: { model.updateSubtitleSegments($0, slot: slot) }
++                    onSeek: model.isPlayerVisible ? { playerController.seek(to: $0.start) } : nil
+                 )
+                 .padding(20)
+             }
+diff --git a/Sources/Views/SubtitleSlotPickerView.swift b/Sources/Views/SubtitleSlotPickerView.swift
+index 0731ea2..8c5d719 100644
+--- a/Sources/Views/SubtitleSlotPickerView.swift
++++ b/Sources/Views/SubtitleSlotPickerView.swift
+@@ -15,7 +15,7 @@ struct SubtitleSlotPickerView: View {
+ 
+             VStack(spacing: 10) {
+                 Button {
+-                    Task { await model.applySubtitleLoad(request, to: .transcript) }
++                    model.applySubtitleLoad(request, to: .transcript)
+                 } label: {
+                     HStack(spacing: 12) {
+                         Image(systemName: "text.alignleft")
+@@ -46,18 +46,18 @@ struct SubtitleSlotPickerView: View {
+                 .disabled(!model.canApplySubtitleLoad(request, to: .transcript))
+ 
+                 Button {
+-                    Task { await model.applySubtitleLoad(request, to: .translation) }
++                    model.applySubtitleLoad(request, to: .translation)
+                 } label: {
+                     HStack(spacing: 12) {
+                         Image(systemName: "character.bubble")
+                             .font(.title3)
+-                            .foregroundStyle(!model.transcriptSegments.isEmpty ? Color.accentColor : Color.secondary)
++                            .foregroundStyle(model.canLoadTranslationSubtitles ? Color.accentColor : Color.secondary)
+                             .frame(width: 24)
+                         VStack(alignment: .leading, spacing: 2) {
+                             Text("Load as Translation")
+                                 .font(.headline)
+                             Text(
+-                                !model.transcriptSegments.isEmpty
++                                model.canLoadTranslationSubtitles
+                                     ? "Fills the translation tab for bilingual subtitles, export, and burn-in."
+                                     : "Requires an existing transcript first."
+                             )
+@@ -65,7 +65,7 @@ struct SubtitleSlotPickerView: View {
+                             .foregroundStyle(.secondary)
+                         }
+                         Spacer()
+-                        if !model.transcriptSegments.isEmpty {
++                        if model.canLoadTranslationSubtitles {
+                             Image(systemName: "chevron.right")
+                                 .font(.caption)
+                                 .foregroundStyle(.tertiary)
+@@ -74,12 +74,12 @@ struct SubtitleSlotPickerView: View {
+                     .padding(12)
+                     .frame(maxWidth: .infinity, alignment: .leading)
+                     .background(
+-                        !model.transcriptSegments.isEmpty ? AnyShapeStyle(.background.secondary) : AnyShapeStyle(.background.secondary.opacity(0.4)),
++                        model.canLoadTranslationSubtitles ? AnyShapeStyle(.background.secondary) : AnyShapeStyle(.background.secondary.opacity(0.4)),
+                         in: RoundedRectangle(cornerRadius: 10)
+                     )
+                     .overlay(
+                         RoundedRectangle(cornerRadius: 10)
+-                            .strokeBorder(.separator.opacity(!model.transcriptSegments.isEmpty ? 1 : 0.5), lineWidth: 1)
++                            .strokeBorder(.separator.opacity(model.canLoadTranslationSubtitles ? 1 : 0.5), lineWidth: 1)
+                     )
+                 }
+                 .buttonStyle(.plain)
+@@ -92,8 +92,6 @@ struct SubtitleSlotPickerView: View {
+                     .keyboardShortcut(.cancelAction)
+             }
+         }
+-        .disabled(model.isApplyingSubtitleLoad)
+-        .interactiveDismissDisabled(model.isApplyingSubtitleLoad)
+         .padding(20)
+         .frame(width: 420)
+     }
+diff --git a/Sources/Views/TranscriptView.swift b/Sources/Views/TranscriptView.swift
+index c1df064..29543c7 100644
+--- a/Sources/Views/TranscriptView.swift
++++ b/Sources/Views/TranscriptView.swift
+@@ -6,7 +6,6 @@ struct TranscriptView: View {
+     var activeSegmentID: Int? = nil
+     let onEdit: (TranscriptionSegment, String) -> Void
+     var onSeek: ((TranscriptionSegment) -> Void)? = nil
+-    var onEditBatch: (([TranscriptionSegment]) -> Void)? = nil
+     @State private var searchText = ""
+     @State private var replacementText = ""
+     @State private var warningsOnly = false
+@@ -75,17 +74,14 @@ struct TranscriptView: View {
+     private func replaceAll(in filtered: [TranscriptionSegment]) {
+         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+         guard !query.isEmpty else { return }
+-        let edited = filtered.filter { $0.text.localizedCaseInsensitiveContains(query) }.map { segment in
+-            var updated = segment
+-            updated.text = segment.text.replacingOccurrences(
++        for segment in filtered where segment.text.localizedCaseInsensitiveContains(query) {
++            let updated = segment.text.replacingOccurrences(
+                 of: query,
+                 with: replacementText,
+                 options: [.caseInsensitive, .literal]
+             )
+-            return updated
++            onEdit(segment, updated)
+         }
+-        if let onEditBatch { onEditBatch(edited) }
+-        else { for segment in edited { onEdit(segment, segment.text) } }
+     }
+ }
+ 
+diff --git a/Tests/CueTests/AppModelSubtitleImportTests.swift b/Tests/CueTests/AppModelSubtitleImportTests.swift
+index e8477cc..c5ece28 100644
+--- a/Tests/CueTests/AppModelSubtitleImportTests.swift
++++ b/Tests/CueTests/AppModelSubtitleImportTests.swift
+@@ -1,4 +1,3 @@
+-import Combine
+ import Foundation
+ import Testing
+ 
+@@ -26,88 +25,6 @@ private struct HangingHTTPClient: HTTPClient {
+ 
+ @MainActor
+ struct AppModelSubtitleImportTests {
+-    @Test func manualBackupDoesNotBlockAndRevalidatesSelection() async throws {
+-        let fixture = try await makeFixture(sidecars: [])
+-        defer { fixture.model.flushPendingWork(); fixture.cleanUp() }
+-        let model = fixture.model
+-        model.addVideos(urls: [fixture.mediaURL])
+-        let id = try #require(model.currentJob?.id)
+-        try await waitForAdoption(model, jobID: id)
+-        let url = fixture.baseURL.appendingPathComponent("manual.srt")
+-        try Data(Self.srt.utf8).write(to: url)
+-        let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+-        let request = AppModel.SubtitleLoadRequest(id: UUID(), document: document, job: model.currentJob)
+-        let gate = DispatchSemaphore(value: 0)
+-        let apply = Task {
+-            await model.applySubtitleLoad(request, to: .transcript) {
+-                #expect(!Thread.isMainThread)
+-                gate.wait()
+-            }
+-        }
+-        while !model.isApplyingSubtitleLoad { await Task.yield() }
+-        #expect(!model.canLoadSubtitles)
+-        model.selectJob(nil)
+-        gate.signal()
+-        await apply.value
+-        #expect(model.jobs.first?.transcriptSegments.isEmpty == true)
+-        #expect(!model.isApplyingSubtitleLoad)
+-        #expect(try Data(contentsOf: url) == Data(Self.srt.utf8))
+-    }
+-
+-    @Test func manualReadSuspendsWithoutBlockingTheMainActor() async throws {
+-        let fixture = try await makeFixture(sidecars: [])
+-        defer { fixture.model.flushPendingWork(); fixture.cleanUp() }
+-        let model = fixture.model
+-        model.addVideos(urls: [fixture.mediaURL])
+-        let id = try #require(model.currentJob?.id)
+-        try await waitForAdoption(model, jobID: id)
+-        let job = try #require(model.currentJob)
+-        let url = fixture.baseURL.appendingPathComponent("manual.srt")
+-        try Data("1\n00:00:00,000 --> 00:00:01,000\nTiếng Việt\n".utf8).write(to: url)
+-        let gate = DispatchSemaphore(value: 0)
+-        let read = Task {
+-            await model.loadSubtitleFile(at: url, for: job) { url in
+-                #expect(!Thread.isMainThread)
+-                gate.wait()
+-                return try SubtitleImporter.importFile(at: url, backingUp: false)
+-            }
+-        }
+-        while !model.isReadingSubtitleFile { await Task.yield() }
+-        #expect(!model.canLoadSubtitles)
+-        #expect(model.subtitleLoadRequest == nil)
+-        gate.signal()
+-        await read.value
+-        #expect(model.subtitleLoadRequest?.document.segments.first?.text == "Tiếng Việt")
+-        #expect(!model.isReadingSubtitleFile)
+-        #expect(!FileManager.default.fileExists(atPath: url.appendingPathExtension("bak").path))
+-    }
+-
+-    @Test func replacingSubtitleTextPublishesOneBatch() async throws {
+-        let fixture = try await makeFixture(sidecars: [])
+-        defer { fixture.model.flushPendingWork(); fixture.cleanUp() }
+-        let model = fixture.model
+-        model.addVideos(urls: [fixture.mediaURL])
+-        let id = try #require(model.currentJob?.id)
+-        try await waitForAdoption(model, jobID: id)
+-        let count = ProcessInfo.processInfo.environment["CUE_AUDIT_BENCH"] == "1" ? 10_000 : 100
+-        model.jobs[0].transcriptSegments = (0..<count).map {
+-            TranscriptionSegment(id: $0 + 1, start: Double($0 * 2), end: Double($0 * 2 + 1), text: "Before")
+-        }
+-        let edited = model.jobs[0].transcriptSegments.map {
+-            TranscriptionSegment(id: $0.id, start: $0.start, end: $0.end, text: "Tiếng Việt")
+-        }
+-        var publications = 0
+-        let subscription = model.objectWillChange.sink { publications += 1 }
+-        let start = DispatchTime.now().uptimeNanoseconds
+-        model.updateSubtitleSegments(edited, slot: .transcript)
+-        let milliseconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6
+-        subscription.cancel()
+-        print("AUDIT11 cues=\(count) replace_ms=\(milliseconds) publications=\(publications)")
+-        #expect(publications == 1)
+-        #expect(model.jobs[0].transcriptSegments.allSatisfy { $0.text == "Tiếng Việt" })
+-        #expect(model.jobs[0].transcriptSegments.map(\.start) == edited.map(\.start))
+-    }
+-
+     struct Fixture {
+         let model: AppModel
+         let baseURL: URL
+@@ -431,7 +348,7 @@ struct AppModelSubtitleImportTests {
+         #expect(model.isScanningForSubtitles(job.id))
+ 
+         let document = try SubtitleImporter.importFile(at: elsewhere)
+-        await model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
++        model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
+ 
+         try await waitForAdoption(model, jobID: job.id)
+ 
+@@ -457,7 +374,7 @@ struct AppModelSubtitleImportTests {
+         #expect(model.isScanningForSubtitles(job.id))
+ 
+         let document = try SubtitleImporter.importFile(at: elsewhere)
+-        await model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
++        model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
+         #expect(model.jobs.first?.status == .queued, "Fixture must reproduce the queued-after-load state")
+ 
+         try await waitForAdoption(model, jobID: job.id)
+@@ -724,7 +641,7 @@ struct AppModelSubtitleImportTests {
+         try await waitForAdoption(model, jobID: jobID)
+ 
+         let document = try SubtitleImporter.importFile(at: elsewhere)
+-        await model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
++        model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
+ 
+         let job = try #require(model.jobs.first)
+         #expect(job.transcriptSegments.count == 2)
+@@ -747,7 +664,7 @@ struct AppModelSubtitleImportTests {
+         let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+         let request = AppModel.SubtitleLoadRequest(id: UUID(), document: document, job: first)
+         model.selectJob(try #require(model.jobs.first(where: { $0.id != first.id })?.id))
+-        await model.applySubtitleLoad(request, to: .transcript)
++        model.applySubtitleLoad(request, to: .transcript)
+         print("AUDIT08 wrong_job_cues=\(model.currentJob?.transcriptSegments.count ?? -1)")
+         #expect(model.jobs.allSatisfy { $0.transcriptSegments.isEmpty })
+     }
+@@ -764,13 +681,13 @@ struct AppModelSubtitleImportTests {
+         let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+         let request = AppModel.SubtitleLoadRequest(id: UUID(), document: document, job: model.currentJob)
+         model.jobs[0].status = .transcribing
+-        await model.applySubtitleLoad(request, to: .transcript)
++        model.applySubtitleLoad(request, to: .transcript)
+         print("AUDIT08 running_job_cues=\(model.jobs[0].transcriptSegments.count)")
+         #expect(model.jobs[0].transcriptSegments.isEmpty)
+         model.jobs[0].status = .idle
+         model.jobs[0].transcriptSegments = []
+         model.jobs[0].updatedAt = Date().addingTimeInterval(1)
+-        await model.applySubtitleLoad(request, to: .transcript)
++        model.applySubtitleLoad(request, to: .transcript)
+         #expect(model.jobs[0].transcriptSegments.isEmpty)
+     }
+ 
+@@ -790,7 +707,7 @@ struct AppModelSubtitleImportTests {
+         model.jobs[0].summary = "Earlier summary"
+         model.jobs[0].importedTranslationSource = document.source
+         model.jobs[0].status = .translationComplete
+-        await model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
++        model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
+         let job = try #require(model.job(withID: id))
+         let stale = [!job.translatedSegments.isEmpty, !job.partialTranslatedSegments.isEmpty,
+                      !job.partialTranscriptSegments.isEmpty, job.summary != nil, job.importedTranslationSource != nil]
+@@ -884,7 +801,7 @@ struct AppModelSubtitleImportTests {
+         #expect(document.source.didBackup == false)
+         #expect(FileManager.default.fileExists(atPath: backupURL.path) == false, "A cancelled load must leave no .bak")
+ 
+-        await model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
++        model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
+ 
+         #expect(try String(contentsOf: backupURL, encoding: .utf8) == Self.srt)
+         #expect(model.jobs.first?.importedTranscriptSource?.didBackup == true)
+@@ -915,7 +832,7 @@ struct AppModelSubtitleImportTests {
+         // replace-confirmation alert, which no test can answer.
+         model.jobs[0].transcriptSegments = []
+         let document = try SubtitleImporter.importFile(at: elsewhere, backingUp: false)
+-        await model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
++        model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
+ 
+         model.flushSubtitleSync()
+         #expect(try String(contentsOf: elsewhere, encoding: .utf8) == odd, "The freshly loaded file was rewritten with no edit")
+@@ -1010,7 +927,7 @@ struct AppModelSubtitleImportTests {
+         #expect(model.isScanningForSubtitles(job.id))
+ 
+         let document = try SubtitleImporter.importFile(at: elsewhere)
+-        await model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
++        model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
+ 
+         #expect(model.jobs.first?.status == .transcriptionComplete)
+         #expect(model.jobs.first?.transcriptSegments.count == 2)
+diff --git a/Tests/CueTests/SubtitleFileWriterTests.swift b/Tests/CueTests/SubtitleFileWriterTests.swift
+deleted file mode 100644
+index bd17dd5..0000000
+--- a/Tests/CueTests/SubtitleFileWriterTests.swift
++++ /dev/null
+@@ -1,52 +0,0 @@
+-import Foundation
+-import Testing
+-
+-@testable import Cue
+-
+-struct SubtitleFileWriterTests {
+-    @Test func consecutiveWritesShareTheirUpdatedFileFingerprint() throws {
+-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+-        defer { try? FileManager.default.removeItem(at: directory) }
+-        let url = directory.appendingPathComponent("captions.srt")
+-        try Data("1\n00:00:00,000 --> 00:00:01,000\nOriginal\n".utf8).write(to: url)
+-        let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+-        let writer = SubtitleFileWriter(beforeWrite: { #expect(!Thread.isMainThread) })
+-        let key = SubtitleFileWriter.Key(jobID: UUID(), slot: .transcript)
+-        for text in ["First edit", "Tiếng Việt"] {
+-            let request = SubtitleFileWriter.Request(
+-                key: key, source: document.source,
+-                segments: [TranscriptionSegment(id: 1, start: 0, end: 1, text: text)]
+-            )
+-            writer.write(request) { _ in }
+-        }
+-        let results = writer.flush()
+-        #expect(results.count == 1)
+-        #expect(results.first?.source.syncPaused == false)
+-        #expect(results.first?.source.matchesFileOnDisk() == true)
+-        #expect(try SubtitleReader.read(contentsOf: url).first?.text == "Tiếng Việt")
+-        #expect(try String(contentsOf: url.appendingPathExtension("bak"), encoding: .utf8).contains("Original"))
+-    }
+-
+-    @Test func canceledQueuedWriteLeavesTheSourceUntouched() throws {
+-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+-        defer { try? FileManager.default.removeItem(at: directory) }
+-        let url = directory.appendingPathComponent("captions.srt")
+-        let original = Data("1\n00:00:00,000 --> 00:00:01,000\nOriginal\n".utf8)
+-        try original.write(to: url)
+-        let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+-        let gate = DispatchSemaphore(value: 0)
+-        let writer = SubtitleFileWriter(beforeWrite: { gate.wait() })
+-        let request = SubtitleFileWriter.Request(
+-            key: .init(jobID: UUID(), slot: .transcript), source: document.source,
+-            segments: [TranscriptionSegment(id: 1, start: 0, end: 1, text: "Canceled")]
+-        )
+-        writer.write(request) { _ in Issue.record("Canceled write completed") }
+-        request.cancellation.cancel()
+-        gate.signal()
+-        #expect(writer.flush().isEmpty)
+-        #expect(try Data(contentsOf: url) == original)
+-        #expect(!FileManager.default.fileExists(atPath: url.appendingPathExtension("bak").path))
+-    }
+-}

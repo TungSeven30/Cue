@@ -1,0 +1,108 @@
+{
+  "source_tree": "b546f6922aafcc1a5184e6cfe82a218bedc82261",
+  "test_tree": "52d11dc51590b32886b7fda33dcfe6b67e2d06f6",
+  "items": [
+    {
+      "item": 1,
+      "commit": "044122941e4c52a36bf83966ae1c9ef9d4364215",
+      "title": "Fix subtitle boundaries and recover active overlapping cues",
+      "plain_revert_clean": false,
+      "patch_sha256": "35df59b3929a1e4fc5ab4c4941cf8a776285c2a0e9acac6311a470951f9dffb2"
+    },
+    {
+      "item": 2,
+      "commit": "7e90c59ac7041ab7964a2add113156c414d63592",
+      "title": "Decode Vietnamese tone marks and protect ambiguous legacy imports",
+      "plain_revert_clean": false,
+      "patch_sha256": "07213c34abb01b78b9b0a54ab12abec5f24c300dc79055e05ed83cc17eb7cc1d"
+    },
+    {
+      "item": 3,
+      "commit": "81074fffb062b6c2f9c78e88a763bd89452bfaee",
+      "title": "Validate imported translation timing and invalidate stale derived content",
+      "plain_revert_clean": false,
+      "patch_sha256": "e86d829839bf68b887bfc4044066cd57de9d607f0cb8a69ad0c3f8cde62622a3"
+    },
+    {
+      "item": 4,
+      "commit": "30b0c3e4b594e77cfb2cbb9899b32d4025d63e4a",
+      "title": "Preserve supported subtitle cues and prevent lossy source writes",
+      "plain_revert_clean": true,
+      "patch_sha256": "625e5e16419cc0c808693ff65d20f7eeb48c315bfc4f9cd71c25b558667f04f1"
+    },
+    {
+      "item": 5,
+      "commit": "86306aa1d7d0d027bb019155ba87cbb0b2d8f77e",
+      "title": "Retry the failed processing stage without discarding the transcript",
+      "plain_revert_clean": true,
+      "patch_sha256": "ff41f90d5cd00fff80983b95d4b5352c954f8f0f0f48bad6f599f918ee6c1b81"
+    },
+    {
+      "item": 6,
+      "commit": "a110ffef2d1ad84f9011c1b05cf898cb79306eeb",
+      "title": "Synchronize job decode result storage to remove the hydration race",
+      "plain_revert_clean": false,
+      "patch_sha256": "58a2ffd864e82ddac1747c087f0af634595c539bb0d27ab2ddadef9e9df5345e"
+    },
+    {
+      "item": 7,
+      "commit": "1aab713db99442471e72ecb54a727ae7696aacfe",
+      "title": "Preserve fractional subtitle modification times across job saves",
+      "plain_revert_clean": true,
+      "patch_sha256": "77047398d2a06deb95c770af85ec69cc74e218ef66d291f5db6fdf5ae50bcdab"
+    },
+    {
+      "item": 8,
+      "commit": "6f8370ce0fd8f6836fff6b6a60e04c4b6b68b997",
+      "title": "Bind subtitle imports to an unchanged idle target job",
+      "plain_revert_clean": false,
+      "patch_sha256": "1ea716f01916a0120bcebf474335276bb73dd842215d7245fc78d43560e4cf5f"
+    },
+    {
+      "item": 9,
+      "commit": "228282c2ca2ef26890d2e7dd25db3cf8ff6a77f1",
+      "title": "Reject malformed stored cues and render invalid progress safely",
+      "plain_revert_clean": true,
+      "patch_sha256": "c40a79f3eb216e1bd240959a4ced8ef8ed5504626b1706a726a6d25597c02783"
+    },
+    {
+      "item": 10,
+      "commit": "05f8c38401143ae998811dfb03ec4809b84cedf5",
+      "title": "Release playback and subtitle state when selection is cleared",
+      "plain_revert_clean": true,
+      "patch_sha256": "d0f34da670991ccad47f2d2cb27c89c281fb69afbff17636f177b7d0b98e0f11"
+    },
+    {
+      "item": 11,
+      "commit": "a5e4bfb7515099fd128c5307ccc265883574ec09",
+      "title": "Batch subtitle edits and move file I/O off the main actor",
+      "plain_revert_clean": true,
+      "patch_sha256": "0d1cbeb90960589326f84c17a46a64a7256b348f458a51d67ec7d490ccfe0067"
+    },
+    {
+      "item": 12,
+      "commit": "11b803ddbdaacde7273942e2eefed2ac2980613c",
+      "title": "Drain final worker results and bound subprocess preflight",
+      "plain_revert_clean": true,
+      "patch_sha256": "4229605e4c2714c980fb1b863c3a89977ec8e33eba73a9ffffa2285847d1255a"
+    },
+    {
+      "item": 13,
+      "commit": "5f180e0246195277af42ac5e3f05747f2cd3bd82",
+      "title": "Use native accessible preview sizing and filter controls",
+      "plain_revert_clean": true,
+      "patch_sha256": "94f09ecdfe762cec9031a7f3cc49a28dc7f22a7c295be57a54dcc2ccd5cb11fe"
+    },
+    {
+      "item": 14,
+      "title": "Add isolated Cue workspace measurements and audit evidence",
+      "plain_revert_clean": true,
+      "patch_sha256": "ce415c59fab58e341b5ef29f8bfb72570e2115cb8e994791c0162a61e03231d2"
+    }
+  ],
+  "compatibility_notes": {
+    "2": "Retains the decoded-text wrapper needed by item 4; removes Vietnamese detection and legacy-write protection.",
+    "8": "Retains request fields for compatibility and item 11 validation across asynchronous backup; removes picker-time target and activity validation.",
+    "14": "Removes runtime instrumentation and ledger injection; rollback tooling and audit evidence remain."
+  }
+}

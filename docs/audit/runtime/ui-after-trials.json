@@ -1,0 +1,962 @@
+[
+  {
+    "idleFootprintMiB": [
+      68.78239440917969,
+      68.79801940917969,
+      68.7198715209961,
+      68.7198715209961,
+      68.7042465209961
+    ],
+    "maximumRefreshInterval": 0.041666667,
+    "mediaTimeSeconds": 20.268617041,
+    "minimumRefreshInterval": 0.008333333,
+    "overlayModelReadyMs": 680.80675,
+    "playbackSamples": [
+      {
+        "cpuPercent": 7.728657447556153,
+        "footprintMiB": 73.67306518554688
+      },
+      {
+        "cpuPercent": 9.612635613750923,
+        "footprintMiB": 72.29806518554688
+      },
+      {
+        "cpuPercent": 5.656073097818655,
+        "footprintMiB": 72.29806518554688
+      },
+      {
+        "cpuPercent": 8.852035749888646,
+        "footprintMiB": 72.48556518554688
+      },
+      {
+        "cpuPercent": 6.779986704604754,
+        "footprintMiB": 72.48556518554688
+      },
+      {
+        "cpuPercent": 8.703820229342593,
+        "footprintMiB": 72.59494018554688
+      },
+      {
+        "cpuPercent": 6.544205470489153,
+        "footprintMiB": 73.01681518554688
+      },
+      {
+        "cpuPercent": 8.529439397526874,
+        "footprintMiB": 73.06369018554688
+      },
+      {
+        "cpuPercent": 6.638354775066735,
+        "footprintMiB": 73.09494018554688
+      },
+      {
+        "cpuPercent": 8.058207176504546,
+        "footprintMiB": 73.17306518554688
+      },
+      {
+        "cpuPercent": 6.622265970026239,
+        "footprintMiB": 73.26681518554688
+      },
+      {
+        "cpuPercent": 8.57566983748901,
+        "footprintMiB": 73.34494018554688
+      },
+      {
+        "cpuPercent": 5.827484586021183,
+        "footprintMiB": 73.37619018554688
+      },
+      {
+        "cpuPercent": 7.106594739991092,
+        "footprintMiB": 73.43869018554688
+      },
+      {
+        "cpuPercent": 4.980049289010564,
+        "footprintMiB": 73.45431518554688
+      },
+      {
+        "cpuPercent": 5.871003615016502,
+        "footprintMiB": 73.51681518554688
+      },
+      {
+        "cpuPercent": 5.061311305122055,
+        "footprintMiB": 72.96994018554688
+      },
+      {
+        "cpuPercent": 7.882150702502049,
+        "footprintMiB": 73.01681518554688
+      },
+      {
+        "cpuPercent": 5.3637634928897215,
+        "footprintMiB": 73.06369018554688
+      },
+      {
+        "cpuPercent": 7.369259477679329,
+        "footprintMiB": 73.09494018554688
+      }
+    ],
+    "viewAppearedMs": 202.734708
+  },
+  {
+    "idleFootprintMiB": [
+      68.98554229736328,
+      68.98554229736328,
+      68.92304229736328,
+      68.92304229736328,
+      69.34491729736328
+    ],
+    "maximumRefreshInterval": 0.041666667,
+    "mediaTimeSeconds": 20.257359125,
+    "minimumRefreshInterval": 0.008333333,
+    "overlayModelReadyMs": 696.436584,
+    "playbackSamples": [
+      {
+        "cpuPercent": 7.664615757989769,
+        "footprintMiB": 73.68869018554688
+      },
+      {
+        "cpuPercent": 8.782565853442046,
+        "footprintMiB": 72.64181518554688
+      },
+      {
+        "cpuPercent": 7.527800489506475,
+        "footprintMiB": 72.89181518554688
+      },
+      {
+        "cpuPercent": 7.565314471030959,
+        "footprintMiB": 73.06369018554688
+      },
+      {
+        "cpuPercent": 6.635385616041189,
+        "footprintMiB": 73.03244018554688
+      },
+      {
+        "cpuPercent": 7.267779049893325,
+        "footprintMiB": 73.11056518554688
+      },
+      {
+        "cpuPercent": 4.635979968982278,
+        "footprintMiB": 73.14181518554688
+      },
+      {
+        "cpuPercent": 7.533030973345996,
+        "footprintMiB": 73.21994018554688
+      },
+      {
+        "cpuPercent": 5.1180151048909455,
+        "footprintMiB": 73.25119018554688
+      },
+      {
+        "cpuPercent": 7.681041348684905,
+        "footprintMiB": 73.32931518554688
+      },
+      {
+        "cpuPercent": 4.667147400588405,
+        "footprintMiB": 73.36056518554688
+      },
+      {
+        "cpuPercent": 7.45197289367487,
+        "footprintMiB": 73.43869018554688
+      },
+      {
+        "cpuPercent": 6.444074320654231,
+        "footprintMiB": 73.48556518554688
+      },
+      {
+        "cpuPercent": 8.367533704709382,
+        "footprintMiB": 73.53244018554688
+      },
+      {
+        "cpuPercent": 5.937297187342307,
+        "footprintMiB": 73.56369018554688
+      },
+      {
+        "cpuPercent": 8.299076946225581,
+        "footprintMiB": 73.64181518554688
+      },
+      {
+        "cpuPercent": 6.252579616629883,
+        "footprintMiB": 73.26681518554688
+      },
+      {
+        "cpuPercent": 8.841331000793428,
+        "footprintMiB": 73.28244018554688
+      },
+      {
+        "cpuPercent": 6.767287691986791,
+        "footprintMiB": 73.34494018554688
+      },
+      {
+        "cpuPercent": 8.7417443229523,
+        "footprintMiB": 73.36056518554688
+      }
+    ],
+    "viewAppearedMs": 258.220709
+  },
+  {
+    "idleFootprintMiB": [
+      66.87614440917969,
+      66.87614440917969,
+      66.81364440917969,
+      66.81364440917969,
+      66.81364440917969
+    ],
+    "maximumRefreshInterval": 0.041666667,
+    "mediaTimeSeconds": 20.265026375,
+    "minimumRefreshInterval": 0.008333333,
+    "overlayModelReadyMs": 751.99425,
+    "playbackSamples": [
+      {
+        "cpuPercent": 7.443724410715648,
+        "footprintMiB": 71.15739440917969
+      },
+      {
+        "cpuPercent": 7.4669423409197355,
+        "footprintMiB": 70.17304229736328
+      },
+      {
+        "cpuPercent": 5.821102179492859,
+        "footprintMiB": 71.20429229736328
+      },
+      {
+        "cpuPercent": 6.638421637418267,
+        "footprintMiB": 70.36054229736328
+      },
+      {
+        "cpuPercent": 4.989335155082656,
+        "footprintMiB": 70.29804229736328
+      },
+      {
+        "cpuPercent": 7.413695134193249,
+        "footprintMiB": 70.45429229736328
+      },
+      {
+        "cpuPercent": 5.4273689451222555,
+        "footprintMiB": 70.45429229736328
+      },
+      {
+        "cpuPercent": 5.761056586739346,
+        "footprintMiB": 70.54804229736328
+      },
+      {
+        "cpuPercent": 5.104542207520332,
+        "footprintMiB": 70.57929229736328
+      },
+      {
+        "cpuPercent": 7.366739322492713,
+        "footprintMiB": 70.67304229736328
+      },
+      {
+        "cpuPercent": 6.180114667235259,
+        "footprintMiB": 70.70429229736328
+      },
+      {
+        "cpuPercent": 5.129137029279771,
+        "footprintMiB": 70.79804229736328
+      },
+      {
+        "cpuPercent": 5.953898170484985,
+        "footprintMiB": 70.81366729736328
+      },
+      {
+        "cpuPercent": 6.585002724065111,
+        "footprintMiB": 70.87616729736328
+      },
+      {
+        "cpuPercent": 5.203138658482332,
+        "footprintMiB": 70.90741729736328
+      },
+      {
+        "cpuPercent": 6.7492435023208746,
+        "footprintMiB": 70.95429229736328
+      },
+      {
+        "cpuPercent": 5.1048396270272,
+        "footprintMiB": 70.56366729736328
+      },
+      {
+        "cpuPercent": 7.261032935282001,
+        "footprintMiB": 70.57929229736328
+      },
+      {
+        "cpuPercent": 4.928470653476788,
+        "footprintMiB": 70.62616729736328
+      },
+      {
+        "cpuPercent": 7.3114348964859275,
+        "footprintMiB": 70.65741729736328
+      }
+    ],
+    "viewAppearedMs": 230.422042
+  },
+  {
+    "idleFootprintMiB": [
+      69.29804229736328,
+      69.31366729736328,
+      69.31366729736328,
+      69.26676940917969,
+      69.25114440917969
+    ],
+    "maximumRefreshInterval": 0.041666667,
+    "mediaTimeSeconds": 20.314540125,
+    "minimumRefreshInterval": 0.008333333,
+    "overlayModelReadyMs": 723.496042,
+    "playbackSamples": [
+      {
+        "cpuPercent": 7.9096426148536585,
+        "footprintMiB": 73.64183807373047
+      },
+      {
+        "cpuPercent": 8.213307982063268,
+        "footprintMiB": 72.56371307373047
+      },
+      {
+        "cpuPercent": 6.518164356146565,
+        "footprintMiB": 73.56371307373047
+      },
+      {
+        "cpuPercent": 8.69858391301995,
+        "footprintMiB": 72.78246307373047
+      },
+      {
+        "cpuPercent": 6.936059697033711,
+        "footprintMiB": 72.65746307373047
+      },
+      {
+        "cpuPercent": 9.288136124720586,
+        "footprintMiB": 73.00121307373047
+      },
+      {
+        "cpuPercent": 6.439907382826809,
+        "footprintMiB": 73.00121307373047
+      },
+      {
+        "cpuPercent": 8.300990625346344,
+        "footprintMiB": 73.09496307373047
+      },
+      {
+        "cpuPercent": 6.317974985205457,
+        "footprintMiB": 73.11058807373047
+      },
+      {
+        "cpuPercent": 8.675593713738968,
+        "footprintMiB": 73.21996307373047
+      },
+      {
+        "cpuPercent": 6.7724288174334415,
+        "footprintMiB": 73.23558807373047
+      },
+      {
+        "cpuPercent": 8.602572224531265,
+        "footprintMiB": 73.32933807373047
+      },
+      {
+        "cpuPercent": 5.5277310218510225,
+        "footprintMiB": 73.37621307373047
+      },
+      {
+        "cpuPercent": 7.174962881445027,
+        "footprintMiB": 73.43871307373047
+      },
+      {
+        "cpuPercent": 6.621341473623316,
+        "footprintMiB": 73.46996307373047
+      },
+      {
+        "cpuPercent": 8.24469425946252,
+        "footprintMiB": 73.48558807373047
+      },
+      {
+        "cpuPercent": 6.607117109242382,
+        "footprintMiB": 73.56371307373047
+      },
+      {
+        "cpuPercent": 7.801265740440476,
+        "footprintMiB": 73.61058807373047
+      },
+      {
+        "cpuPercent": 6.699225920473594,
+        "footprintMiB": 73.64183807373047
+      },
+      {
+        "cpuPercent": 7.973789585061186,
+        "footprintMiB": 73.70433807373047
+      }
+    ],
+    "viewAppearedMs": 249.788917
+  },
+  {
+    "idleFootprintMiB": [
+      69.59491729736328,
+      69.61054229736328,
+      69.61054229736328,
+      69.54804229736328,
+      69.54804229736328
+    ],
+    "maximumRefreshInterval": 0.041666667,
+    "mediaTimeSeconds": 20.251473792,
+    "minimumRefreshInterval": 0.008333333,
+    "overlayModelReadyMs": 737.13775,
+    "playbackSamples": [
+      {
+        "cpuPercent": 7.79645312232617,
+        "footprintMiB": 74.04808807373047
+      },
+      {
+        "cpuPercent": 9.489578326465855,
+        "footprintMiB": 73.79808807373047
+      },
+      {
+        "cpuPercent": 5.759685352162867,
+        "footprintMiB": 72.82933807373047
+      },
+      {
+        "cpuPercent": 9.121129182789609,
+        "footprintMiB": 73.06371307373047
+      },
+      {
+        "cpuPercent": 5.106836431298832,
+        "footprintMiB": 72.98558807373047
+      },
+      {
+        "cpuPercent": 8.661333532823964,
+        "footprintMiB": 73.11058807373047
+      },
+      {
+        "cpuPercent": 5.851415451174773,
+        "footprintMiB": 73.15746307373047
+      },
+      {
+        "cpuPercent": 8.850755922476079,
+        "footprintMiB": 73.25121307373047
+      },
+      {
+        "cpuPercent": 5.883761084258192,
+        "footprintMiB": 73.23558807373047
+      },
+      {
+        "cpuPercent": 8.734266595434303,
+        "footprintMiB": 73.34496307373047
+      },
+      {
+        "cpuPercent": 6.8621652950966325,
+        "footprintMiB": 73.34496307373047
+      },
+      {
+        "cpuPercent": 8.533369640355293,
+        "footprintMiB": 73.42308807373047
+      },
+      {
+        "cpuPercent": 6.359155210784877,
+        "footprintMiB": 73.45433807373047
+      },
+      {
+        "cpuPercent": 8.790870402578035,
+        "footprintMiB": 73.50121307373047
+      },
+      {
+        "cpuPercent": 6.996783789563675,
+        "footprintMiB": 73.53246307373047
+      },
+      {
+        "cpuPercent": 7.248376560887798,
+        "footprintMiB": 73.54808807373047
+      },
+      {
+        "cpuPercent": 5.9403146141607195,
+        "footprintMiB": 72.75121307373047
+      },
+      {
+        "cpuPercent": 8.331302540571276,
+        "footprintMiB": 72.78246307373047
+      },
+      {
+        "cpuPercent": 6.466329816360303,
+        "footprintMiB": 72.84496307373047
+      },
+      {
+        "cpuPercent": 8.051917832849828,
+        "footprintMiB": 72.87621307373047
+      }
+    ],
+    "viewAppearedMs": 248.142459
+  },
+  {
+    "idleFootprintMiB": [
+      69.17301940917969,
+      69.18864440917969,
+      69.12614440917969,
+      69.12614440917969,
+      69.12614440917969
+    ],
+    "maximumRefreshInterval": 0.041666667,
+    "mediaTimeSeconds": 20.167433292,
+    "minimumRefreshInterval": 0.008333333,
+    "overlayModelReadyMs": 736.359,
+    "playbackSamples": [
+      {
+        "cpuPercent": 7.6936856344894835,
+        "footprintMiB": 73.81371307373047
+      },
+      {
+        "cpuPercent": 8.772350312659738,
+        "footprintMiB": 72.56371307373047
+      },
+      {
+        "cpuPercent": 7.1003118576002,
+        "footprintMiB": 72.61058807373047
+      },
+      {
+        "cpuPercent": 8.53904246929769,
+        "footprintMiB": 72.75121307373047
+      },
+      {
+        "cpuPercent": 6.0753496871969705,
+        "footprintMiB": 72.68871307373047
+      },
+      {
+        "cpuPercent": 7.900932018420543,
+        "footprintMiB": 72.81371307373047
+      },
+      {
+        "cpuPercent": 4.206347415196373,
+        "footprintMiB": 72.86058807373047
+      },
+      {
+        "cpuPercent": 6.824513568467437,
+        "footprintMiB": 72.96996307373047
+      },
+      {
+        "cpuPercent": 6.0100638979480445,
+        "footprintMiB": 72.96996307373047
+      },
+      {
+        "cpuPercent": 8.649188046617509,
+        "footprintMiB": 73.07933807373047
+      },
+      {
+        "cpuPercent": 6.774811335909867,
+        "footprintMiB": 73.09496307373047
+      },
+      {
+        "cpuPercent": 7.949752331424061,
+        "footprintMiB": 74.28246307373047
+      },
+      {
+        "cpuPercent": 6.5705060798562895,
+        "footprintMiB": 73.26683807373047
+      },
+      {
+        "cpuPercent": 9.111292043271751,
+        "footprintMiB": 73.29808807373047
+      },
+      {
+        "cpuPercent": 6.864323020165748,
+        "footprintMiB": 73.34496307373047
+      },
+      {
+        "cpuPercent": 7.737479622457401,
+        "footprintMiB": 73.39183807373047
+      },
+      {
+        "cpuPercent": 6.877658305430526,
+        "footprintMiB": 73.71996307373047
+      },
+      {
+        "cpuPercent": 8.969510930438245,
+        "footprintMiB": 73.76683807373047
+      },
+      {
+        "cpuPercent": 6.334670572561156,
+        "footprintMiB": 73.79808807373047
+      },
+      {
+        "cpuPercent": 8.347352268373728,
+        "footprintMiB": 73.82933807373047
+      }
+    ],
+    "viewAppearedMs": 228.660125
+  },
+  {
+    "idleFootprintMiB": [
+      68.87616729736328,
+      68.89179229736328,
+      68.89179229736328,
+      68.82929229736328,
+      68.82929229736328
+    ],
+    "maximumRefreshInterval": 0.041666667,
+    "mediaTimeSeconds": 20.209768333,
+    "minimumRefreshInterval": 0.008333333,
+    "overlayModelReadyMs": 722.404708,
+    "playbackSamples": [
+      {
+        "cpuPercent": 7.362102290879617,
+        "footprintMiB": 73.18871307373047
+      },
+      {
+        "cpuPercent": 9.844829342043878,
+        "footprintMiB": 71.93871307373047
+      },
+      {
+        "cpuPercent": 6.622539360203025,
+        "footprintMiB": 73.04808807373047
+      },
+      {
+        "cpuPercent": 8.915835683149401,
+        "footprintMiB": 72.31371307373047
+      },
+      {
+        "cpuPercent": 6.6644331077418215,
+        "footprintMiB": 72.26683807373047
+      },
+      {
+        "cpuPercent": 8.779738200492364,
+        "footprintMiB": 72.34496307373047
+      },
+      {
+        "cpuPercent": 5.905365276528776,
+        "footprintMiB": 72.79808807373047
+      },
+      {
+        "cpuPercent": 8.721282957831896,
+        "footprintMiB": 72.89183807373047
+      },
+      {
+        "cpuPercent": 6.866356412644968,
+        "footprintMiB": 72.93871307373047
+      },
+      {
+        "cpuPercent": 7.542285931689021,
+        "footprintMiB": 73.04808807373047
+      },
+      {
+        "cpuPercent": 6.014600319866014,
+        "footprintMiB": 73.04808807373047
+      },
+      {
+        "cpuPercent": 8.914689445884134,
+        "footprintMiB": 73.14183807373047
+      },
+      {
+        "cpuPercent": 6.53350340164819,
+        "footprintMiB": 73.17308807373047
+      },
+      {
+        "cpuPercent": 8.320494834619767,
+        "footprintMiB": 73.26683807373047
+      },
+      {
+        "cpuPercent": 6.313552844838986,
+        "footprintMiB": 73.28246307373047
+      },
+      {
+        "cpuPercent": 8.424438866589133,
+        "footprintMiB": 73.31371307373047
+      },
+      {
+        "cpuPercent": 6.232120908646961,
+        "footprintMiB": 72.90746307373047
+      },
+      {
+        "cpuPercent": 7.977203006919053,
+        "footprintMiB": 72.92308807373047
+      },
+      {
+        "cpuPercent": 6.319227748785414,
+        "footprintMiB": 72.98558807373047
+      },
+      {
+        "cpuPercent": 8.311914197750065,
+        "footprintMiB": 73.04808807373047
+      }
+    ],
+    "viewAppearedMs": 246.871542
+  },
+  {
+    "idleFootprintMiB": [
+      69.32929229736328,
+      69.34491729736328,
+      69.28241729736328,
+      69.28241729736328,
+      69.28241729736328
+    ],
+    "maximumRefreshInterval": 0.041666667,
+    "mediaTimeSeconds": 20.370561916,
+    "minimumRefreshInterval": 0.008333333,
+    "overlayModelReadyMs": 744.861333,
+    "playbackSamples": [
+      {
+        "cpuPercent": 7.697939662604438,
+        "footprintMiB": 73.87619018554688
+      },
+      {
+        "cpuPercent": 8.781757536597947,
+        "footprintMiB": 72.73556518554688
+      },
+      {
+        "cpuPercent": 6.501531350509407,
+        "footprintMiB": 72.71994018554688
+      },
+      {
+        "cpuPercent": 8.633041474579068,
+        "footprintMiB": 73.93869018554688
+      },
+      {
+        "cpuPercent": 6.742342759870174,
+        "footprintMiB": 72.89181518554688
+      },
+      {
+        "cpuPercent": 8.864705771297396,
+        "footprintMiB": 73.03244018554688
+      },
+      {
+        "cpuPercent": 6.104099569176591,
+        "footprintMiB": 73.04806518554688
+      },
+      {
+        "cpuPercent": 9.267932171718304,
+        "footprintMiB": 73.17306518554688
+      },
+      {
+        "cpuPercent": 6.551146360119669,
+        "footprintMiB": 73.20431518554688
+      },
+      {
+        "cpuPercent": 7.135455189792809,
+        "footprintMiB": 73.26681518554688
+      },
+      {
+        "cpuPercent": 6.898123057625306,
+        "footprintMiB": 73.57931518554688
+      },
+      {
+        "cpuPercent": 8.698504087317765,
+        "footprintMiB": 73.62619018554688
+      },
+      {
+        "cpuPercent": 6.271122251296079,
+        "footprintMiB": 73.67306518554688
+      },
+      {
+        "cpuPercent": 9.280229687510278,
+        "footprintMiB": 73.73556518554688
+      },
+      {
+        "cpuPercent": 5.917863103912853,
+        "footprintMiB": 74.84494018554688
+      },
+      {
+        "cpuPercent": 8.076361569168585,
+        "footprintMiB": 73.73556518554688
+      },
+      {
+        "cpuPercent": 6.776685633091047,
+        "footprintMiB": 73.79806518554688
+      },
+      {
+        "cpuPercent": 7.372367549961744,
+        "footprintMiB": 73.84494018554688
+      },
+      {
+        "cpuPercent": 6.918783215564757,
+        "footprintMiB": 73.84494018554688
+      },
+      {
+        "cpuPercent": 7.779590620855576,
+        "footprintMiB": 73.89181518554688
+      }
+    ],
+    "viewAppearedMs": 245.064625
+  },
+  {
+    "idleFootprintMiB": [
+      68.78241729736328,
+      68.79804229736328,
+      68.79804229736328,
+      68.73554229736328,
+      68.73554229736328
+    ],
+    "maximumRefreshInterval": 0.041666667,
+    "mediaTimeSeconds": 20.373646708,
+    "minimumRefreshInterval": 0.008333333,
+    "overlayModelReadyMs": 683.455541,
+    "playbackSamples": [
+      {
+        "cpuPercent": 7.454841110972962,
+        "footprintMiB": 73.25121307373047
+      },
+      {
+        "cpuPercent": 8.086864760010732,
+        "footprintMiB": 71.89183807373047
+      },
+      {
+        "cpuPercent": 7.60307885875892,
+        "footprintMiB": 71.96996307373047
+      },
+      {
+        "cpuPercent": 8.566494651345684,
+        "footprintMiB": 73.23558807373047
+      },
+      {
+        "cpuPercent": 6.508034952113348,
+        "footprintMiB": 72.09496307373047
+      },
+      {
+        "cpuPercent": 8.036408470661412,
+        "footprintMiB": 72.17308807373047
+      },
+      {
+        "cpuPercent": 7.092583147337915,
+        "footprintMiB": 72.15746307373047
+      },
+      {
+        "cpuPercent": 8.302920718538655,
+        "footprintMiB": 72.26683807373047
+      },
+      {
+        "cpuPercent": 7.051423443437117,
+        "footprintMiB": 72.32933807373047
+      },
+      {
+        "cpuPercent": 7.710261048792429,
+        "footprintMiB": 72.37621307373047
+      },
+      {
+        "cpuPercent": 6.481416300664813,
+        "footprintMiB": 72.78246307373047
+      },
+      {
+        "cpuPercent": 8.989611142483982,
+        "footprintMiB": 72.86058807373047
+      },
+      {
+        "cpuPercent": 6.513616772271417,
+        "footprintMiB": 72.89183807373047
+      },
+      {
+        "cpuPercent": 8.856800318440925,
+        "footprintMiB": 72.98558807373047
+      },
+      {
+        "cpuPercent": 6.421304180139985,
+        "footprintMiB": 73.00121307373047
+      },
+      {
+        "cpuPercent": 8.362923747733332,
+        "footprintMiB": 72.64183807373047
+      },
+      {
+        "cpuPercent": 6.695121495391263,
+        "footprintMiB": 72.65746307373047
+      },
+      {
+        "cpuPercent": 9.28632661918388,
+        "footprintMiB": 72.70433807373047
+      },
+      {
+        "cpuPercent": 6.544056355370537,
+        "footprintMiB": 72.75121307373047
+      },
+      {
+        "cpuPercent": 6.9703295778592675,
+        "footprintMiB": 72.78246307373047
+      }
+    ],
+    "viewAppearedMs": 223.997458
+  },
+  {
+    "idleFootprintMiB": [
+      69.28241729736328,
+      69.29804229736328,
+      69.23554229736328,
+      69.23554229736328,
+      69.23554229736328
+    ],
+    "maximumRefreshInterval": 0.041666667,
+    "mediaTimeSeconds": 20.428217125,
+    "minimumRefreshInterval": 0.008333333,
+    "overlayModelReadyMs": 656.606875,
+    "playbackSamples": [
+      {
+        "cpuPercent": 7.624463468976122,
+        "footprintMiB": 72.75121307373047
+      },
+      {
+        "cpuPercent": 9.155686857862372,
+        "footprintMiB": 73.29808807373047
+      },
+      {
+        "cpuPercent": 6.7797760614130524,
+        "footprintMiB": 73.37621307373047
+      },
+      {
+        "cpuPercent": 8.382000849911355,
+        "footprintMiB": 72.57933807373047
+      },
+      {
+        "cpuPercent": 5.46771524331497,
+        "footprintMiB": 72.54808807373047
+      },
+      {
+        "cpuPercent": 9.171639270859506,
+        "footprintMiB": 72.64183807373047
+      },
+      {
+        "cpuPercent": 6.512909448164795,
+        "footprintMiB": 72.70433807373047
+      },
+      {
+        "cpuPercent": 8.293238236260368,
+        "footprintMiB": 72.76683807373047
+      },
+      {
+        "cpuPercent": 5.863156822492566,
+        "footprintMiB": 72.79808807373047
+      },
+      {
+        "cpuPercent": 7.203375445970016,
+        "footprintMiB": 72.89183807373047
+      },
+      {
+        "cpuPercent": 5.3992181007082465,
+        "footprintMiB": 72.90746307373047
+      },
+      {
+        "cpuPercent": 7.674502090697234,
+        "footprintMiB": 73.21996307373047
+      },
+      {
+        "cpuPercent": 6.645843696779023,
+        "footprintMiB": 73.26683807373047
+      },
+      {
+        "cpuPercent": 8.663450181346025,
+        "footprintMiB": 73.34496307373047
+      },
+      {
+        "cpuPercent": 6.53794166162742,
+        "footprintMiB": 73.39183807373047
+      },
+      {
+        "cpuPercent": 7.533684294483717,
+        "footprintMiB": 73.45433807373047
+      },
+      {
+        "cpuPercent": 5.999194278913765,
+        "footprintMiB": 72.84496307373047
+      },
+      {
+        "cpuPercent": 8.099082914125123,
+        "footprintMiB": 72.89183807373047
+      },
+      {
+        "cpuPercent": 6.418379341572134,
+        "footprintMiB": 72.95433807373047
+      },
+      {
+        "cpuPercent": 7.999513913210913,
+        "footprintMiB": 72.98558807373047
+      }
+    ],
+    "viewAppearedMs": 212.766125
+  }
+]

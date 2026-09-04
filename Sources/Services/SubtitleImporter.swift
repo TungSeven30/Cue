@@ -90,11 +90,16 @@ enum SubtitleImporter {
     /// read to fill the slot picker: the user may still cancel, and a cancelled
     /// load must leave nothing behind. That path backs up when it commits.
     static func importFile(at url: URL, backingUp: Bool = true) throws -> Document {
-        let segments = try SubtitleReader.parse(contentsOf: url)
+        let decoded = try SubtitleReader.readText(contentsOf: url)
         guard let format = SubtitleReader.format(for: url),
             var source = ImportedSubtitleSource(url: url, format: format)
         else {
             throw SubtitleReader.ReadError.unreadable
+        }
+        let segments = try SubtitleReader.parse(decoded.text, format: format)
+        if decoded.requiresEncodingReview {
+            source.syncPaused = true
+            source.lastSyncError = "Legacy text encoding is uncertain. Review the text and export a UTF-8 copy before syncing edits."
         }
         if backingUp {
             source.didBackup = backUpOriginal(at: url)

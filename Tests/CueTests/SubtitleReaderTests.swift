@@ -4,6 +4,13 @@ import Testing
 @testable import Cue
 
 struct SubtitleReaderTests {
+    @Test func decodesVietnameseWindows1258ToneMarks() throws {
+        // Windows-1258 Viê + COMBINING DOT BELOW + t.
+        #expect(SubtitleReader.decode(Data([86, 105, 234, 242, 116])) == "Việt")
+        #expect(SubtitleReader.decode(Data("Tiếng Việt — 日本語".utf8)) == "Tiếng Việt — 日本語")
+        #expect(SubtitleReader.decode(Data([67, 97, 102, 233])) == "Café")
+    }
+
     @Test func parsesStandardSRT() throws {
         let srt = """
             1

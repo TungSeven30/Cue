@@ -4,6 +4,23 @@ import Testing
 @testable import Cue
 
 struct SubtitleImporterTests {
+    @Test func ambiguousLegacyEncodingCannotAutomaticallyRewriteTheSource() throws {
+        let dir = try makeFolder([])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("movie.vi.srt")
+        var bytes = Data("1\n00:00:01,000 --> 00:00:02,000\n".utf8)
+        bytes.append(contentsOf: [86, 105, 234, 242, 116])
+        try bytes.write(to: url)
+        let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+        #expect(document.segments.first?.text == "Việt")
+        #expect(document.source.syncPaused)
+        #expect(document.source.lastSyncError != nil)
+        #expect(try Data(contentsOf: url) == bytes)
+
+        try Data("1\n00:00:01,000 --> 00:00:02,000\nTiếng Việt\n".utf8).write(to: url)
+        #expect(try !SubtitleImporter.importFile(at: url, backingUp: false).source.syncPaused)
+    }
+
     private let srt = """
         1
         00:00:01,000 --> 00:00:02,000

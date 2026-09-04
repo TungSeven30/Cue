@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 
 /// Parse-only counterpart to `SubtitleWriter`. Reads SRT and WebVTT into the
@@ -23,7 +24,18 @@ enum SubtitleReader {
     }
 
     static func parse(contentsOf url: URL, maximumSize: Int = maximumFileSize) throws -> [TranscriptionSegment] {
-        guard let format = format(for: url) else {
+        let decoded = try readText(contentsOf: url, maximumSize: maximumSize)
+        guard let format = format(for: url) else { throw ReadError.unsupportedFormat(url.pathExtension.lowercased()) }
+        return try parse(decoded.text, format: format)
+    }
+
+    struct DecodedText {
+        let text: String
+        let requiresEncodingReview: Bool
+    }
+
+    static func readText(contentsOf url: URL, maximumSize: Int = maximumFileSize) throws -> DecodedText {
+        guard format(for: url) != nil else {
             throw ReadError.unsupportedFormat(url.pathExtension.lowercased())
         }
         // A file whose size cannot be read must fail the cap, not bypass it.
@@ -32,14 +44,21 @@ enum SubtitleReader {
         guard let data = try? Data(contentsOf: url), let text = decode(data) else {
             throw ReadError.unreadable
         }
-        return try parse(text, format: format)
+        return DecodedText(text: text, requiresEncodingReview: !isUnicode(data))
+    }
+
+    private static func isUnicode(_ data: Data) -> Bool {
+        if String(data: data, encoding: .utf8) != nil { return true }
+        let prefix = Array(data.prefix(2))
+        return (prefix == [0xFF, 0xFE] || prefix == [0xFE, 0xFF]) && String(data: data, encoding: .utf16) != nil
     }
 
     /// SRT files in the wild are frequently Latin-1, so a UTF-8 failure must
     /// not end the attempt. Order matters: UTF-16 BOM must be checked first
     /// (Foundation's `.utf16` decoder is lenient and will claim non-UTF-16 bytes
     /// as valid, shadowing other encodings), then UTF-8 (the modern default),
-    /// then Windows-1252 last because it decodes any byte sequence.
+    /// then Vietnamese tone-mark evidence, then Windows-1252. Legacy choices
+    /// are ambiguous; the importer pauses write-back until explicitly reviewed.
     static func decode(_ data: Data) -> String? {
         // Check for UTF-16 BOM explicitly: FF FE (LE) or FE FF (BE).
         // Only try UTF-16 if the BOM is present; raw UTF-16 detection is too
@@ -51,6 +70,7 @@ enum SubtitleReader {
                 if let text = String(data: data, encoding: .utf16) {
                     return stripBOM(text)
                 }
+                return nil
             }
         }
 
@@ -59,7 +79,19 @@ enum SubtitleReader {
             return stripBOM(text)
         }
 
-        // Fall back to Windows-1252, which accepts any byte sequence.
+        // Windows-1258 encodes Vietnamese tones as combining marks. Decode
+        // those sequences before CP1252 can turn them into visible Latin letters.
+        let vietnamese = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(
+            CFStringEncoding(CFStringEncodings.windowsVietnamese.rawValue)
+        ))
+        if let text = String(data: data, encoding: vietnamese),
+            text.range(of: "[aăâeêioôơuưyAĂÂEÊIOÔƠUƯY][\\u0300\\u0301\\u0303\\u0309\\u0323]", options: .regularExpression) != nil
+        {
+            return text.precomposedStringWithCanonicalMapping
+        }
+
+        // Preserve the existing Western fallback, but never treat it as a
+        // confirmed encoding for automatic writes to an imported source.
         if let text = String(data: data, encoding: .windowsCP1252) {
             return stripBOM(text)
         }

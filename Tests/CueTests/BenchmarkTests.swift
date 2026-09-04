@@ -154,9 +154,11 @@ enum BenchmarkFixtures {
     }
 
     /// About 17 seconds of speech from the system voice, extracted to the
-    /// 16 kHz mono WAV the engine consumes. The returned URL lives in its own
-    /// temp directory; callers remove the directory.
-    static func spokenFixtureWAV() async throws -> URL {
+    /// 16 kHz mono WAV the engine consumes. `repeats` concatenates the clip
+    /// that many times with `gapSeconds` of digital silence between copies,
+    /// which gives the chunk planner a guaranteed cut point. The returned
+    /// URL lives in its own temp directory; callers remove the directory.
+    static func spokenFixtureWAV(repeats: Int = 1, gapSeconds: Double = 0) async throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("bench-fixture-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -171,7 +173,23 @@ enum BenchmarkFixtures {
         say.waitUntilExit()
         let wav = dir.appendingPathComponent("fixture.wav")
         try await AudioExtractor.extract(from: aiff, to: wav)
-        return wav
+        guard repeats > 1 || gapSeconds > 0 else { return wav }
+
+        // AudioExtractor writes the canonical 44-byte header, so the PCM
+        // payload is everything after it.
+        let single = try Data(contentsOf: wav)
+        let pcm = single.subdata(in: 44..<single.count)
+        let gap = Data(count: Int(gapSeconds * 16_000) * 2)
+        var payload = Data()
+        for index in 0..<max(1, repeats) {
+            if index > 0 { payload.append(gap) }
+            payload.append(pcm)
+        }
+        var combined = AudioExtractor.wavHeader(dataLength: UInt32(payload.count))
+        combined.append(payload)
+        let combinedURL = dir.appendingPathComponent("fixture-\(repeats)x.wav")
+        try combined.write(to: combinedURL)
+        return combinedURL
     }
 
     @MainActor

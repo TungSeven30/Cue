@@ -9,6 +9,7 @@ final class PlayerController: ObservableObject {
     private final class TimeObserverLifetime: @unchecked Sendable {
         let player: AVPlayer
         var token: Any?
+        var boundaryToken: Any?
 
         init(player: AVPlayer) {
             self.player = player
@@ -18,6 +19,9 @@ final class PlayerController: ObservableObject {
             if let token {
                 player.removeTimeObserver(token)
             }
+            if let boundaryToken {
+                player.removeTimeObserver(boundaryToken)
+            }
         }
     }
 
@@ -26,6 +30,7 @@ final class PlayerController: ObservableObject {
     @Published private(set) var overlayText = ""
 
     private var segments: [TranscriptionSegment] = []
+    private var maximumEnds: [Double] = []
     private var currentURL: URL?
     private let timeObserverLifetime: TimeObserverLifetime
 
@@ -37,10 +42,10 @@ final class PlayerController: ObservableObject {
         lifetime.token = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
             queue: .main
-        ) { [weak self] time in
-            let seconds = time.seconds
+        ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.refresh(at: seconds)
+                guard let self else { return }
+                self.refresh(at: self.player.currentTime().seconds)
             }
         }
     }
@@ -70,12 +75,38 @@ final class PlayerController: ObservableObject {
         // enforces it.
         let isSorted = zip(newSegments, newSegments.dropFirst()).allSatisfy { $0.start <= $1.start }
         segments = isSorted ? newSegments : newSegments.sorted { $0.start < $1.start }
+        var maximumEnd = -Double.infinity
+        maximumEnds = segments.map {
+            maximumEnd = max(maximumEnd, $0.end)
+            return maximumEnd
+        }
+        if let token = timeObserverLifetime.boundaryToken {
+            player.removeTimeObserver(token)
+            timeObserverLifetime.boundaryToken = nil
+        }
+        // Let the media clock trigger cue transitions. The periodic observer
+        // remains a fallback for native scrubbing, not the timing authority.
+        let boundaries = Set(segments.flatMap { [$0.start, $0.end] })
+            .filter { $0.isFinite && $0 >= 0 }.sorted()
+        if !boundaries.isEmpty {
+            timeObserverLifetime.boundaryToken = player.addBoundaryTimeObserver(
+                forTimes: boundaries.map { NSValue(time: CMTime(seconds: $0, preferredTimescale: 1_000_000)) },
+                queue: .main
+            ) { [weak self] in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.refresh(at: self.player.currentTime().seconds)
+                }
+            }
+        }
         refresh(at: player.currentTime().seconds)
     }
 
     func seek(to seconds: Double) {
+        guard seconds.isFinite else { return }
+        let seconds = max(0, seconds)
         player.seek(
-            to: CMTime(seconds: max(0, seconds), preferredTimescale: 600),
+            to: CMTime(seconds: seconds, preferredTimescale: 1_000_000),
             toleranceBefore: .zero,
             toleranceAfter: .zero
         )
@@ -89,8 +120,7 @@ final class PlayerController: ObservableObject {
     }
 
     private func refresh(at time: Double) {
-        guard time.isFinite else { return }
-        let segment = Self.segment(at: time, in: segments)
+        let segment = time.isFinite ? segment(at: time) : nil
         if segment?.id != activeSegmentID {
             activeSegmentID = segment?.id
         }
@@ -101,24 +131,24 @@ final class PlayerController: ObservableObject {
     }
 
     /// Binary search for the segment whose [start, end) contains `time`.
-    /// A seek to a segment's exact start can materialize a hair before it
-    /// (CMTime rounding), so probe slightly ahead of the playhead.
-    private static func segment(at time: Double, in segments: [TranscriptionSegment]) -> TranscriptionSegment? {
-        let probe = time + 0.15
+    /// Prefer the latest-starting active cue, then recover a longer cue when
+    /// a shorter overlapping cue ends. Prefix maxima bound the backward scan.
+    private func segment(at time: Double) -> TranscriptionSegment? {
         var low = 0
         var high = segments.count - 1
-        var candidate: TranscriptionSegment?
         while low <= high {
             let mid = (low + high) / 2
-            if segments[mid].start <= probe {
-                candidate = segments[mid]
+            if segments[mid].start <= time {
                 low = mid + 1
             } else {
                 high = mid - 1
             }
         }
-        guard let candidate, time < candidate.end + 0.25 else { return nil }
-        return candidate
+        while high >= 0, maximumEnds[high] > time {
+            if time < segments[high].end { return segments[high] }
+            high -= 1
+        }
+        return nil
     }
 }
 

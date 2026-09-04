@@ -104,6 +104,15 @@ enum SubtitleReader {
     }
 
     static func parse(_ text: String, format: SubtitleExportFormat) throws -> [TranscriptionSegment] {
+        try parseDocument(text, format: format).segments
+    }
+
+    struct ParsedDocument {
+        let segments: [TranscriptionSegment]
+        let hasUnrepresentedContent: Bool
+    }
+
+    static func parseDocument(_ text: String, format: SubtitleExportFormat) throws -> ParsedDocument {
         let normalized =
             text
             .replacingOccurrences(of: "\r\n", with: "\n")
@@ -117,43 +126,64 @@ enum SubtitleReader {
             .replacingOccurrences(of: "\n[ \t]+(?=\n)", with: "\n", options: .regularExpression)
 
         var segments: [TranscriptionSegment] = []
+        var hasUnrepresentedContent = false
         for block in normalized.components(separatedBy: "\n\n") {
             let lines =
                 block
                 .components(separatedBy: "\n")
                 .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             guard let first = lines.first else { continue }
-            if format == .vtt, isVTTMetadata(first) { continue }
+            if format == .vtt, isVTTMetadata(first) {
+                if !first.hasPrefix("WEBVTT") { hasUnrepresentedContent = true }
+                continue
+            }
 
             // A malformed block is skipped rather than fatal: real files carry
             // junk tails, and losing the whole transcript to one bad cue is
             // the worse failure.
-            guard let timingIndex = lines.firstIndex(where: { $0.contains("-->") }),
-                let timing = parseTimingLine(lines[timingIndex])
-            else { continue }
-
-            let body = lines[lines.index(after: timingIndex)...].joined(separator: "\n")
-            let cleaned = SubtitleWriter.sanitizedCueText(body)
-            guard !cleaned.isEmpty else { continue }
-
-            // Ids are assigned here, never read from the file: they double as
-            // the join key for bilingual export and translation reconciliation,
-            // and third-party files routinely repeat or skip indices.
-            segments.append(
-                TranscriptionSegment(
-                    id: segments.count + 1,
-                    start: timing.start,
-                    end: max(timing.end, timing.start),
-                    text: cleaned
+            let timings = lines.indices.compactMap { index -> (Int, Timing)? in
+                guard lines[index].contains("-->"), let timing = parseTimingLine(lines[index]) else { return nil }
+                return (index, timing)
+            }
+            guard !timings.isEmpty else {
+                hasUnrepresentedContent = true
+                continue
+            }
+            if timings.count > 1 { hasUnrepresentedContent = true }
+            for (position, entry) in timings.enumerated() {
+                let (timingIndex, timing) = entry
+                var bodyEnd = position + 1 < timings.count ? timings[position + 1].0 : lines.count
+                if bodyEnd < lines.count, bodyEnd > timingIndex + 1, Int(lines[bodyEnd - 1]) != nil {
+                    bodyEnd -= 1
+                }
+                let body = lines[(timingIndex + 1)..<bodyEnd].joined(separator: "\n")
+                let cleaned = SubtitleWriter.sanitizedCueText(body)
+                guard !cleaned.isEmpty else {
+                    hasUnrepresentedContent = true
+                    continue
+                }
+                let endTokens = lines[timingIndex].components(separatedBy: "-->").last?.split(whereSeparator: \.isWhitespace) ?? []
+                if endTokens.count > 1 || timing.end < timing.start || (timingIndex > 0 && Int(lines[timingIndex - 1]) == nil) {
+                    hasUnrepresentedContent = true
+                }
+                segments.append(
+                    TranscriptionSegment(
+                        id: segments.count + 1,
+                        start: timing.start,
+                        end: max(timing.end, timing.start),
+                        text: cleaned
+                    )
                 )
-            )
+            }
         }
         guard !segments.isEmpty else { throw ReadError.noCues }
-        return segments
+        return ParsedDocument(segments: segments, hasUnrepresentedContent: hasUnrepresentedContent)
     }
 
     private static func isVTTMetadata(_ line: String) -> Bool {
-        ["WEBVTT", "NOTE", "STYLE", "REGION"].contains { line.hasPrefix($0) }
+        ["WEBVTT", "NOTE", "STYLE", "REGION"].contains {
+            line == $0 || line.hasPrefix($0 + " ") || line.hasPrefix($0 + "\t")
+        }
     }
 
     struct Timing: Equatable {
@@ -169,10 +199,10 @@ enum SubtitleReader {
         let endToken =
             parts[1]
             .trimmingCharacters(in: .whitespaces)
-            .components(separatedBy: " ")
+            .split(whereSeparator: \.isWhitespace)
             .first ?? ""
         guard let start = parseTimestamp(parts[0].trimmingCharacters(in: .whitespaces)),
-            let end = parseTimestamp(endToken)
+            let end = parseTimestamp(String(endToken))
         else { return nil }
         return Timing(start: start, end: end)
     }

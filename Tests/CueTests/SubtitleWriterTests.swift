@@ -10,6 +10,12 @@ private func makeTempDirectory() throws -> URL {
 }
 
 struct SubtitleWriterTests {
+    @Test func plainPreviewDecodesEntitiesOnceAndPreservesLiteralAngleBrackets() {
+        #expect(SubtitleWriter.plainCueText("2 < 3 &amp;lt; &#x1F600;") == "2 < 3 &lt; 😀")
+        #expect(SubtitleWriter.plainCueText("<c.green>Việt</c><00:01.000> Nam") == "Việt Nam")
+        #expect(SubtitleWriter.plainCueText("&#xD800; &unknown;") == "&#xD800; &unknown;")
+    }
+
     // A blank line inside a cue terminates it in every SRT parser, so embedded
     // newline runs from LLM translations must be collapsed.
     @Test func srtCollapsesBlankLinesInsideCueText() throws {

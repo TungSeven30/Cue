@@ -4,6 +4,19 @@ import Testing
 @testable import Cue
 
 struct SubtitleImporterTests {
+    @Test func skippedSourceContentPausesAutomaticWriteBack() throws {
+        let dir = try makeFolder([])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("partial.srt")
+        let bytes = Data((srt + "\n\nBroken cue without timestamps\n").utf8)
+        try bytes.write(to: url)
+        let document = try SubtitleImporter.importFile(at: url, backingUp: false)
+        print("AUDIT04 lossy_source_writeback_enabled=\(!document.source.syncPaused)")
+        #expect(document.segments.count == 2)
+        #expect(document.source.syncPaused)
+        #expect(try Data(contentsOf: url) == bytes)
+    }
+
     @Test func ambiguousLegacyEncodingCannotAutomaticallyRewriteTheSource() throws {
         let dir = try makeFolder([])
         defer { try? FileManager.default.removeItem(at: dir) }

@@ -28,6 +28,7 @@ final class PlayerController: ObservableObject {
     let player: AVPlayer
     @Published private(set) var activeSegmentID: Int?
     @Published private(set) var overlayText = ""
+    private var overlaySourceText: String?
 
     private var segments: [TranscriptionSegment] = []
     private var maximumEnds: [Double] = []
@@ -56,6 +57,7 @@ final class PlayerController: ObservableObject {
         player.replaceCurrentItem(with: AVPlayerItem(url: url))
         activeSegmentID = nil
         overlayText = ""
+        overlaySourceText = nil
     }
 
     /// The segments the overlay and highlight follow — the original
@@ -124,9 +126,9 @@ final class PlayerController: ObservableObject {
         if segment?.id != activeSegmentID {
             activeSegmentID = segment?.id
         }
-        let text = segment?.text ?? ""
-        if text != overlayText {
-            overlayText = text
+        if segment?.text != overlaySourceText {
+            overlaySourceText = segment?.text
+            overlayText = segment.map { SubtitleWriter.plainCueText($0.text) } ?? ""
         }
     }
 

@@ -31,6 +31,29 @@ enum SubtitleExportFormat: String, Codable, CaseIterable, Identifiable {
 }
 
 enum SubtitleWriter {
+    /// Only presentation strips supported subtitle markup; the editor and
+    /// exported source retain the original cue text for lossless round trips.
+    static func plainCueText(_ text: String) -> String {
+        let withoutTags = text
+            .replacingOccurrences(of: #"</?(?:b|i|u|c|v|lang|ruby|rt|font)(?:[ \t.][^<>]*)?>"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"<(?:\d+:)?\d{2}:\d{2}\.\d{3}>"#, with: "", options: .regularExpression)
+        guard let expression = try? NSRegularExpression(pattern: #"&(?:amp|lt|gt|nbsp|lrm|rlm|quot|apos|#[0-9]+|#x[0-9a-fA-F]+);"#) else { return withoutTags }
+        let result = NSMutableString(string: withoutTags)
+        let names = ["amp": "&", "lt": "<", "gt": ">", "nbsp": "\u{00A0}", "lrm": "\u{200E}", "rlm": "\u{200F}", "quot": "\"", "apos": "'"]
+        for match in expression.matches(in: withoutTags, range: NSRange(location: 0, length: result.length)).reversed() {
+            let entity = result.substring(with: match.range).dropFirst().dropLast()
+            var replacement = names[String(entity)]
+            if entity.hasPrefix("#") {
+                let hex = entity.hasPrefix("#x")
+                if let value = UInt32(entity.dropFirst(hex ? 2 : 1), radix: hex ? 16 : 10), value != 0,
+                    let scalar = UnicodeScalar(value)
+                { replacement = String(scalar) }
+            }
+            if let replacement { result.replaceCharacters(in: match.range, with: replacement) }
+        }
+        return result as String
+    }
+
     static func write(segments: [TranscriptionSegment], format: SubtitleExportFormat, to url: URL) throws {
         switch format {
         case .srt:

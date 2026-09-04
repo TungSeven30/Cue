@@ -5,6 +5,16 @@ import Testing
 
 @MainActor
 struct PlayerControllerTests {
+    @Test func previewRendersPlainTextWithoutChangingStoredMarkup() {
+        let controller = PlayerController()
+        let cue = TranscriptionSegment(id: 1, start: 0, end: 2, text: "<v Alice><i>Xin chào &amp; tạm biệt</i></v>")
+        controller.updateSegments([cue])
+        controller.seek(to: 1)
+        print("AUDIT04 preview_markup_visible=\(controller.overlayText.contains("<i>"))")
+        #expect(controller.overlayText == "Xin chào & tạm biệt")
+        #expect(cue.text.contains("<i>"))
+    }
+
     @Test func cueMembershipUsesExactHalfOpenBoundaries() {
         let controller = PlayerController()
         controller.updateSegments([TranscriptionSegment(id: 1, start: 1, end: 2, text: "Việt Nam")])

@@ -4,6 +4,27 @@ import Testing
 @testable import Cue
 
 struct SubtitleReaderTests {
+    @Test func vttTabsAndKeywordPrefixedIdentifiersRetainCues() throws {
+        let fixtures = [
+            "WEBVTT\n\n00:00.000 --> 00:02.000\talign:start\nHello\n",
+            "WEBVTT\n\nNOTEBOOK\n00:00.000 --> 00:02.000\nHello\n",
+        ]
+        var retained = 0
+        for fixture in fixtures {
+            let cues = (try? SubtitleReader.parse(fixture, format: .vtt)) ?? []
+            retained += cues.count
+            #expect(cues.first?.text == "Hello")
+        }
+        print("AUDIT04 valid_vtt_cues_retained=\(retained)/2")
+    }
+
+    @Test func missingSRTSeparatorDoesNotSwallowTheNextCue() throws {
+        let text = "1\n00:00:00,000 --> 00:00:01,000\nHello\n2\n00:00:02,000 --> 00:00:03,000\nWorld\n"
+        let cues = try SubtitleReader.parse(text, format: .srt)
+        print("AUDIT04 adjacent_srt_cues_retained=\(cues.count)/2")
+        #expect(cues.map(\.text) == ["Hello", "World"])
+    }
+
     @Test func decodesVietnameseWindows1258ToneMarks() throws {
         // Windows-1258 Viê + COMBINING DOT BELOW + t.
         #expect(SubtitleReader.decode(Data([86, 105, 234, 242, 116])) == "Việt")

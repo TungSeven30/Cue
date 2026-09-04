@@ -96,10 +96,15 @@ enum SubtitleImporter {
         else {
             throw SubtitleReader.ReadError.unreadable
         }
-        let segments = try SubtitleReader.parse(decoded.text, format: format)
+        let parsed = try SubtitleReader.parseDocument(decoded.text, format: format)
+        let segments = parsed.segments
         if decoded.requiresEncodingReview {
             source.syncPaused = true
             source.lastSyncError = "Legacy text encoding is uncertain. Review the text and export a UTF-8 copy before syncing edits."
+        }
+        if parsed.hasUnrepresentedContent {
+            source.syncPaused = true
+            source.lastSyncError = "Some source content or formatting cannot be preserved. Export a separate copy to keep the original intact."
         }
         if backingUp {
             source.didBackup = backUpOriginal(at: url)

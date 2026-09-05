@@ -3,6 +3,42 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
+## 2.7.0 — 2026-09-05
+
+- **Subtitle timing is exact during playback.** Cues now use their true
+  start-inclusive/end-exclusive boundaries, seeks reject invalid times, and
+  an overlapping long cue returns after a shorter cue ends instead of leaving
+  the preview blank.
+- **Vietnamese subtitle imports preserve tone marks.** Windows-1258 combining
+  sequences such as `Việt` decode correctly and normalize to Unicode. Because
+  legacy encodings are inherently ambiguous, Cue pauses automatic write-back
+  until the imported text is reviewed; UTF-8 Japanese/Vietnamese files keep
+  their normal workflow.
+- SRT and WebVTT import handles tab-separated cue settings, NOTE-prefixed cue
+  identifiers, and missing SRT blank separators without silently losing cues.
+  Unsupported source formatting protects the original from lossy write-back,
+  while the video preview renders supported tags and entities as readable text.
+- Imported translations are paired by unambiguous millisecond cue timing rather
+  than unrelated row numbers. Replacing a transcript clears stale translations,
+  partials, summaries, and resume state, and a subtitle picker cannot write into
+  a different or newly running job while its sheet is open.
+- Retrying a failed job resumes the stage that failed: translation retries keep
+  the transcript, and burn-in failures return to output options instead of
+  starting speech recognition again.
+- **Large subtitle edits stay responsive.** Replace All on the 10,000-cue test
+  fixture fell from 8.85 seconds and 20,000 model publications to 11.22 ms and
+  one publication. Subtitle reads, backups, and write-back no longer block the
+  main actor.
+- Fixed races in concurrent job-history loading, imported-file modification
+  timestamps, player teardown, Python worker shutdown, final unterminated
+  helper output, and ffmpeg preflight timeout/cancellation. These could lose a
+  final result, retain old media, overwrite a changed subtitle source, or hang
+  shutdown.
+- The preview-size control is now a native AppKit stepper with keyboard and
+  VoiceOver increment/decrement actions and a system focus ring. Sidebar filters
+  expose individual selected states, and transcript following and loading
+  shimmer honor Reduce Motion.
+
 ## 2.6.0 — 2026-09-03
 
 - **MKV files work on the built-in engine.** macOS cannot read Matroska, so

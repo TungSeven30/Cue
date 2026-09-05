@@ -6,9 +6,8 @@ set -euo pipefail
 #      allowed to advertise an unpublished release)
 #   2. Notarized Developer ID DMG (build_and_run.sh --release), or reuse the
 #      already verified dist/Cue.dmg with CUE_SKIP_RELEASE_BUILD=1
-#   3. DMG uploaded as an asset of the rolling "stable" release on the
-#      public TungSeven30/cue-releases repo (single URL prefix, which is
-#      what generate_appcast wants)
+#   3. Every full and delta artifact referenced by the appcast is uploaded to
+#      the rolling "stable" release and verified there before publication
 #   4. appcast.xml regenerated (EdDSA-signed from the login Keychain) and
 #      pushed to cue-releases main, where installed apps poll it
 #
@@ -68,18 +67,32 @@ if ! gh release view stable --repo "$RELEASES_REPO" >/dev/null 2>&1; then
   gh release create stable --repo "$RELEASES_REPO" --title "Cue downloads" \
     --notes "Update archives served to the in-app Sparkle updater."
 fi
-gh release upload stable "$ARCHIVE_DIR/Cue-$VERSION.dmg" --repo "$RELEASES_REPO" --clobber
-# Unversioned alias so the landing-page URL
-# .../releases/latest/download/Cue.dmg never needs a bump.
-cp "$ARCHIVE_DIR/Cue-$VERSION.dmg" "$ARCHIVE_DIR/Cue.dmg"
-gh release upload stable "$ARCHIVE_DIR/Cue.dmg" --repo "$RELEASES_REPO" --clobber
 
-# Publish the regenerated appcast.
+# generate_appcast can add binary deltas for several prior builds. Upload
+# every enclosure it wrote, not only the full DMG, or Sparkle will advertise
+# signed delta URLs that return 404. Validate local presence before the first
+# upload and remote presence before publishing the feed.
 staging="$(mktemp -d)"
 cleanup() {
   rm -rf "$staging"
 }
 trap cleanup EXIT
+asset_list="$staging/appcast-assets.txt"
+python3 "$ROOT_DIR/script/appcast_assets.py" "$ARCHIVE_DIR/appcast.xml" "$ARCHIVE_DIR" > "$asset_list"
+while IFS= read -r asset; do
+  gh release upload stable "$asset" --repo "$RELEASES_REPO" --clobber
+done < "$asset_list"
+
+# Unversioned alias so the landing-page URL
+# .../releases/latest/download/Cue.dmg never needs a bump.
+cp "$ARCHIVE_DIR/Cue-$VERSION.dmg" "$ARCHIVE_DIR/Cue.dmg"
+gh release upload stable "$ARCHIVE_DIR/Cue.dmg" --repo "$RELEASES_REPO" --clobber
+
+gh release view stable --repo "$RELEASES_REPO" --json assets > "$staging/release-assets.json"
+python3 "$ROOT_DIR/script/appcast_assets.py" "$ARCHIVE_DIR/appcast.xml" "$ARCHIVE_DIR" \
+  --available-assets-json "$staging/release-assets.json"
+
+# Publish the regenerated appcast.
 git clone --depth 1 "git@github.com:$RELEASES_REPO.git" "$staging/cue-releases"
 cp "$ARCHIVE_DIR/appcast.xml" "$staging/cue-releases/appcast.xml"
 git -C "$staging/cue-releases" add appcast.xml

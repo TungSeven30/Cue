@@ -66,6 +66,7 @@ grep -Fq "Cue-$VERSION.dmg" "$APPCAST" || fail "appcast does not reference the r
 grep -Fq 'sparkle:edSignature=' "$APPCAST" || fail "appcast enclosure has no EdDSA signature"
 grep -Fq "<sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>" "$APPCAST" \
   || fail "appcast version does not match $VERSION"
+python3 "$ROOT_DIR/script/appcast_assets.py" "$APPCAST" "$ARCHIVE" >/dev/null
 
 echo "Release rehearsal passed: Developer ID, notarization, stapling, Gatekeeper, mounted app, Metal inference, and signed appcast."
 echo "Nothing was uploaded or published."

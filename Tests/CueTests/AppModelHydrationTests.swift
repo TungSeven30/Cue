@@ -101,7 +101,8 @@ struct AppModelHydrationTests {
         let second = secondPath + "/b.mp4|1|1"
         ledger.record(first, outcome: .success)
         ledger.record(second, outcome: .success)
-        let model = AppModel(settings: fixture.settings, jobStore: JobStore(baseURL: fixture.baseURL),
+        let model = AppModel(
+            settings: fixture.settings, jobStore: JobStore(baseURL: fixture.baseURL),
             watchLedger: ledger, diagnosticsService: EmptyHydrationDiagnostics())
         await model.hydration()
         model.clearWatchHistory(for: folder.id)

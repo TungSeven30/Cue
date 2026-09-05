@@ -81,9 +81,10 @@ enum SubtitleReader {
 
         // Windows-1258 encodes Vietnamese tones as combining marks. Decode
         // those sequences before CP1252 can turn them into visible Latin letters.
-        let vietnamese = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(
-            CFStringEncoding(CFStringEncodings.windowsVietnamese.rawValue)
-        ))
+        let vietnamese = String.Encoding(
+            rawValue: CFStringConvertEncodingToNSStringEncoding(
+                CFStringEncoding(CFStringEncodings.windowsVietnamese.rawValue)
+            ))
         if let text = String(data: data, encoding: vietnamese),
             text.range(of: "[aăâeêioôơuưyAĂÂEÊIOÔƠUƯY][\\u0300\\u0301\\u0303\\u0309\\u0323]", options: .regularExpression) != nil
         {

@@ -137,20 +137,22 @@ struct BurnInProcessTests {
 
     @Test func preflightDoesNotWaitForAnInheritedPipe() async {
         let start = ContinuousClock.now
-        let output = await BurnInService.runCapturingOutput(arguments: [
-            "/usr/bin/python3", "-c",
-            "import os, time; pid = os.fork(); time.sleep(1.5) if pid == 0 else None; os._exit(0)",
-        ], timeout: .milliseconds(100))
+        let output = await BurnInService.runCapturingOutput(
+            arguments: [
+                "/usr/bin/python3", "-c",
+                "import os, time; pid = os.fork(); time.sleep(1.5) if pid == 0 else None; os._exit(0)",
+            ], timeout: .milliseconds(100))
         #expect(output == nil)
         #expect(ContinuousClock.now - start < .seconds(1))
     }
 
     @Test func preflightTimeoutBoundsAnUnresponsiveChild() async {
         let start = ContinuousClock.now
-        let output = await BurnInService.runCapturingOutput(arguments: [
-            "/usr/bin/python3", "-c",
-            "import signal, time; signal.alarm(3); signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)",
-        ], timeout: .milliseconds(100))
+        let output = await BurnInService.runCapturingOutput(
+            arguments: [
+                "/usr/bin/python3", "-c",
+                "import signal, time; signal.alarm(3); signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)",
+            ], timeout: .milliseconds(100))
         let elapsed = ContinuousClock.now - start
         print("AUDIT12 timeout_seconds=\(elapsed)")
         #expect(output == nil)

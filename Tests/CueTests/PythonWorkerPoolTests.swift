@@ -113,7 +113,7 @@ import Testing
             do {
                 let result = try await harness.pool.run(harness.request("exit-result.mp4")) { _ in }
                 if result.segments.first?.text.contains("exit-result.mp4") == true { successes += 1 }
-            } catch { }
+            } catch {}
             await harness.pool.shutdown()
         }
         print("AUDIT12 worker_results=\(successes)/20")

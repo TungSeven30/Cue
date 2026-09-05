@@ -148,8 +148,7 @@ struct BurnInService {
                     return status == 0 && !Task.isCancelled ? stdout.text() : nil
                 }
                 group.addTask {
-                    do { try await Task.sleep(for: timeout) }
-                    catch { return nil }
+                    do { try await Task.sleep(for: timeout) } catch { return nil }
                     box.terminate()
                     return nil
                 }

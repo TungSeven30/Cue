@@ -84,8 +84,7 @@ struct TranscriptView: View {
             )
             return updated
         }
-        if let onEditBatch { onEditBatch(edited) }
-        else { for segment in edited { onEdit(segment, segment.text) } }
+        if let onEditBatch { onEditBatch(edited) } else { for segment in edited { onEdit(segment, segment.text) } }
     }
 }
 

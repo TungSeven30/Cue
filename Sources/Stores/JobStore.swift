@@ -200,10 +200,12 @@ final class JobStore {
             guard Set(segments.map(\.id)).count == segments.count else {
                 throw InvalidJob(errorDescription: "The \(name) contains duplicate cue IDs.")
             }
-            guard segments.allSatisfy({
-                $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end >= $0.start
-                    && $0.end < SubtitleReader.maximumTimestampSeconds
-            }) else {
+            guard
+                segments.allSatisfy({
+                    $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end >= $0.start
+                        && $0.end < SubtitleReader.maximumTimestampSeconds
+                })
+            else {
                 throw InvalidJob(errorDescription: "The \(name) contains invalid cue timestamps.")
             }
         }

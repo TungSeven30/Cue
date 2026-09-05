@@ -131,7 +131,9 @@ struct JobStoreTests {
         store.saveJob(job)
         store.flush()
         let reloaded = try #require(store.loadJobs().first?.importedTranscriptSource)
-        print("AUDIT07 mtime_roundtrip_error_seconds=\(abs(reloaded.modifiedAt.timeIntervalSince(source.modifiedAt))) unchanged_file_matches=\(reloaded.matchesFileOnDisk())")
+        print(
+            "AUDIT07 mtime_roundtrip_error_seconds=\(abs(reloaded.modifiedAt.timeIntervalSince(source.modifiedAt))) unchanged_file_matches=\(reloaded.matchesFileOnDisk())"
+        )
         #expect(reloaded.matchesFileOnDisk())
         #expect(abs(reloaded.modifiedAt.timeIntervalSince(source.modifiedAt)) < 0.001)
         try FileManager.default.setAttributes([.modificationDate: source.modifiedAt.addingTimeInterval(0.1)], ofItemAtPath: subtitle.path)

@@ -34,9 +34,10 @@ enum TranslationReconciliation {
             guard let key = TimingKey(segment), let candidates = byTiming[key], candidates.count == 1,
                 let original = candidates.first
             else { continue }
-            matches[original.id, default: []].append(TranscriptionSegment(
-                id: original.id, start: original.start, end: original.end, text: segment.text
-            ))
+            matches[original.id, default: []].append(
+                TranscriptionSegment(
+                    id: original.id, start: original.start, end: original.end, text: segment.text
+                ))
         }
         return source.compactMap { original in
             guard let candidates = matches[original.id], candidates.count == 1 else { return nil }

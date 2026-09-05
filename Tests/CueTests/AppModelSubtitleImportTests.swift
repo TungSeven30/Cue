@@ -792,8 +792,10 @@ struct AppModelSubtitleImportTests {
         model.jobs[0].status = .translationComplete
         await model.applySubtitleLoad(.init(id: UUID(), document: document, job: model.currentJob), to: .transcript)
         let job = try #require(model.job(withID: id))
-        let stale = [!job.translatedSegments.isEmpty, !job.partialTranslatedSegments.isEmpty,
-                     !job.partialTranscriptSegments.isEmpty, job.summary != nil, job.importedTranslationSource != nil]
+        let stale = [
+            !job.translatedSegments.isEmpty, !job.partialTranslatedSegments.isEmpty,
+            !job.partialTranscriptSegments.isEmpty, job.summary != nil, job.importedTranslationSource != nil,
+        ]
         print("AUDIT03 stale_derived_fields=\(stale.filter { $0 }.count)")
         #expect(stale.allSatisfy { !$0 })
         #expect(job.status == .transcriptionComplete)

@@ -2527,7 +2527,8 @@ final class AppModel: ObservableObject {
             if let translation = result.translation, !job.transcriptSegments.isEmpty {
                 let aligned = TranslationReconciliation.alignedTranslations(translation.segments, to: job.transcriptSegments)
                 guard aligned.count == translation.segments.count else {
-                    job.log += "Could not pair \(translation.source.fileName) with the transcript: cue timings differ or are ambiguous. The file was left unchanged.\n"
+                    job.log +=
+                        "Could not pair \(translation.source.fileName) with the transcript: cue timings differ or are ambiguous. The file was left unchanged.\n"
                     return
                 }
                 job.translatedSegments = aligned
@@ -2625,7 +2626,9 @@ final class AppModel: ObservableObject {
         if slot == .translation {
             segments = TranslationReconciliation.alignedTranslations(request.document.segments, to: job.transcriptSegments)
             guard segments.count == request.document.segments.count else {
-                presentExportError("The translation's cue timings do not match this transcript unambiguously. The file has not been changed.", title: "Could Not Pair Subtitles")
+                presentExportError(
+                    "The translation's cue timings do not match this transcript unambiguously. The file has not been changed.",
+                    title: "Could Not Pair Subtitles")
                 return
             }
         } else {
@@ -2850,7 +2853,8 @@ final class AppModel: ObservableObject {
         var changed = false
         for cueIndex in job[keyPath: path].indices {
             guard let text = texts[job[keyPath: path][cueIndex].id],
-                text != job[keyPath: path][cueIndex].text else { continue }
+                text != job[keyPath: path][cueIndex].text
+            else { continue }
             job[keyPath: path][cueIndex].text = text
             changed = true
         }

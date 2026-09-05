@@ -17,8 +17,10 @@ struct PreviewAccessibilityTests {
         #expect(control.doubleValue == 300)
         #expect(control.accessibilityPerformDecrement())
         #expect(control.doubleValue == 280)
-        let up = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
-            windowNumber: 0, context: nil, characters: "\u{F700}", charactersIgnoringModifiers: "\u{F700}", isARepeat: false, keyCode: 126))
+        let up = try #require(
+            NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: 0, context: nil, characters: "\u{F700}", charactersIgnoringModifiers: "\u{F700}", isARepeat: false, keyCode: 126))
         control.keyDown(with: up)
         #expect(control.doubleValue == 300)
         #expect(changes == [300, 280, 300])

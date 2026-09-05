@@ -34,7 +34,8 @@ enum SubtitleWriter {
     /// Only presentation strips supported subtitle markup; the editor and
     /// exported source retain the original cue text for lossless round trips.
     static func plainCueText(_ text: String) -> String {
-        let withoutTags = text
+        let withoutTags =
+            text
             .replacingOccurrences(of: #"</?(?:b|i|u|c|v|lang|ruby|rt|font)(?:[ \t.][^<>]*)?>"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"<(?:\d+:)?\d{2}:\d{2}\.\d{3}>"#, with: "", options: .regularExpression)
         guard let expression = try? NSRegularExpression(pattern: #"&(?:amp|lt|gt|nbsp|lrm|rlm|quot|apos|#[0-9]+|#x[0-9a-fA-F]+);"#) else { return withoutTags }
@@ -47,7 +48,9 @@ enum SubtitleWriter {
                 let hex = entity.hasPrefix("#x")
                 if let value = UInt32(entity.dropFirst(hex ? 2 : 1), radix: hex ? 16 : 10), value != 0,
                     let scalar = UnicodeScalar(value)
-                { replacement = String(scalar) }
+                {
+                    replacement = String(scalar)
+                }
             }
             if let replacement { result.replaceCharacters(in: match.range, with: replacement) }
         }

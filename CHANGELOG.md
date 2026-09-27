@@ -3,6 +3,23 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
+## 2.8.0 — 2026-09-26
+
+- **Built for macOS 27, still supports macOS 14 and later.** Cue now builds
+  against the macOS 27 SDK while keeping its macOS 14 deployment target.
+  macOS 27-only interface changes are gated by OS version and fall back to the
+  previous controls on earlier systems.
+- On macOS 27, the Transcript / Translation / Log switcher uses the system tabs
+  style, and VoiceOver announces it as a tab group with three tabs. Earlier
+  macOS versions keep the segmented control.
+- Building from source works with the Swift 6.4 / macOS 27 Command Line Tools,
+  no Xcode required. SwiftPM runs through `script/swiftpm.sh` on the native
+  build system, view state is written as `@ViewState` because the SDK's
+  `@State` macro needs Xcode, and Swift 6.4's new implicit-capture warnings are
+  resolved so the warnings-as-errors release build passes. A new check rejects
+  direct `swift build`/`swift test` calls, bare `@State`, and deployment-target
+  changes.
+
 ## 2.7.0 — 2026-09-05
 
 - **Subtitle timing is exact during playback.** Cues now use their true

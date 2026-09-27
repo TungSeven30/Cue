@@ -205,8 +205,11 @@ Other script modes:
 | `./script/run_coverage.sh` | Runs tests with enforced total/domain/critical-file coverage floors |
 | `./script/lint_swift.sh` | Enforces the repository's Swift format in strict mode |
 | `./script/format_swift.sh` | Applies the repository's Swift format |
+| `./script/swiftpm.sh <build\|test> [args]` | Runs SwiftPM with the pinned native build system (e.g. the release gate: `build -c release -Xswiftc -warnings-as-errors`) |
 
 > **Testing note:** with Command Line Tools only (no Xcode), plain `swift test` builds the tests but silently runs none of them. `script/run_tests.sh` works around this by loading the test bundle directly — use it instead.
+
+> **Build note:** Swift 6.4's default SwiftPM build system tries to compile whisper.cpp's Metal shader resource with the `metal` compiler, which Command Line Tools does not include, so plain `swift build`/`swift test` fail. Every script builds through `script/swiftpm.sh`, which selects the native build system; Cue compiles its Metal shader at runtime instead. On the macOS 27 SDK, view state is written as `@ViewState` rather than `@State`, because the SDK's `@State` macro needs Xcode.
 
 ### Releasing a DMG
 

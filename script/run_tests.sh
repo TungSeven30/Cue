@@ -28,21 +28,22 @@ if [[ "$(uname -m)" == "arm64" && -z "${GGML_METAL_PATH_RESOURCES:-}" ]]; then
   export GGML_METAL_PATH_RESOURCES="$TEST_METAL_RESOURCES"
 fi
 
-# With a full Xcode install, plain `swift test` works — prefer it.
+# With a full Xcode install, SwiftPM's own test runner works — prefer it
+# (through the build-system wrapper, like every other SwiftPM call).
 if xcrun --sdk macosx --show-sdk-platform-path >/dev/null 2>&1; then
   if [[ "${CUE_ENABLE_CODE_COVERAGE:-0}" == "1" ]]; then
-    exec swift test --enable-code-coverage "$@"
+    exec "$ROOT_DIR/script/swiftpm.sh" test --enable-code-coverage "$@"
   fi
-  exec swift test "$@"
+  exec "$ROOT_DIR/script/swiftpm.sh" test "$@"
 fi
 
 BUILD_OPTIONS=(--build-tests)
 if [[ "${CUE_ENABLE_CODE_COVERAGE:-0}" == "1" ]]; then
   BUILD_OPTIONS+=(--enable-code-coverage)
 fi
-swift build "${BUILD_OPTIONS[@]}"
+"$ROOT_DIR/script/swiftpm.sh" build "${BUILD_OPTIONS[@]}"
 
-BIN_PATH="$(swift build --show-bin-path)"
+BIN_PATH="$("$ROOT_DIR/script/swiftpm.sh" build --show-bin-path)"
 BUNDLE_BINARY="$BIN_PATH/CuePackageTests.xctest/Contents/MacOS/CuePackageTests"
 RUNNER_DIR="$BIN_PATH/test-runner"
 RUNNER="$RUNNER_DIR/run-tests"

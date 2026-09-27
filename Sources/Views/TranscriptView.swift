@@ -7,9 +7,9 @@ struct TranscriptView: View {
     let onEdit: (TranscriptionSegment, String) -> Void
     var onSeek: ((TranscriptionSegment) -> Void)? = nil
     var onEditBatch: (([TranscriptionSegment]) -> Void)? = nil
-    @State private var searchText = ""
-    @State private var replacementText = ""
-    @State private var warningsOnly = false
+    @ViewState private var searchText = ""
+    @ViewState private var replacementText = ""
+    @ViewState private var warningsOnly = false
 
     var body: some View {
         // The grouping arrives precomputed with the (memoised) warnings, so a

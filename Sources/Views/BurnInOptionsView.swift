@@ -8,7 +8,7 @@ struct BurnInOptionsView: View {
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
 
-    @State private var document: AppModel.BurnInDocument = .translation
+    @ViewState private var document: AppModel.BurnInDocument = .translation
     @AppStorage("burnInTextSize") private var textSizeRaw = BurnInService.TextSize.medium.rawValue
 
     var body: some View {

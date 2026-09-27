@@ -33,7 +33,7 @@ jobs:
         run: PATH="$PWD/.build/ci-python/bin:$PATH" script/run_coverage.sh
 
       - name: Release build with warnings as errors
-        run: swift build -c release -Xswiftc -warnings-as-errors
+        run: script/swiftpm.sh build -c release -Xswiftc -warnings-as-errors
 
       - name: Source parity and formatting
         run: |

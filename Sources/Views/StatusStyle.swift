@@ -54,7 +54,7 @@ struct CopyFeedbackButton: View {
     var icon: String = "doc.on.doc"
     var helpText: String = "Copy to clipboard"
     var showsLabel: Bool = true
-    @State private var hasCopied = false
+    @ViewState private var hasCopied = false
 
     var body: some View {
         Button {

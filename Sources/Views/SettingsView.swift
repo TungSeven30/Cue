@@ -4,9 +4,9 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var settings: AppSettingsStore
     @AppStorage("showMenuBarExtra") private var showMenuBarExtra = true
-    @State private var isBrowsingOpenRouter = false
-    @State private var localModels: [LocalServerModel] = []
-    @State private var localServerStatus: LocalServerStatus = .idle
+    @ViewState private var isBrowsingOpenRouter = false
+    @ViewState private var localModels: [LocalServerModel] = []
+    @ViewState private var localServerStatus: LocalServerStatus = .idle
 
     var body: some View {
         Form {

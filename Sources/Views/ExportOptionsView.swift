@@ -7,7 +7,7 @@ struct ExportOptionsView: View {
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
 
-    @State private var baseName = ""
+    @ViewState private var baseName = ""
     @AppStorage("exportIncludeOriginal") private var includeOriginal = true
     @AppStorage("exportIncludeTranslation") private var includeTranslation = true
     @AppStorage("exportIncludeBilingual") private var includeBilingual = false

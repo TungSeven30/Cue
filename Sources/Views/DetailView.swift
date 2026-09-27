@@ -1,6 +1,25 @@
 import AppKit
 import SwiftUI
 
+extension View {
+    /// The workspace switcher chooses which pane is shown, so on macOS 27 it
+    /// uses the tabs picker style, which VoiceOver presents as a tab group.
+    /// Earlier systems, and SDKs that predate the style (SwiftUI 8), keep the
+    /// segmented control Cue has always used.
+    @ViewBuilder
+    fileprivate func workspaceTabPickerStyle() -> some View {
+        #if canImport(SwiftUI, _version: 8.0)
+            if #available(macOS 27, *) {
+                pickerStyle(.tabs)
+            } else {
+                pickerStyle(.segmented)
+            }
+        #else
+            pickerStyle(.segmented)
+        #endif
+    }
+}
+
 enum WorkspaceTab: String, CaseIterable, Identifiable {
     case transcript
     case translation
@@ -29,11 +48,11 @@ struct DetailView: View {
     @ObservedObject var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var playerController: PlayerController
-    @State private var tab: WorkspaceTab = .transcript
+    @ViewState private var tab: WorkspaceTab = .transcript
     @AppStorage("followPlayback") private var followPlayback = true
     @AppStorage("playerHeight") private var playerHeight = 280.0
-    @State private var dragStartHeight: Double?
-    @State private var isHoveringResizeHandle = false
+    @ViewState private var dragStartHeight: Double?
+    @ViewState private var isHoveringResizeHandle = false
 
     var body: some View {
         Group {
@@ -153,7 +172,7 @@ struct DetailView: View {
                         Label(tab.title, systemImage: tab.systemImage).tag(tab)
                     }
                 }
-                .pickerStyle(.segmented)
+                .workspaceTabPickerStyle()
                 .labelsHidden()
 
                 if model.isPlayerVisible {
@@ -372,7 +391,7 @@ struct DetailView: View {
 
 private struct HeaderCard: View {
     @ObservedObject var model: AppModel
-    @State private var showDiagnostics = false
+    @ViewState private var showDiagnostics = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1117,7 +1136,7 @@ private struct TranscriptLoadingSkeletonView: View {
     let title: String
     let detail: String
     var fraction: Double? = nil
-    @State private var isShimmering = false
+    @ViewState private var isShimmering = false
 
     var body: some View {
         ScrollView {

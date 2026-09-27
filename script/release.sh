@@ -45,7 +45,7 @@ fi
 # Fail before notarization or publication if any behavioral, parity, or
 # compiler-warning gate regressed.
 "$ROOT_DIR/script/run_tests.sh"
-swift build -c release -Xswiftc -warnings-as-errors
+"$ROOT_DIR/script/swiftpm.sh" build -c release -Xswiftc -warnings-as-errors
 
 export APP_VERSION="$VERSION"
 "$ROOT_DIR/script/build_and_run.sh" --release

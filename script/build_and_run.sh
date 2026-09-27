@@ -35,8 +35,8 @@ build_bundle() {
 
   # ${arr[@]+...} guards the empty-array case: macOS's bash 3.2 treats an
   # empty "${arr[@]}" as an unbound variable under set -u.
-  swift build ${swift_args[@]+"${swift_args[@]}"}
-  BUILD_DIR="$(swift build ${swift_args[@]+"${swift_args[@]}"} --show-bin-path)"
+  "$ROOT_DIR/script/swiftpm.sh" build ${swift_args[@]+"${swift_args[@]}"}
+  BUILD_DIR="$("$ROOT_DIR/script/swiftpm.sh" build ${swift_args[@]+"${swift_args[@]}"} --show-bin-path)"
   BUILD_BINARY="$BUILD_DIR/$APP_NAME"
 
   rm -rf "$APP_BUNDLE"

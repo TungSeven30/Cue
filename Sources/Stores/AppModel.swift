@@ -1910,7 +1910,7 @@ final class AppModel: ObservableObject {
         requestNotificationAuthorizationIfNeeded()
         gpuJobID = jobID
         updateProcessingActivity()
-        gpuTask = Task {
+        gpuTask = Task { [self] in
             do {
                 let result = try await transcriptionService.transcribe(
                     videoURL: videoURL,
@@ -2134,7 +2134,7 @@ final class AppModel: ObservableObject {
         requestNotificationAuthorizationIfNeeded()
         translationJobID = jobID
         updateProcessingActivity()
-        translationTask = Task {
+        translationTask = Task { [self] in
             do {
                 let result = try await translationService.translate(
                     segments: segments,
@@ -2390,7 +2390,7 @@ final class AppModel: ObservableObject {
         // GPU slot.
         gpuJobID = jobID
         updateProcessingActivity()
-        gpuTask = Task {
+        gpuTask = Task { [self] in
             do {
                 let duration = await Self.assetDurationSeconds(for: job.sourceURL)
                 try await burnInService.burnIn(

@@ -6,10 +6,10 @@ struct OpenRouterModelBrowserView: View {
     @ObservedObject var settings: AppSettingsStore
     @Environment(\.dismiss) private var dismiss
 
-    @State private var models: [OpenRouterModel] = []
-    @State private var searchText = ""
-    @State private var loadError: String?
-    @State private var isLoading = true
+    @ViewState private var models: [OpenRouterModel] = []
+    @ViewState private var searchText = ""
+    @ViewState private var loadError: String?
+    @ViewState private var isLoading = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -92,7 +92,7 @@ struct OpenRouterModelBrowserView: View {
         .onAppear { load() }
     }
 
-    @State private var selectedID: String?
+    @ViewState private var selectedID: String?
 
     private var visibleModels: [OpenRouterModel] {
         let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)

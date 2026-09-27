@@ -6,7 +6,7 @@ import SwiftUI
 struct JobSettingsOverridesView: View {
     let title: String
     @ObservedObject var settings: AppSettingsStore
-    @State var overrides: JobSettingsOverrides
+    @ViewState var overrides: JobSettingsOverrides
     let onSave: (JobSettingsOverrides) -> Void
     @Environment(\.dismiss) private var dismiss
 

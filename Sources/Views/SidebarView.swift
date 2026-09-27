@@ -96,10 +96,10 @@ private enum JobStatusFilter: String, CaseIterable, Identifiable {
 
 struct SidebarView: View {
     @ObservedObject var model: AppModel
-    @State private var searchText = ""
-    @State private var editingWatchFolderID: UUID?
-    @State private var pendingDeletionIDs: Set<UUID> = []
-    @State private var undoNotice: SidebarUndoNotice?
+    @ViewState private var searchText = ""
+    @ViewState private var editingWatchFolderID: UUID?
+    @ViewState private var pendingDeletionIDs: Set<UUID> = []
+    @ViewState private var undoNotice: SidebarUndoNotice?
     @AppStorage("sidebarGroupByStatus") private var groupByStatus = false
     @AppStorage("sidebarStatusFilter") private var statusFilterRaw = JobStatusFilter.all.rawValue
     @AppStorage("sidebarSortOrder") private var sortOrderRaw = JobSortOrder.queueOrder.rawValue

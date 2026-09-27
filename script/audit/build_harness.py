@@ -16,7 +16,12 @@ if not media.is_file():
     raise SystemExit("Media fixture does not exist")
 root.mkdir(parents=True, exist_ok=True)
 (root / "home").mkdir(exist_ok=True)
-build = (repository / ".build/debug").resolve()
+# Ask the pinned build system for its products instead of trusting the
+# .build/debug symlink, which Swift Build repoints at a different layout.
+build = pathlib.Path(subprocess.run(
+    [str(repository / "script/swiftpm.sh"), "build", "--show-bin-path"],
+    cwd=repository, check=True, capture_output=True, text=True,
+).stdout.strip()).resolve()
 app = root / "Cue Audit.app"
 contents = app / "Contents"
 for part in ("MacOS", "Resources", "Frameworks"):

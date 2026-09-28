@@ -19,15 +19,15 @@ struct TranscriptView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Text("^[\(filtered.count) segment](inflect: true)")
-                    .font(.callout.weight(.medium))
+                    .cueFont(.callout, weight: .medium)
                 if filtered.count != segments.count {
                     Text("of \(segments.count)")
-                        .font(.caption)
+                        .cueFont(.caption)
                         .foregroundStyle(.secondary)
                 }
                 if !warnings.list.isEmpty {
                     Label("^[\(warnings.list.count) warning](inflect: true)", systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
+                        .cueFont(.caption)
                         .foregroundStyle(.orange)
                 }
                 Spacer()
@@ -112,7 +112,7 @@ private struct SegmentEditorRow: View, Equatable {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("\(segment.id)")
-                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .cueFont(.caption, weight: .semibold, monospacedDigit: true)
                     .foregroundStyle(.secondary)
                     .frame(minWidth: 22)
                     .padding(.horizontal, 6)
@@ -125,7 +125,7 @@ private struct SegmentEditorRow: View, Equatable {
                         onSeek(segment)
                     } label: {
                         Label("\(formatted(segment.start)) – \(formatted(segment.end))", systemImage: "play.circle")
-                            .font(.caption.monospacedDigit())
+                            .cueFont(.caption, monospacedDigit: true)
                             .foregroundStyle(isActive ? Color.accentColor : .secondary)
                             .labelStyle(.titleAndIcon)
                     }
@@ -134,7 +134,7 @@ private struct SegmentEditorRow: View, Equatable {
                     .accessibilityLabel("Seek video to cue \(segment.id), from \(formatted(segment.start)) to \(formatted(segment.end))")
                 } else {
                     Label("\(formatted(segment.start)) – \(formatted(segment.end))", systemImage: "clock")
-                        .font(.caption.monospacedDigit())
+                        .cueFont(.caption, monospacedDigit: true)
                         .foregroundStyle(.secondary)
                         .labelStyle(.titleAndIcon)
                         .accessibilityLabel("Timestamp \(formatted(segment.start)) to \(formatted(segment.end))")
@@ -144,7 +144,7 @@ private struct SegmentEditorRow: View, Equatable {
 
                 if !warnings.isEmpty {
                     Text(warnings.map(\.message).joined(separator: " · "))
-                        .font(.caption)
+                        .cueFont(.caption)
                         .foregroundStyle(.orange)
                         .lineLimit(1)
                         .accessibilityLabel("Warning: \(warnings.map(\.message).joined(separator: ", "))")
@@ -157,7 +157,7 @@ private struct SegmentEditorRow: View, Equatable {
                     set: { onEdit(segment, $0) }
                 )
             )
-            .font(.body)
+            .cueFont(.body)
             .scrollContentBackground(.hidden)
             .frame(minHeight: 46)
             .padding(8)

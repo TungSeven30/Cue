@@ -8,9 +8,9 @@ struct SubtitleSlotPickerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Load Subtitles")
-                .font(.title3.weight(.semibold))
+                .cueFont(.title3, weight: .semibold)
             Text("\(request.document.source.fileName) — ^[\(request.document.segments.count) cue](inflect: true)")
-                .font(.callout)
+                .cueFont(.callout)
                 .foregroundStyle(.secondary)
 
             VStack(spacing: 10) {
@@ -19,19 +19,19 @@ struct SubtitleSlotPickerView: View {
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "text.alignleft")
-                            .font(.title3)
+                            .cueFont(.title3)
                             .foregroundStyle(Color.accentColor)
                             .frame(width: 24)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Load as Original Transcript")
-                                .font(.headline)
+                                .cueFont(.headline)
                             Text("Sets this file as the primary transcript and source for translation.")
-                                .font(.caption)
+                                .cueFont(.caption)
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
                         Image(systemName: "chevron.right")
-                            .font(.caption)
+                            .cueFont(.caption)
                             .foregroundStyle(.tertiary)
                     }
                     .padding(12)
@@ -50,24 +50,24 @@ struct SubtitleSlotPickerView: View {
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "character.bubble")
-                            .font(.title3)
+                            .cueFont(.title3)
                             .foregroundStyle(!model.transcriptSegments.isEmpty ? Color.accentColor : Color.secondary)
                             .frame(width: 24)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Load as Translation")
-                                .font(.headline)
+                                .cueFont(.headline)
                             Text(
                                 !model.transcriptSegments.isEmpty
                                     ? "Fills the translation tab for bilingual subtitles, export, and burn-in."
                                     : "Requires an existing transcript first."
                             )
-                            .font(.caption)
+                            .cueFont(.caption)
                             .foregroundStyle(.secondary)
                         }
                         Spacer()
                         if !model.transcriptSegments.isEmpty {
                             Image(systemName: "chevron.right")
-                                .font(.caption)
+                                .cueFont(.caption)
                                 .foregroundStyle(.tertiary)
                         }
                     }

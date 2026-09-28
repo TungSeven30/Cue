@@ -36,6 +36,7 @@ struct CueApp: App {
         Window("Cue", id: "main") {
             ContentView(model: model)
                 .frame(minWidth: 1080, minHeight: 720)
+                .cueDisplayPreferences()
         }
         .commands {
             CommandGroup(after: .appInfo) {
@@ -130,6 +131,7 @@ struct CueApp: App {
         Settings {
             SettingsView(settings: model.settings)
                 .frame(width: 620, height: 780)
+                .cueDisplayPreferences()
         }
 
         MenuBarExtra(isInserted: $showMenuBarExtra) {

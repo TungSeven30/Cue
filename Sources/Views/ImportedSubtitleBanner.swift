@@ -14,11 +14,11 @@ struct ImportedSubtitleBanner: View {
                 Image(systemName: statusIcon(source))
                     .foregroundStyle(statusColor(source))
                 Text("Imported from \(source.fileName)")
-                    .font(.caption)
+                    .cueFont(.caption)
                 Text("·")
                     .foregroundStyle(.secondary)
                 Text(statusText(source))
-                    .font(.caption)
+                    .cueFont(.caption)
                     .foregroundStyle(statusColor(source))
 
                 Spacer()
@@ -27,13 +27,13 @@ struct ImportedSubtitleBanner: View {
                     NSWorkspace.shared.activateFileViewerSelecting([source.url])
                 }
                 .buttonStyle(.link)
-                .font(.caption)
+                .cueFont(.caption)
 
                 Button("Unlink") {
                     model.unlinkImportedSubtitles(slot: slot, jobID: job.id)
                 }
                 .buttonStyle(.link)
-                .font(.caption)
+                .cueFont(.caption)
                 .help("Stop writing edits back to this file")
             }
             .padding(.horizontal, 10)

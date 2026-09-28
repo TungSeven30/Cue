@@ -14,7 +14,7 @@ struct BurnInOptionsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Burn In Subtitles")
-                .font(.title3.weight(.semibold))
+                .cueFont(.title3, weight: .semibold)
                 .padding(.bottom, 12)
 
             Form {
@@ -44,7 +44,7 @@ struct BurnInOptionsView: View {
 
             HStack {
                 Text("Re-encodes video with embedded subtitles.")
-                    .font(.callout)
+                    .cueFont(.callout)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Cancel") { dismiss() }

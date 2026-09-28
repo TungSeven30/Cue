@@ -13,7 +13,7 @@ struct JobSettingsOverridesView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
-                .font(.title3.weight(.semibold))
+                .cueFont(.title3, weight: .semibold)
                 .padding(.bottom, 12)
 
             Form {

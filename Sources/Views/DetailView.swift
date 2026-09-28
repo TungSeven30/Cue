@@ -154,7 +154,7 @@ struct DetailView: View {
                 HStack(spacing: 8) {
                     playerResizeHandle
                     Text("Preview size")
-                        .font(.caption)
+                        .cueFont(.caption)
                         .foregroundStyle(.secondary)
                     PreviewHeightControl(height: $playerHeight)
                         .frame(width: 24, height: 28)
@@ -252,16 +252,16 @@ struct DetailView: View {
                 Image(systemName: job.status.systemImage)
                     .foregroundStyle(job.status.tint)
                 Text(job.title)
-                    .font(.headline)
+                    .cueFont(.headline)
                     .lineLimit(1)
                 Text(job.status.label)
-                    .font(.callout)
+                    .cueFont(.callout)
                     .foregroundStyle(.secondary)
                 if model.isSelectedJobRunning, let fraction = model.progress.displayFraction {
                     ProgressView(value: fraction)
                         .frame(width: 120)
                     Text("\(Int((fraction * 100).rounded()))%")
-                        .font(.callout.monospacedDigit())
+                        .cueFont(.callout, monospacedDigit: true)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -397,15 +397,15 @@ private struct HeaderCard: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "film")
-                    .font(.title2)
+                    .cueFont(.title2)
                     .foregroundStyle(.tint)
                     .frame(width: 28)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(model.currentJob?.title ?? "Untitled")
-                        .font(.headline)
+                        .cueFont(.headline)
                     Text(model.selectedVideoURL?.path(percentEncoded: false) ?? "No file selected")
-                        .font(.caption)
+                        .cueFont(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -456,10 +456,10 @@ private struct HeaderCard: View {
     private func metadataChip(icon: String, text: String) -> some View {
         HStack(spacing: 4) {
             Image(systemName: icon)
-                .font(.caption2)
+                .cueFont(.caption2)
                 .foregroundStyle(.secondary)
             Text(text)
-                .font(.caption)
+                .cueFont(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 8)
@@ -475,7 +475,7 @@ private struct HeaderCard: View {
                 Image(systemName: model.isRunningDiagnostics ? "arrow.triangle.2.circlepath" : diagnosticsIcon)
                     .symbolEffect(.pulse, isActive: model.isRunningDiagnostics)
                 Text(model.isRunningDiagnostics ? "Checking…" : model.diagnosticsSummary)
-                    .font(.callout)
+                    .cueFont(.callout)
             }
             .foregroundStyle(diagnosticsColor)
         }
@@ -517,17 +517,17 @@ private struct HeaderCard: View {
                         .symbolEffect(.pulse, isActive: model.isSelectedJobRunning)
                 }
                 Text(progress.stage.label)
-                    .font(.subheadline.weight(.semibold))
+                    .cueFont(.subheadline, weight: .semibold)
                 if !isFailed {
                     Text(progress.detail)
-                        .font(.subheadline)
+                        .cueFont(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Spacer()
                 if let fraction = progress.displayFraction {
                     Text("\(Int((fraction * 100).rounded()))%")
-                        .font(.subheadline.monospacedDigit())
+                        .cueFont(.subheadline, monospacedDigit: true)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -541,10 +541,10 @@ private struct HeaderCard: View {
                             .frame(width: 18)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Processing Stopped")
-                                .font(.subheadline.weight(.semibold))
+                                .cueFont(.subheadline, weight: .semibold)
                                 .foregroundStyle(.red)
                             Text(progress.detail)
-                                .font(.callout)
+                                .cueFont(.callout)
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -593,9 +593,9 @@ private struct HeaderCard: View {
                     Image(systemName: "checkmark.seal.fill")
                         .foregroundStyle(.green)
                     Text("Translation Ready")
-                        .font(.subheadline.weight(.semibold))
+                        .cueFont(.subheadline, weight: .semibold)
                     Text("· \(model.translatedSegments.count) subtitle cues")
-                        .font(.subheadline)
+                        .cueFont(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button {
@@ -614,9 +614,9 @@ private struct HeaderCard: View {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.teal)
                     Text("Transcript Ready")
-                        .font(.subheadline.weight(.semibold))
+                        .cueFont(.subheadline, weight: .semibold)
                     Text("· \(model.transcriptSegments.count) subtitle cues")
-                        .font(.subheadline)
+                        .cueFont(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button {
@@ -666,11 +666,11 @@ private struct HeaderCard: View {
                             ? "Set the Local server URL in Settings to enable translation."
                             : "Add a \(model.settings.currentTranslationProvider.label) API key in Settings to enable translation."
                     )
-                    .font(.caption)
+                    .cueFont(.caption)
                     .foregroundStyle(.secondary)
                 } else if !model.partialTranslatedSegments.isEmpty {
                     Text("\(model.partialTranslatedSegments.count) segment(s) already saved.")
-                        .font(.caption)
+                        .cueFont(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -704,7 +704,7 @@ private struct HeaderCard: View {
             // Full width, wrapped over several lines: the summary is a paragraph, not a label.
             if !model.isGeneratingSummary, let summary = model.currentJob?.summary {
                 Text(summary)
-                    .font(.caption)
+                    .cueFont(.caption)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .lineLimit(6)
@@ -728,7 +728,7 @@ private struct RunOptionsRow: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Run options")
-                    .font(.caption.weight(.semibold))
+                    .cueFont(.caption, weight: .semibold)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Defaults…") {
@@ -899,7 +899,7 @@ private struct RunOptionsRow: View {
                     .toggleStyle(.checkbox)
                 if let resolved = model.selectedJobResolvedSettings {
                     Text("\(resolved.translationSourceLanguage) → \(resolved.translationTargetLanguage)")
-                        .font(.caption)
+                        .cueFont(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -912,7 +912,7 @@ private struct RunOptionsRow: View {
     private func field<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title.uppercased())
-                .font(.caption2.weight(.semibold))
+                .cueFont(.caption2, weight: .semibold)
                 .foregroundStyle(.tertiary)
             content()
         }
@@ -944,7 +944,7 @@ private struct DiagnosticsPopover: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("System Check")
-                    .font(.headline)
+                    .cueFont(.headline)
                 Spacer()
                 Button {
                     // Close the popover before presenting the sheet so the
@@ -968,7 +968,7 @@ private struct DiagnosticsPopover: View {
 
             if model.diagnostics.isEmpty {
                 Text("Run a system check to verify local dependencies.")
-                    .font(.callout)
+                    .cueFont(.callout)
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(model.diagnostics) { diagnostic in
@@ -977,9 +977,9 @@ private struct DiagnosticsPopover: View {
                             .foregroundStyle(diagnostic.state.tint)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(diagnostic.title)
-                                .font(.callout.weight(.semibold))
+                                .cueFont(.callout, weight: .semibold)
                             Text(diagnostic.state == .passed ? diagnostic.detail : diagnostic.recovery)
-                                .font(.caption)
+                                .cueFont(.caption)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -1017,10 +1017,10 @@ private struct WelcomeWorkspaceView: View {
 
             VStack(spacing: 8) {
                 Text("Welcome to Cue")
-                    .font(.title.weight(.bold))
+                    .cueFont(.title, weight: .bold)
 
                 Text("Fast, accurate, and completely private subtitles and translation.")
-                    .font(.callout)
+                    .cueFont(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
@@ -1049,7 +1049,7 @@ private struct WelcomeWorkspaceView: View {
                     model.selectVideo()
                 } label: {
                     Label("Add Files…", systemImage: "folder.badge.plus")
-                        .font(.headline)
+                        .cueFont(.headline)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 4)
                 }
@@ -1076,11 +1076,11 @@ private struct WelcomeWorkspaceView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.accentColor)
                 }
-                .font(.callout)
+                .cueFont(.callout)
             }
 
             Text("Drop files anywhere · Supports MP4, MOV, MKV, MP3, WAV, M4A, FLAC, AAC")
-                .font(.caption)
+                .cueFont(.caption)
                 .foregroundStyle(.tertiary)
 
             Spacer(minLength: 20)
@@ -1093,14 +1093,14 @@ private struct WelcomeWorkspaceView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.caption.weight(.semibold))
+                    .cueFont(.caption, weight: .semibold)
                     .foregroundStyle(Color.accentColor)
                 Text(title)
-                    .font(.caption.weight(.semibold))
+                    .cueFont(.caption, weight: .semibold)
                     .foregroundStyle(.primary)
             }
             Text(subtitle)
-                .font(.caption2)
+                .cueFont(.caption2)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .lineSpacing(2)
@@ -1146,10 +1146,10 @@ private struct TranscriptLoadingSkeletonView: View {
                         .controlSize(.small)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(title)
-                            .font(.subheadline.weight(.semibold))
+                            .cueFont(.subheadline, weight: .semibold)
                         if !detail.isEmpty {
                             Text(detail)
-                                .font(.caption)
+                                .cueFont(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
@@ -1157,7 +1157,7 @@ private struct TranscriptLoadingSkeletonView: View {
                     Spacer()
                     if let fraction {
                         Text("\(Int((fraction * 100).rounded()))%")
-                            .font(.caption.monospacedDigit().weight(.medium))
+                            .cueFont(.caption, weight: .medium, monospacedDigit: true)
                             .foregroundStyle(.secondary)
                     }
                 }

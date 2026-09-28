@@ -14,22 +14,22 @@ struct LogView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Run Log")
-                    .font(.callout.weight(.medium))
+                    .cueFont(.callout, weight: .medium)
                 if lines.truncated {
                     Text("showing last \(Self.maxVisibleLines) lines")
-                        .font(.caption)
+                        .cueFont(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 CopyFeedbackButton(text: log, helpText: "Copy entire run log to clipboard")
                     .buttonStyle(.borderless)
-                    .font(.caption)
+                    .cueFont(.caption)
             }
 
             LazyVStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(lines.lines.enumerated()), id: \.offset) { _, line in
                     Text(line.isEmpty ? " " : line)
-                        .font(.system(.callout, design: .monospaced))
+                        .cueFont(.callout, design: .monospaced)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }

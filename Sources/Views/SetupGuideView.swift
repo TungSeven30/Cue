@@ -17,17 +17,17 @@ struct SetupGuideView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
                 Image(systemName: "wand.and.stars")
-                    .font(.title2)
+                    .cueFont(.title2)
                     .foregroundStyle(.tint)
                 Text("Set Up Cue")
-                    .font(.title3.weight(.semibold))
+                    .cueFont(.title3, weight: .semibold)
                 Spacer()
             }
 
             Text(
                 "Cue works out of the box. The items below are optional engines and features — yt-dlp can install itself right here; for the rest, open Terminal (Applications → Utilities), paste its command, press Return, and wait for it to finish. Then come back and hit Check Again."
             )
-            .font(.callout)
+            .cueFont(.callout)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
 
@@ -37,9 +37,9 @@ struct SetupGuideView: View {
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("First time? Install Homebrew")
-                            .font(.callout.weight(.semibold))
+                            .cueFont(.callout, weight: .semibold)
                         Text("The commands below use Homebrew, the standard macOS package manager. If Terminal says “command not found: brew”, run this first.")
-                            .font(.caption)
+                            .cueFont(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -75,10 +75,10 @@ struct SetupGuideView: View {
                 if allRequiredInstalled {
                     Label("You're all set!", systemImage: "checkmark.seal.fill")
                         .foregroundStyle(.green)
-                        .font(.callout.weight(.medium))
+                        .cueFont(.callout, weight: .medium)
                 } else {
                     Text("Items marked optional can be added later.")
-                        .font(.caption)
+                        .cueFont(.caption)
                         .foregroundStyle(.secondary)
                 }
 
@@ -105,10 +105,10 @@ struct SetupGuideView: View {
                     Image(systemName: diagnostic.state.systemImage)
                         .foregroundStyle(diagnostic.state.tint)
                     Text(diagnostic.title)
-                        .font(.callout.weight(.semibold))
+                        .cueFont(.callout, weight: .semibold)
                     if diagnostic.state == .warning {
                         Text("optional")
-                            .font(.caption2.weight(.semibold))
+                            .cueFont(.caption2, weight: .semibold)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(.yellow.opacity(0.15), in: Capsule())
@@ -118,14 +118,14 @@ struct SetupGuideView: View {
                 }
 
                 Text(diagnostic.state == .passed ? diagnostic.detail : diagnostic.recovery)
-                    .font(.caption)
+                    .cueFont(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 if diagnostic.state != .passed, let command = diagnostic.repairCommand {
                     HStack(spacing: 8) {
                         Text(command)
-                            .font(.system(.caption, design: .monospaced))
+                            .cueFont(.caption, design: .monospaced)
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .textSelection(.enabled)
@@ -141,7 +141,7 @@ struct SetupGuideView: View {
                             } label: {
                                 Label("Install", systemImage: "arrow.down.circle")
                             }
-                            .font(.caption)
+                            .cueFont(.caption)
                             .help("Install yt-dlp without leaving Cue")
                         }
                         Spacer()

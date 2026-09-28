@@ -120,7 +120,7 @@ struct SettingsView: View {
                 Label("Transcription", systemImage: "waveform")
             } footer: {
                 Text("Presets keep backend and model paired. Advanced controls are available when you need exact model IDs.")
-                    .font(.caption)
+                    .cueFont(.caption)
                     .foregroundStyle(.secondary)
             }
 
@@ -169,7 +169,7 @@ struct SettingsView: View {
                 Text(
                     "Use any OpenAI (gpt-…), Anthropic (claude-…), Google (gemini-…), OpenRouter (openrouter/…), Groq (groq/…), or Cerebras (cerebras/…) model — the provider and API key are chosen from the model name. Keys are stored in the Keychain. A local/… model needs no key — it talks to the OpenAI-compatible server at the Local server URL (LM Studio, Ollama)."
                 )
-                .font(.caption)
+                .cueFont(.caption)
                 .foregroundStyle(.secondary)
             }
 
@@ -222,13 +222,13 @@ struct SettingsView: View {
                 Text(
                     "The summary may use the translation model, a different cloud model, or a local/… model. The fallback is attempted only after a policy or safety refusal—not for bad keys, rate limits, outages, or malformed replies. Subtitle text is sent only to the models you select."
                 )
-                .font(.caption)
+                .cueFont(.caption)
                 .foregroundStyle(.secondary)
             }
 
             Section {
                 TextEditor(text: $settings.translationPrompt)
-                    .font(.body)
+                    .cueFont(.body)
                     .frame(minHeight: 130)
                 Button("Reset Prompt") {
                     settings.resetTranslationPrompt()
@@ -237,7 +237,7 @@ struct SettingsView: View {
                 Label("Translator Prompt", systemImage: "text.quote")
             } footer: {
                 Text("This prompt is combined with required subtitle JSON rules during translation.")
-                    .font(.caption)
+                    .cueFont(.caption)
                     .foregroundStyle(.secondary)
             }
 
@@ -273,7 +273,7 @@ struct SettingsView: View {
         LabeledContent("Downloads folder") {
             HStack(spacing: 8) {
                 Text(settings.resolvedDownloadDirectory.path(percentEncoded: false))
-                    .font(.callout)
+                    .cueFont(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.head)
@@ -446,11 +446,11 @@ struct SettingsView: View {
         case .idle:
             Label("Enter the LM Studio address, then load its models.", systemImage: "network")
                 .foregroundStyle(.secondary)
-                .font(.caption)
+                .cueFont(.caption)
         case .loading:
             Label("Connecting to the local server…", systemImage: "network")
                 .foregroundStyle(.secondary)
-                .font(.caption)
+                .cueFont(.caption)
         case .connected(let count, let confirmedRunning):
             Label(
                 confirmedRunning
@@ -459,11 +459,11 @@ struct SettingsView: View {
                 systemImage: "checkmark.circle.fill"
             )
             .foregroundStyle(.green)
-            .font(.caption)
+            .cueFont(.caption)
         case .failed(let message):
             Label(message, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
-                .font(.caption)
+                .cueFont(.caption)
         }
     }
 

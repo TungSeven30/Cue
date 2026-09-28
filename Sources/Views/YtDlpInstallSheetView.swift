@@ -9,10 +9,10 @@ struct YtDlpInstallSheetView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
                 Image(systemName: "arrow.down.circle")
-                    .font(.title2)
+                    .cueFont(.title2)
                     .foregroundStyle(.tint)
                 Text("Installing yt-dlp")
-                    .font(.title3.weight(.semibold))
+                    .cueFont(.title3, weight: .semibold)
                 Spacer()
             }
 
@@ -26,7 +26,7 @@ struct YtDlpInstallSheetView: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.red)
                     }
-                    .font(.callout)
+                    .cueFont(.callout)
                     .fixedSize(horizontal: false, vertical: true)
 
                     CopyFeedbackButton(text: message, helpText: "Copy error to clipboard")
@@ -36,7 +36,7 @@ struct YtDlpInstallSheetView: View {
                     ProgressView()
                         .controlSize(.small)
                     Text("Running brew install yt-dlp…")
-                        .font(.callout)
+                        .cueFont(.callout)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -45,7 +45,7 @@ struct YtDlpInstallSheetView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                         Text(line)
-                            .font(.system(.caption, design: .monospaced))
+                            .cueFont(.caption, design: .monospaced)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -59,7 +59,7 @@ struct YtDlpInstallSheetView: View {
 
             if let pageURL = model.ytDlpInstallRequest?.pageURL {
                 Text("Your link (\(pageURL.absoluteString)) starts downloading when this finishes.")
-                    .font(.caption)
+                    .cueFont(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }

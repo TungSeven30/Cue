@@ -14,7 +14,7 @@ struct OpenRouterModelBrowserView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("OpenRouter Models")
-                .font(.title3.weight(.semibold))
+                .cueFont(.title3, weight: .semibold)
                 .padding(.bottom, 12)
 
             TextField("Search by name or id", text: $searchText)
@@ -35,18 +35,18 @@ struct OpenRouterModelBrowserView: View {
                 } else if visibleModels.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "magnifyingglass")
-                            .font(.title2)
+                            .cueFont(.title2)
                             .foregroundStyle(.secondary)
                         Text("No Models Match")
-                            .font(.headline)
+                            .cueFont(.headline)
                         Text("No OpenRouter models found matching “\(searchText)”.")
-                            .font(.caption)
+                            .cueFont(.caption)
                             .foregroundStyle(.secondary)
                         Button("Clear Search") {
                             searchText = ""
                         }
                         .buttonStyle(.borderless)
-                        .font(.caption)
+                        .cueFont(.caption)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
@@ -62,7 +62,7 @@ struct OpenRouterModelBrowserView: View {
                                 }
                             }
                             Text("\(model.id) — \(model.priceLabel)")
-                                .font(.caption)
+                                .cueFont(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
@@ -75,7 +75,7 @@ struct OpenRouterModelBrowserView: View {
 
             HStack {
                 Text("\(visibleModels.count) models")
-                    .font(.callout)
+                    .cueFont(.callout)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Cancel") { dismiss() }

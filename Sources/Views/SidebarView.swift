@@ -177,7 +177,7 @@ struct SidebarView: View {
             if model.selectedJobIDs.count > 1 {
                 ToolbarItem {
                     Text("\(model.selectedJobIDs.count) selected")
-                        .font(.caption)
+                        .cueFont(.caption)
                         .foregroundStyle(.secondary)
                         .help("Actions in a selected job's shortcut menu apply to the selection")
                 }
@@ -279,7 +279,7 @@ struct SidebarView: View {
                 if let undoNotice {
                     HStack(spacing: 8) {
                         Text(undoNotice.message)
-                            .font(.caption)
+                            .cueFont(.caption)
                             .lineLimit(2)
                         Spacer(minLength: 4)
                         Button("Undo") {
@@ -320,7 +320,7 @@ struct SidebarView: View {
                 }
                 if let summary = model.queueSummaryText {
                     Text(summary)
-                        .font(.caption)
+                        .cueFont(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .lineLimit(2)
@@ -749,12 +749,12 @@ struct SidebarView: View {
         } else if model.jobs.isEmpty {
             VStack(spacing: 8) {
                 Image(systemName: "film.stack")
-                    .font(.title3)
+                    .cueFont(.title3)
                     .foregroundStyle(.secondary)
                 Text("No Jobs Yet")
-                    .font(.subheadline.weight(.medium))
+                    .cueFont(.subheadline, weight: .medium)
                 Text("Drag media files here or click Add Files below.")
-                    .font(.caption)
+                    .cueFont(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
@@ -764,12 +764,12 @@ struct SidebarView: View {
         } else {
             VStack(spacing: 8) {
                 Image(systemName: "line.3.horizontal.decrease.circle")
-                    .font(.title3)
+                    .cueFont(.title3)
                     .foregroundStyle(.secondary)
                 Text("No Matching Jobs")
-                    .font(.subheadline.weight(.medium))
+                    .cueFont(.subheadline, weight: .medium)
                 Text(sidebarFilterEmptyText)
-                    .font(.caption)
+                    .cueFont(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                 Button("Clear Filters") {
@@ -777,7 +777,7 @@ struct SidebarView: View {
                     statusFilterRaw = JobStatusFilter.all.rawValue
                 }
                 .buttonStyle(.borderless)
-                .font(.caption)
+                .cueFont(.caption)
             }
             .padding(.vertical, 20)
             .padding(.horizontal, 12)
@@ -1050,7 +1050,7 @@ private struct JobFilterChip: View {
                     .monospacedDigit()
                     .opacity(0.8)
             }
-            .font(.caption)
+            .cueFont(.caption)
 
         }
         .toggleStyle(.button)
@@ -1085,20 +1085,20 @@ private struct WatchFolderRow: View {
                 Text(folder.name)
                     .lineLimit(1)
                 Text(statusText)
-                    .font(.caption)
+                    .cueFont(.caption)
                     .foregroundStyle(hasError ? .red : .secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
             if !folder.profile.isEmpty {
                 Image(systemName: "slider.horizontal.3")
-                    .font(.caption)
+                    .cueFont(.caption)
                     .foregroundStyle(.secondary)
                     .help("This folder has its own settings")
             }
             if needsProviderWarning {
                 Image(systemName: "exclamationmark.triangle")
-                    .font(.caption)
+                    .cueFont(.caption)
                     .foregroundStyle(.orange)
                     .help("Files will be transcribed but not translated until a translation API key or local server is configured")
             }
@@ -1130,7 +1130,7 @@ private struct DownloadRow: View {
                 Text(download.title)
                     .lineLimit(1)
                 Text(download.detail)
-                    .font(.caption)
+                    .cueFont(.caption)
                     .foregroundStyle(download.state.isFailed ? .red : .secondary)
                     .lineLimit(1)
                 if !download.state.isFailed {
@@ -1177,7 +1177,7 @@ private struct JobRow: View, Equatable {
                 Text(title)
                     .lineLimit(1)
                 Text(statusText)
-                    .font(.caption)
+                    .cueFont(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -1205,7 +1205,7 @@ private struct JobRow: View, Equatable {
             }
             if hasOverrides {
                 Image(systemName: "slider.horizontal.3")
-                    .font(.caption)
+                    .cueFont(.caption)
                     .foregroundStyle(.secondary)
                     .help("This job has its own settings")
             }

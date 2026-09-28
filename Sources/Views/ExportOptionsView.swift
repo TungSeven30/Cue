@@ -21,7 +21,7 @@ struct ExportOptionsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Export")
-                .font(.title3.weight(.semibold))
+                .cueFont(.title3, weight: .semibold)
                 .padding(.bottom, 12)
 
             Form {
@@ -29,7 +29,7 @@ struct ExportOptionsView: View {
                     TextField("File name", text: $baseName, prompt: Text("File name"))
                 } footer: {
                     Text(nameHint)
-                        .font(.caption)
+                        .cueFont(.caption)
                         .foregroundStyle(.secondary)
                 }
 
@@ -56,7 +56,7 @@ struct ExportOptionsView: View {
 
             HStack {
                 Text(summary)
-                    .font(.callout)
+                    .cueFont(.callout)
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Burn In Video…") {

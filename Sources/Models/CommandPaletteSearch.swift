@@ -26,8 +26,8 @@ enum PaletteSection: Int, CaseIterable, Comparable, Hashable, Sendable {
     /// Header for the suggestions shown before anything is typed.
     var suggestionTitle: String {
         switch self {
-        case .jobs: "Recent jobs"
-        case .commands: "Suggested commands"
+        case .jobs: "Recent Jobs"
+        case .commands: "Suggested Commands"
         default: title
         }
     }

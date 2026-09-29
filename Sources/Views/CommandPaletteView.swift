@@ -583,6 +583,12 @@ final class PaletteTextField: NSTextField {
             DispatchQueue.main.async { [weak self] in
                 guard let self, let window = self.window else { return }
                 window.makeFirstResponder(self)
+                // A field takes focus with its text selected. A palette that
+                // opens with text in it (a prefilled ">") must keep typing
+                // after that text, not over it.
+                if let editor = self.currentEditor() {
+                    editor.selectedRange = NSRange(location: (self.stringValue as NSString).length, length: 0)
+                }
             }
         } else {
             NotificationCenter.default.removeObserver(self)

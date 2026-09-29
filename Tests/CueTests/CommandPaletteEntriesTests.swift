@@ -144,7 +144,7 @@ struct CommandPaletteEntriesTests {
         #expect(results.isSuggestions)
         #expect(Fixtures.titles(results, in: .jobs) == ["Selected", "Running", "Queued", "Fresh", "Older"])
         let jobsHeader = try #require(headers(results).first { $0.section == .jobs })
-        #expect(jobsHeader.title == "Recent jobs")
+        #expect(jobsHeader.title == "Recent Jobs")
         #expect(!jobsHeader.isCapped)
     }
 
@@ -162,7 +162,7 @@ struct CommandPaletteEntriesTests {
                 == ["Next Step: Translate to Japanese", "Add Files…", "Add from URL…", "Start All", "Stop All Jobs", "Export…"]
         )
         let header = try #require(headers(results).first { $0.section == .commands })
-        #expect(header.title == "Suggested commands")
+        #expect(header.title == "Suggested Commands")
     }
 
     @Test func emptyQueryLeavesOutSuggestedCommandsThatCannotRun() {

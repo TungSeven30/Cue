@@ -245,7 +245,10 @@ struct TranscriptSegmentMetrics: Equatable {
     let characterCount: Int
 
     init(segment: TranscriptionSegment) {
-        duration = max(0, segment.end - segment.start)
+        // Imported or hand-edited times can be inverted or non-finite; a cue
+        // like that reads as zero-length rather than "inf s".
+        let span = segment.end - segment.start
+        duration = span.isFinite ? max(0, span) : 0
         characterCount = segment.text.trimmingCharacters(in: .whitespacesAndNewlines).count
     }
 
@@ -258,9 +261,15 @@ struct TranscriptSegmentMetrics: Equatable {
     var durationLabel: String { String(format: "%.1f s", duration) }
 
     /// Whole numbers from 10 up, one decimal below, so slow cues stay legible.
+    /// The choice is made on the rounded value, so 9.96 reads "10 chars/s",
+    /// never "10.0 chars/s".
     var rateLabel: String? {
         guard let rate = charactersPerSecond else { return nil }
-        return String(format: rate < 10 ? "%.1f chars/s" : "%.0f chars/s", rate)
+        return String(format: Self.usesWholeNumbers(rate) ? "%.0f chars/s" : "%.1f chars/s", rate)
+    }
+
+    private static func usesWholeNumbers(_ rate: Double) -> Bool {
+        (rate * 10).rounded() / 10 >= 10
     }
 
     var summary: String {
@@ -270,7 +279,7 @@ struct TranscriptSegmentMetrics: Equatable {
     var accessibilityLabel: String {
         var label = "Duration \(String(format: "%.1f", duration)) seconds"
         if let rate = charactersPerSecond {
-            label += ", \(String(format: rate < 10 ? "%.1f" : "%.0f", rate)) characters per second"
+            label += ", \(String(format: Self.usesWholeNumbers(rate) ? "%.0f" : "%.1f", rate)) characters per second"
         }
         return label
     }

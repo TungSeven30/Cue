@@ -100,10 +100,10 @@ struct JobSettingsPanelTests {
     // MARK: - Height budget
 
     @Test func panelBudgetIsWhatTheTranscriptCanSpare() {
-        // 900 pane − 140 chrome − 280 player − 160 minimum transcript.
-        #expect(JobSettingsLayout.expandedPanelMaxHeight(paneHeight: 900, playerHeight: 280, textScale: 1) == 320)
+        // 900 pane − 130 chrome − 280 player − 200 minimum transcript.
+        #expect(JobSettingsLayout.expandedPanelMaxHeight(paneHeight: 900, playerHeight: 280, textScale: 1) == 290)
         // A taller player leaves the panel less room.
-        #expect(JobSettingsLayout.expandedPanelMaxHeight(paneHeight: 900, playerHeight: 400, textScale: 1) == 200)
+        #expect(JobSettingsLayout.expandedPanelMaxHeight(paneHeight: 900, playerHeight: 400, textScale: 1) == 170)
     }
 
     @Test func panelBudgetShrinksAsTextGrows() {
@@ -112,12 +112,12 @@ struct JobSettingsPanelTests {
         #expect(largest < standard)
         // Smaller-than-standard text never buys extra room: the chrome has a floor.
         #expect(JobSettingsLayout.chromeHeight(textScale: 0.9) == JobSettingsLayout.chromeHeight(textScale: 1))
-        #expect(JobSettingsLayout.chromeHeight(textScale: 1.5) == 170)
+        #expect(JobSettingsLayout.chromeHeight(textScale: 1.5) == 140)
     }
 
-    @Test func panelNeverShrinksBelowReadableAtTheMinimumWindow() {
-        // At the minimum window with the default player there is less than the
-        // floor to give, so the panel keeps the floor and scrolls.
+    @Test func panelNeverShrinksBelowReadableEvenIfTheVideoDoesNotYield() {
+        // Were the video held at its default height, the minimum window would
+        // leave less than the floor, so the panel keeps the floor and scrolls.
         let atMinimum = JobSettingsLayout.expandedPanelMaxHeight(
             paneHeight: JobSettingsLayout.minimumPaneHeight, playerHeight: 280, textScale: 1)
         #expect(atMinimum == JobSettingsLayout.minimumPanelHeight)
@@ -148,6 +148,88 @@ struct JobSettingsPanelTests {
                 }
             }
         }
+    }
+
+    // MARK: - The video yields while the panel is open
+
+    @Test func aClosedPanelNeverTouchesThePreviewHeight() {
+        for pane in [CGFloat(0), 400, JobSettingsLayout.minimumPaneHeight, 1200] {
+            #expect(JobSettingsLayout.playerHeight(preferred: 280, isPanelOpen: false, paneHeight: pane, textScale: 1) == 280)
+            #expect(JobSettingsLayout.playerHeight(preferred: 640, isPanelOpen: false, paneHeight: pane, textScale: 1.5) == 640)
+        }
+    }
+
+    @Test func aTallWindowKeepsTheChosenPreviewHeightWithThePanelOpen() {
+        // 1000 pane − 130 chrome − 200 transcript − 260 panel leaves 410 for the video.
+        #expect(JobSettingsLayout.playerHeight(preferred: 280, isPanelOpen: true, paneHeight: 1000, textScale: 1) == 280)
+        #expect(JobSettingsLayout.playerHeight(preferred: 410, isPanelOpen: true, paneHeight: 1000, textScale: 1) == 410)
+    }
+
+    @Test func aShortWindowShrinksThePreviewButNotBelowItsSmallest() {
+        // 800 pane leaves 210 for the video.
+        #expect(JobSettingsLayout.playerHeight(preferred: 400, isPanelOpen: true, paneHeight: 800, textScale: 1) == 210)
+        // The minimum window leaves 78, below the smallest preview.
+        #expect(JobSettingsLayout.playerHeight(preferred: 280, isPanelOpen: true, paneHeight: 668, textScale: 1) == 140)
+        #expect(JobSettingsLayout.playerHeight(preferred: 640, isPanelOpen: true, paneHeight: 0, textScale: 1) == 140)
+    }
+
+    @Test func atTheMinimumWindowTheVideoYieldsSoThePanelAndTranscriptAreUsable() {
+        let pane = JobSettingsLayout.minimumPaneHeight
+        for scale: CGFloat in [1, 1.5] {
+            let drawn = JobSettingsLayout.playerHeight(preferred: 280, isPanelOpen: true, paneHeight: pane, textScale: scale)
+            #expect(drawn == JobSettingsLayout.minimumPlayerHeight)
+            let panel = JobSettingsLayout.expandedPanelMaxHeight(paneHeight: pane, playerHeight: drawn, textScale: scale)
+            #expect(panel > JobSettingsLayout.minimumPanelHeight)
+            let transcript = pane - JobSettingsLayout.chromeHeight(textScale: scale) - drawn - panel
+            #expect(abs(transcript - JobSettingsLayout.minimumTranscriptHeight) < 0.001)
+        }
+        // Standard text: a 198 pt panel and a 200 pt transcript.
+        #expect(JobSettingsLayout.expandedPanelMaxHeight(paneHeight: pane, playerHeight: 140, textScale: 1) == 198)
+    }
+
+    @Test func thePreviewNeverGrowsAndNeverDropsBelowItsSmallest() {
+        let scales: [CGFloat] = [1, 1.3, 1.5]
+        for pane in stride(from: CGFloat(400), through: 1400, by: 25) {
+            for preferred in stride(from: CGFloat(140), through: 640, by: 20) {
+                for scale in scales {
+                    let drawn = JobSettingsLayout.playerHeight(
+                        preferred: preferred, isPanelOpen: true, paneHeight: pane, textScale: scale)
+                    #expect(drawn <= preferred)
+                    #expect(drawn >= JobSettingsLayout.minimumPlayerHeight)
+                }
+            }
+        }
+    }
+
+    @Test func aTallerWindowNeverShrinksThePreview() {
+        var previous: CGFloat = 0
+        for pane in stride(from: CGFloat(400), through: 1400, by: 10) {
+            let drawn = JobSettingsLayout.playerHeight(preferred: 500, isPanelOpen: true, paneHeight: pane, textScale: 1)
+            #expect(drawn >= previous)
+            previous = drawn
+        }
+    }
+
+    @Test func theOpenPanelGetsItsPreferredHeightWheneverTheVideoCanGiveIt() {
+        for pane in stride(from: CGFloat(560), through: 1400, by: 20) {
+            for preferred in stride(from: CGFloat(140), through: 640, by: 20) {
+                let drawn = JobSettingsLayout.playerHeight(preferred: preferred, isPanelOpen: true, paneHeight: pane, textScale: 1)
+                guard drawn > JobSettingsLayout.minimumPlayerHeight else { continue }
+                let panel = JobSettingsLayout.expandedPanelMaxHeight(paneHeight: pane, playerHeight: drawn, textScale: 1)
+                #expect(panel >= JobSettingsLayout.preferredPanelHeight - 0.001)
+            }
+        }
+    }
+
+    @Test func nonFiniteInputLeavesThePreviewHeightAlone() {
+        #expect(JobSettingsLayout.playerHeight(preferred: 280, isPanelOpen: true, paneHeight: .nan, textScale: 1) == 280)
+        #expect(JobSettingsLayout.playerHeight(preferred: 280, isPanelOpen: true, paneHeight: .infinity, textScale: 1) == 280)
+        #expect(JobSettingsLayout.playerHeight(preferred: 280, isPanelOpen: true, paneHeight: 900, textScale: .nan) == 280)
+    }
+
+    @Test func theSmallestPreviewMatchesTheSizeControlsFloor() {
+        #expect(JobSettingsLayout.minimumPlayerHeight == CGFloat(PreviewHeightControl.clamped(0)))
+        #expect(JobSettingsLayout.minimumPlayerHeight == CGFloat(PreviewHeightControl.clamped(-500)))
     }
 
     // MARK: - Disclosure wording and motion

@@ -9,21 +9,40 @@ enum JobSettingsLayout {
     /// The detail pane at the app's 1080×720 minimum window: a 250 pt sidebar
     /// and about 52 pt of toolbar leave roughly 830×668.
     static let minimumPaneHeight: CGFloat = 668
-    /// An open panel never takes the transcript below this much height.
-    static let minimumTranscriptHeight: CGFloat = 160
+    /// An open panel never takes the transcript below this much height: its
+    /// filter row and a cue or two.
+    static let minimumTranscriptHeight: CGFloat = 200
     /// Below this an open panel is too short to read, so it stops shrinking
     /// and scrolls instead.
     static let minimumPanelHeight: CGFloat = 96
+    /// How tall an open panel would like to be: the run options in full and
+    /// the start of the actions under them. The rest scrolls.
+    static let preferredPanelHeight: CGFloat = 260
+    /// The smallest preview the size control allows. A test keeps this equal
+    /// to `PreviewHeightControl`'s floor.
+    static let minimumPlayerHeight: CGFloat = 140
 
     /// Everything in the preview layout that is not the player, the open
     /// panel, or the transcript: the one-line header, the card's own row, the
-    /// view picker, dividers, and spacing. It grows with Text size.
+    /// view picker, dividers, and spacing. It grows a little with Text size.
     static func chromeHeight(textScale: CGFloat) -> CGFloat {
-        140 + 60 * (max(textScale, 1) - 1)
+        130 + 20 * (max(textScale, 1) - 1)
+    }
+
+    /// The height the video is drawn at. Closed, it is exactly what the user
+    /// chose. While the panel is open the video gives up height, never below
+    /// the smallest preview, so the panel has room to be read and the
+    /// transcript keeps its minimum; on a tall window nothing changes. The
+    /// saved preference is untouched, so closing the panel restores the video.
+    static func playerHeight(preferred: CGFloat, isPanelOpen: Bool, paneHeight: CGFloat, textScale: CGFloat) -> CGFloat {
+        guard isPanelOpen, preferred.isFinite, paneHeight.isFinite, textScale.isFinite else { return preferred }
+        let room = paneHeight - chromeHeight(textScale: textScale) - minimumTranscriptHeight - preferredPanelHeight
+        return min(preferred, max(minimumPlayerHeight, room))
     }
 
     /// How tall the open panel may be before it scrolls: whatever the pane has
     /// left after the player, the fixed chrome, and the transcript's minimum.
+    /// `playerHeight` is the height the video is actually drawn at.
     static func expandedPanelMaxHeight(paneHeight: CGFloat, playerHeight: CGFloat, textScale: CGFloat) -> CGFloat {
         guard paneHeight.isFinite, playerHeight.isFinite, textScale.isFinite else { return minimumPanelHeight }
         let free = paneHeight - chromeHeight(textScale: textScale) - playerHeight - minimumTranscriptHeight
@@ -99,14 +118,17 @@ enum JobSettingsLayout {
 /// also holds everything the full header card offers while the preview is
 /// hidden: run options, the next action, progress and failure details, and
 /// environment checks. The panel is height-capped and scrolls so the transcript
-/// keeps room.
+/// keeps room; `DetailView` owns the open state because it also lets the video
+/// yield height while the panel is open.
 struct JobSettingsCard<PreviewControls: View>: View {
     @ObservedObject var model: AppModel
+    @Binding var isExpanded: Bool
     let paneHeight: CGFloat
+    /// The height the video is drawn at right now, already reduced while the
+    /// panel is open.
     let playerHeight: CGFloat
     @ViewBuilder let previewControls: () -> PreviewControls
 
-    @AppStorage(JobSettingsLayout.expandedStorageKey) private var isExpanded = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.cueTextScale) private var textScale
 
@@ -155,15 +177,17 @@ struct JobSettingsCard<PreviewControls: View>: View {
                     model.retrySelectedFailedStage()
                 } label: {
                     Label("Retry", systemImage: "arrow.clockwise")
+                        .lineLimit(1)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+                .fixedSize()
                 .help("Retry the stage that failed")
             }
             previewControls()
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 5)
+        .padding(.vertical, 3)
     }
 
     private var disclosureButton: some View {
@@ -181,6 +205,8 @@ struct JobSettingsCard<PreviewControls: View>: View {
                     .accessibilityHidden(true)
                 Text("Job settings")
                     .cueFont(.subheadline, weight: .semibold)
+                    .lineLimit(1)
+                    .layoutPriority(1)
                 if isFailed {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.red)
@@ -205,7 +231,17 @@ struct JobSettingsCard<PreviewControls: View>: View {
     private var panel: some View {
         ViewThatFits(in: .vertical) {
             panelContent
-            ScrollView { panelContent }
+            ScrollView {
+                panelContent
+            }
+            // A soft edge shows there is more below without a scroll bar.
+            .mask(alignment: .bottom) {
+                VStack(spacing: 0) {
+                    Rectangle()
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 14)
+                }
+            }
         }
         .frame(
             maxHeight: JobSettingsLayout.expandedPanelMaxHeight(
@@ -218,10 +254,27 @@ struct JobSettingsCard<PreviewControls: View>: View {
         .accessibilityLabel("Job settings")
     }
 
-    /// The header card's content, minus the title the compact header already
-    /// shows and the chips the run options repeat.
+    /// What the header card offers, minus the title the compact header already
+    /// shows and the chips the run options repeat. The settings come first;
+    /// after a failure the reason and the way out come before them.
     private var panelContent: some View {
         VStack(alignment: .leading, spacing: 16) {
+            if isFailed {
+                JobProgressStrip(model: model)
+            }
+
+            RunOptionsRow(model: model)
+
+            Divider()
+
+            JobNextActionRow(model: model)
+
+            if !isFailed {
+                JobProgressStrip(model: model)
+            }
+
+            Divider()
+
             HStack(spacing: 12) {
                 Text(model.selectedVideoURL?.path(percentEncoded: false) ?? "No file selected")
                     .cueFont(.caption)
@@ -232,14 +285,6 @@ struct JobSettingsCard<PreviewControls: View>: View {
                 Spacer(minLength: 12)
                 JobDiagnosticsPill(model: model)
             }
-
-            JobProgressStrip(model: model)
-
-            JobNextActionRow(model: model)
-
-            Divider()
-
-            RunOptionsRow(model: model)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)

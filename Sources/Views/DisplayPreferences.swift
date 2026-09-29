@@ -116,9 +116,9 @@ enum ListDensity: String, CaseIterable, Identifiable {
 
     var summary: String {
         switch self {
-        case .compact: "One line per row, so more fits on screen."
-        case .comfortable: "Name and status on every row."
-        case .detailed: "Adds languages, length, and dates."
+        case .compact: "One line per job and tighter subtitle rows, so more fits on screen."
+        case .comfortable: "Name and status on every job, with the usual spacing."
+        case .detailed: "Adds languages, length, and date to jobs, and timing to subtitles."
         }
     }
 

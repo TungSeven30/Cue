@@ -391,7 +391,6 @@ struct DetailView: View {
 
 private struct HeaderCard: View {
     @ObservedObject var model: AppModel
-    @ViewState private var showDiagnostics = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -414,12 +413,12 @@ private struct HeaderCard: View {
 
                 Spacer(minLength: 12)
 
-                diagnosticsPill
+                JobDiagnosticsPill(model: model)
             }
 
-            progressStrip
+            JobProgressStrip(model: model)
 
-            nextActionRow
+            JobNextActionRow(model: model)
 
             Divider()
 
@@ -466,8 +465,14 @@ private struct HeaderCard: View {
         .padding(.vertical, 4)
         .background(.quaternary.opacity(0.6), in: Capsule())
     }
+}
 
-    private var diagnosticsPill: some View {
+/// The environment-check pill: opens the diagnostics popover.
+struct JobDiagnosticsPill: View {
+    @ObservedObject var model: AppModel
+    @ViewState private var showDiagnostics = false
+
+    var body: some View {
         Button {
             showDiagnostics.toggle()
         } label: {
@@ -504,9 +509,15 @@ private struct HeaderCard: View {
     private var diagnosticsColor: Color {
         diagnosticsPillState?.tint ?? .secondary
     }
+}
+
+/// Stage and progress line, the failure banner (reason, Retry, System Setup,
+/// Copy), or the Export strip once a transcript or translation is ready.
+struct JobProgressStrip: View {
+    @ObservedObject var model: AppModel
 
     @ViewBuilder
-    private var progressStrip: some View {
+    var body: some View {
         let progress = model.progress
         let isFailed = progress.stage == .failed
         VStack(alignment: .leading, spacing: 8) {
@@ -633,9 +644,20 @@ private struct HeaderCard: View {
             }
         }
     }
+}
+
+/// Transcribe, Translate or Resume, and the intro-summary action.
+struct JobNextActionRow: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            content
+        }
+    }
 
     @ViewBuilder
-    private var nextActionRow: some View {
+    private var content: some View {
         if model.transcriptSegments.isEmpty {
             Button {
                 model.startTranscription()
@@ -716,7 +738,7 @@ private struct HeaderCard: View {
     }
 }
 
-private struct RunOptionsRow: View {
+struct RunOptionsRow: View {
     @ObservedObject var model: AppModel
     @Environment(\.openSettings) private var openSettings
 

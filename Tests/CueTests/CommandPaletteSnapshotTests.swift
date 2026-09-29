@@ -47,6 +47,13 @@ private final class StorageErrorGuard {
 /// The harness cannot type, hover, or press keys. Those paths are covered by
 /// `CommandPaletteControllerTests`; these renders check what the panel looks
 /// like, given a query.
+///
+/// Run this suite by itself with the test runner's `--filter` (as
+/// `script/run_tests.sh` ignores arguments) and with the display awake, or
+/// `screencapture` cannot capture the window. In a whole-suite gated run,
+/// `AppModelDiagnosticsTests.anOlderDiagnosticsRunCannotOverwriteTheNewestResult`
+/// can fail while these renders spin the main run loop (its 500 ms settings
+/// debounce fires mid-test). It passes alone and in every ungated run.
 @MainActor
 @Suite(.serialized)
 struct CommandPaletteSnapshotTests {
@@ -292,7 +299,13 @@ struct CommandPaletteSnapshotTests {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         defaults.set(scale.rawValue, forKey: DisplayPreferenceKey.textScale)
         let controller = PaletteController(
-            snapshot: PaletteFixtures.snapshot { $0.hasTranscript = true },
+            snapshot: PaletteFixtures.snapshot {
+                // A job with a transcript and no translation, so the reasons
+                // match the notice: the translation exports cannot run yet.
+                $0.selectedJobTitle = "Linear Algebra Lecture 12"
+                $0.selectedJobStatus = .transcriptionComplete
+                $0.hasTranscript = true
+            },
             query: "export",
             announce: { _ in }
         )

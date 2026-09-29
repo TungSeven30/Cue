@@ -569,8 +569,7 @@ struct SidebarView: View {
     /// An explicit Group by choice wins. Without one, a sidebar that had been
     /// grouped by status keeps that; everyone else starts in Folders.
     private var grouping: SidebarGrouping {
-        if let explicit = SidebarGrouping(rawValue: groupingRaw) { return explicit }
-        return legacyGroupByStatus ? .status : .folders
+        SidebarGrouping.resolve(stored: groupingRaw, legacyGroupByStatus: legacyGroupByStatus)
     }
 
     private var groupingBinding: Binding<SidebarGrouping> {

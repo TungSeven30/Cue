@@ -27,7 +27,7 @@ enum SidebarFolderText {
     static func createNote(movingJobs count: Int) -> String {
         count == 0
             ? "Folders are yours to arrange: move jobs in with drag and drop or Move to Folder."
-            : "\(jobCount(count).capitalizedFirst) will move into the new folder."
+            : "\(jobCount(count)) will move into the new folder."
     }
 
     static func duplicateNote(for name: String) -> String {
@@ -49,15 +49,8 @@ enum SidebarFolderText {
         case .deleted:
             return change.movedCount == 0
                 ? "Deleted folder \(name)"
-                : "Deleted folder \(name). \(jobCount(change.movedCount).capitalizedFirst) returned to automatic placement."
+                : "Deleted folder \(name). \(jobCount(change.movedCount)) returned to automatic placement."
         }
-    }
-}
-
-extension String {
-    /// "1 job" → "1 job", "job list" → "Job list": only the first letter changes.
-    fileprivate var capitalizedFirst: String {
-        prefix(1).uppercased() + dropFirst()
     }
 }
 
@@ -81,6 +74,9 @@ struct SidebarRowDetail: Equatable {
 
 /// The per-row strings the sidebar shows at each list density.
 enum SidebarRowText {
+    /// Longer than any real recording (1,000 hours); beyond it a length is
+    /// treated as corrupt data and not shown.
+    static let maximumLengthSeconds: Double = 3_600_000
     /// Compact rows put a short status after the title; the full text stays in
     /// the row's help and accessibility label.
     static func compactStatus(for status: JobStatus, progressPercent: Int?, queuePosition: Int?) -> String {
@@ -126,8 +122,10 @@ enum SidebarRowText {
 
     /// The end of the last transcribed line: the length of the speech, which
     /// is what the transcript covers, and free to read (no media probing).
+    /// Values that cannot be a real duration show nothing rather than a
+    /// number: a damaged job file must not be able to trap the sidebar.
     static func lengthText(seconds: Double?) -> String? {
-        guard let seconds, seconds.isFinite, seconds >= 1 else { return nil }
+        guard let seconds, seconds.isFinite, (1...maximumLengthSeconds).contains(seconds) else { return nil }
         let total = Int(seconds.rounded())
         let hours = total / 3600
         let minutes = (total % 3600) / 60

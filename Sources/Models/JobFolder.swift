@@ -491,6 +491,14 @@ enum SidebarGrouping: String, CaseIterable, Identifiable, Sendable {
         case .none: "None"
         }
     }
+
+    /// The grouping to show. An explicit choice wins. Without one, a sidebar
+    /// that had been grouped by status (the old on/off setting) keeps that;
+    /// everyone else starts in Folders.
+    static func resolve(stored: String, legacyGroupByStatus: Bool) -> SidebarGrouping {
+        if let explicit = SidebarGrouping(rawValue: stored) { return explicit }
+        return legacyGroupByStatus ? .status : .folders
+    }
 }
 
 /// Sidebar search: a job matches when its title or its folder's name does,

@@ -129,10 +129,13 @@ struct CueApp: App {
         }
 
         Settings {
+            // The view sets its own minimum/ideal/maximum size; the scene
+            // lets the window resize between them and opens at the ideal.
             SettingsView(settings: model.settings)
-                .frame(width: 620, height: 780)
                 .cueDisplayPreferences()
         }
+        .windowResizability(.contentMinSize)
+        .defaultSize(SettingsWindowMetrics.defaultSize)
 
         MenuBarExtra(isInserted: $showMenuBarExtra) {
             MenuBarView(model: model)

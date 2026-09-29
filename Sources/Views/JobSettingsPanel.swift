@@ -18,6 +18,9 @@ enum JobSettingsLayout {
     /// How tall an open panel would like to be: the run options in full and
     /// the start of the actions under them. The rest scrolls.
     static let preferredPanelHeight: CGFloat = 260
+    /// Height of the soft edge that hints there is more below the fold when
+    /// the open panel scrolls.
+    static let scrollFadeHeight: CGFloat = 24
     /// The smallest preview the size control allows. A test keeps this equal
     /// to `PreviewHeightControl`'s floor.
     static let minimumPlayerHeight: CGFloat = 140
@@ -25,6 +28,9 @@ enum JobSettingsLayout {
     /// Everything in the preview layout that is not the player, the open
     /// panel, or the transcript: the one-line header, the card's own row, the
     /// view picker, dividers, and spacing. It grows a little with Text size.
+    /// Snapshots at the minimum window measure 128–131 pt at standard text
+    /// size, so the estimate holds the transcript's minimum to within a few
+    /// points.
     static func chromeHeight(textScale: CGFloat) -> CGFloat {
         130 + 20 * (max(textScale, 1) - 1)
     }
@@ -42,7 +48,9 @@ enum JobSettingsLayout {
 
     /// How tall the open panel may be before it scrolls: whatever the pane has
     /// left after the player, the fixed chrome, and the transcript's minimum.
-    /// `playerHeight` is the height the video is actually drawn at.
+    /// It is a cap, not a target: the stack may give the card less, which only
+    /// leaves the transcript more. `playerHeight` is the height the video is
+    /// actually drawn at.
     static func expandedPanelMaxHeight(paneHeight: CGFloat, playerHeight: CGFloat, textScale: CGFloat) -> CGFloat {
         guard paneHeight.isFinite, playerHeight.isFinite, textScale.isFinite else { return minimumPanelHeight }
         let free = paneHeight - chromeHeight(textScale: textScale) - playerHeight - minimumTranscriptHeight
@@ -172,7 +180,11 @@ struct JobSettingsCard<PreviewControls: View>: View {
     private var headerRow: some View {
         HStack(spacing: 10) {
             disclosureButton
-            if isFailed {
+            // Collapsed, the row is the only place a failed job's way out is
+            // visible. Expanded, the failure banner below has its own Retry, so
+            // a second identical button would only add noise (and a duplicate
+            // VoiceOver stop).
+            if isFailed, !isExpanded {
                 Button {
                     model.retrySelectedFailedStage()
                 } label: {
@@ -232,14 +244,16 @@ struct JobSettingsCard<PreviewControls: View>: View {
         ViewThatFits(in: .vertical) {
             panelContent
             ScrollView {
-                panelContent
+                // The extra room lets the last row scroll clear of the fade,
+                // so it is fully legible at the end of the scroll.
+                panelContent.padding(.bottom, JobSettingsLayout.scrollFadeHeight)
             }
             // A soft edge shows there is more below without a scroll bar.
             .mask(alignment: .bottom) {
                 VStack(spacing: 0) {
                     Rectangle()
                     LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 14)
+                        .frame(height: JobSettingsLayout.scrollFadeHeight)
                 }
             }
         }

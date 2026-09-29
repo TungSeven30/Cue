@@ -185,6 +185,9 @@ struct DetailView: View {
                     Text("Preview size")
                         .cueFont(.caption)
                         .foregroundStyle(.secondary)
+                        // The failure hint is long; it truncates, this doesn't wrap.
+                        .lineLimit(1)
+                        .fixedSize()
                     PreviewHeightControl(height: Binding(get: { drawnPlayerHeight }, set: { playerHeight = $0 }))
                         .frame(width: 24, height: 28)
                 }

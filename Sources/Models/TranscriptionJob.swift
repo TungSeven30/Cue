@@ -141,6 +141,10 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
     /// Set when the transcript came from a subtitle file rather than a run.
     var importedTranscriptSource: ImportedSubtitleSource?
     var importedTranslationSource: ImportedSubtitleSource?
+    /// The sidebar folder this job lives in (`JobFolder.id`). nil only until
+    /// placement runs: every hydrated or newly added job is assigned one, so
+    /// histories written before folders existed simply decode as nil.
+    var folderID: UUID?
 
     var sourceURL: URL {
         // .notDirectory skips the lstat that URL(fileURLWithPath:) performs to
@@ -181,6 +185,7 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         self.archivedAt = nil
         self.importedTranscriptSource = nil
         self.importedTranslationSource = nil
+        self.folderID = nil
     }
 
     init(from decoder: Decoder) throws {
@@ -210,6 +215,7 @@ struct TranscriptionJob: Codable, Identifiable, Hashable {
         archivedAt = try container.decodeIfPresent(Date.self, forKey: .archivedAt)
         importedTranscriptSource = try container.decodeIfPresent(ImportedSubtitleSource.self, forKey: .importedTranscriptSource)
         importedTranslationSource = try container.decodeIfPresent(ImportedSubtitleSource.self, forKey: .importedTranslationSource)
+        folderID = try container.decodeIfPresent(UUID.self, forKey: .folderID)
     }
 
     func importedSource(for slot: SubtitleSidecarScanner.Slot) -> ImportedSubtitleSource? {

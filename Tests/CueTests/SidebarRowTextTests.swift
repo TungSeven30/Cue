@@ -19,7 +19,7 @@ struct SidebarFolderTextTests {
     }
 
     @Test func emptyFolderHintDependsOnWhetherAFilterIsNarrowingTheList() {
-        #expect(SidebarFolderText.emptyFolderHint(isFiltering: false) == "Empty. Drag jobs here, or use Move to Folder.")
+        #expect(SidebarFolderText.emptyFolderHint(isFiltering: false) == "Drag jobs here, or use Move to Folder.")
         #expect(SidebarFolderText.emptyFolderHint(isFiltering: true) == "No jobs here match the current filter.")
     }
 
@@ -191,6 +191,49 @@ struct SidebarRowTextTests {
     }
 
     // MARK: Row detail
+
+    @Test func detailTiersGiveUpTheDateThenTheLength() {
+        let added = Date(timeIntervalSince1970: 1_790_000_000)
+        let tiers = SidebarRowText.detailTiers(
+            languages: "Japanese → English", speechSeconds: 3725, addedAt: added, now: added)
+        let date = SidebarRowText.shortDate(added, now: added)
+        #expect(tiers.complete == "Japanese → English · 1:02:05 · Added \(date)")
+        #expect(tiers.withoutDate == "Japanese → English · 1:02:05")
+        #expect(tiers.languagesOnly == "Japanese → English")
+    }
+
+    @Test func detailTiersWithoutALengthCollapseTheMiddleOne() {
+        let added = Date(timeIntervalSince1970: 1_790_000_000)
+        let tiers = SidebarRowText.detailTiers(languages: "Auto → English", speechSeconds: nil, addedAt: added, now: added)
+        #expect(tiers.withoutDate == "Auto → English")
+        #expect(tiers.withoutDate == tiers.languagesOnly)
+        #expect(tiers.complete.hasPrefix("Auto → English · Added "))
+    }
+
+    @Test func aDateInTheCurrentYearOmitsTheYear() throws {
+        let calendar = Calendar(identifier: .gregorian)
+        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 9, day: 29)))
+        let sameYear = try #require(calendar.date(from: DateComponents(year: 2026, month: 9, day: 20)))
+        let earlier = try #require(calendar.date(from: DateComponents(year: 2025, month: 9, day: 20)))
+        let recent = SidebarRowText.shortDate(sameYear, now: now, calendar: calendar)
+        let old = SidebarRowText.shortDate(earlier, now: now, calendar: calendar)
+        #expect(!recent.contains("2026"), "“\(recent)” should not repeat the year")
+        #expect(old.contains("2025"), "“\(old)” must keep the year once it is not this year")
+        #expect(recent.count < old.count)
+    }
+
+    @Test func rowDetailTiersAreTheSameWordingAsTheFullText() throws {
+        var job = try FolderTestJobs.make(sourcePath: "/v/a.mp4", createdAt: Date())
+        job.settings.sourceLanguage = "ja"
+        job.settings.translationTargetLanguage = "English"
+        job.transcriptSegments = [TranscriptionSegment(id: 0, start: 0, end: 125, text: "a")]
+        let detail = SidebarRowDetail(job: job)
+        #expect(detail.tiers.withoutDate == "Japanese → English · 2:05")
+        #expect(detail.tiers.languagesOnly == "Japanese → English")
+        // The full text keeps the unabridged date for VoiceOver and hover.
+        #expect(detail.text.hasPrefix(detail.tiers.withoutDate))
+        #expect(detail.text.contains("Added "))
+    }
 
     @Test func rowDetailReadsWhatIsAlreadyInMemory() throws {
         var job = try FolderTestJobs.make(sourcePath: "/v/a.mp4", createdAt: FolderTestJobs.epoch)

@@ -916,6 +916,9 @@ struct SidebarView: View {
                 Text(SidebarFolderText.emptyFolderHint(isFiltering: state.isFiltering))
                     .cueFont(.caption)
                     .foregroundStyle(.secondary)
+                    // Wrap at larger text sizes instead of cutting the hint off.
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
                     .selectionDisabled()
             } else {
                 ForEach(group.jobIDs, id: \.self) { id in
@@ -1636,10 +1639,14 @@ private struct JobRow: View, Equatable {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     if let detail {
-                        Text(detail.text)
-                            .cueFont(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                        // The fullest wording that fits: at a narrow width the
+                        // date goes first, then the length, never half a word.
+                        ViewThatFits(in: .horizontal) {
+                            detailLine(detail.tiers.complete)
+                            detailLine(detail.tiers.withoutDate)
+                            detailLine(detail.tiers.languagesOnly)
+                        }
+                        .help(detail.text)
                     }
                 }
                 Spacer(minLength: 0)
@@ -1675,10 +1682,18 @@ private struct JobRow: View, Equatable {
             }
         }
         .padding(.vertical, density.showsSecondaryLine ? 2 : 0)
-        // Compact drops the status line, so the hover text carries it.
-        .helpWhen(!density.showsSecondaryLine, statusText)
+        // Compact drops the status line and can squeeze the title, so the
+        // hover text carries both.
+        .helpWhen(!density.showsSecondaryLine, "\(title) — \(statusText)")
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityText)
+    }
+
+    private func detailLine(_ text: String) -> some View {
+        Text(text)
+            .cueFont(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
     }
 
     /// Progress for a running job: a bar when the fraction is known, a

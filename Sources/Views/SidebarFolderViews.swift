@@ -21,7 +21,7 @@ enum SidebarFolderText {
     static func emptyFolderHint(isFiltering: Bool) -> String {
         isFiltering
             ? "No jobs here match the current filter."
-            : "Empty. Drag jobs here, or use Move to Folder."
+            : "Drag jobs here, or use Move to Folder."
     }
 
     static func createNote(movingJobs count: Int) -> String {
@@ -67,13 +67,51 @@ struct SidebarRowDetail: Equatable {
         addedAt = job.createdAt
     }
 
+    /// Everything the line can say: what VoiceOver reads and the hover text.
     var text: String {
         SidebarRowText.detailLine(languages: languages, speechSeconds: speechSeconds, addedAt: addedAt)
+    }
+
+    /// The wordings the row chooses between by width.
+    var tiers: SidebarRowText.DetailTiers {
+        SidebarRowText.detailTiers(languages: languages, speechSeconds: speechSeconds, addedAt: addedAt)
     }
 }
 
 /// The per-row strings the sidebar shows at each list density.
 enum SidebarRowText {
+    /// The Detailed line at three levels of detail. The row shows the first one
+    /// that fits its width, so a narrow sidebar gives up the date, then the
+    /// length, instead of cutting a word in half. Always three, so a row can
+    /// list them without any conditional (an empty choice would always "fit").
+    struct DetailTiers: Equatable {
+        var complete: String
+        var withoutDate: String
+        var languagesOnly: String
+    }
+
+    /// Languages first (they say what the job does), then length, then when it
+    /// was added: the order they are given up in is the reverse.
+    static func detailTiers(
+        languages: String, speechSeconds: Double?, addedAt: Date, now: Date = Date()
+    ) -> DetailTiers {
+        var withoutDate = [languages]
+        if let length = lengthText(seconds: speechSeconds) { withoutDate.append(length) }
+        let base = withoutDate.joined(separator: " · ")
+        return DetailTiers(
+            complete: base + " · Added " + shortDate(addedAt, now: now),
+            withoutDate: base,
+            languagesOnly: languages)
+    }
+
+    /// "Sep 20" within the current year, "Sep 20, 2025" before it: the year is
+    /// the part of a date that costs the most width and says the least.
+    static func shortDate(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
+        calendar.isDate(date, equalTo: now, toGranularity: .year)
+            ? date.formatted(.dateTime.month(.abbreviated).day())
+            : date.formatted(date: .abbreviated, time: .omitted)
+    }
+
     /// Longer than any real recording (1,000 hours); beyond it a length is
     /// treated as corrupt data and not shown.
     static let maximumLengthSeconds: Double = 3_600_000
@@ -177,20 +215,33 @@ struct FolderHeaderLabel: View {
     let isDropTarget: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Icon, name, and count all take the section-header tone the sidebar gives
+    /// "Watch Folders" and "Jobs"; only a drop turns the icon to the accent
+    /// color. (Setting no style at all is what keeps the header tone.)
+    @ViewBuilder private var icon: some View {
+        if isDropTarget {
+            Image(systemName: "folder.fill").foregroundStyle(Color.accentColor)
+        } else {
+            Image(systemName: "folder")
+        }
+    }
+
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: isDropTarget ? "folder.fill" : "folder")
-                .foregroundStyle(isDropTarget ? Color.accentColor : Color.secondary)
+            icon
             Text(name)
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 4)
             Text("\(count)")
                 .monospacedDigit()
-                .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
-        .padding(.horizontal, 4)
+        .padding(.leading, 4)
+        // The count lines up with the trailing edge of the rows' status
+        // accessories below it, and leaves the corner free for the system's
+        // hover disclosure control.
+        .padding(.trailing, 12)
         .background {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(Color.accentColor.opacity(isDropTarget ? 0.22 : 0))

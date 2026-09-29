@@ -28,6 +28,12 @@ struct CueApp: App {
         // windows, no watch folders, no queue, no orphan sweep.
         CueCommandLine.runAndExitIfRequested()
         OrphanReaper.reap()
+        // Lets the command palette offer "Check for Updates…" without the
+        // model knowing about Sparkle.
+        let updater = updaterController
+        MainActor.assumeIsolated {
+            PaletteHooks.checkForUpdates = { updater.checkForUpdates(nil) }
+        }
     }
 
     var body: some Scene {
@@ -126,6 +132,8 @@ struct CueApp: App {
                 }
                 .disabled(model.currentJob == nil)
             }
+
+            CommandPaletteMenuCommands(model: model)
         }
 
         Settings {

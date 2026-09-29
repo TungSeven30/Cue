@@ -2,6 +2,10 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
+    /// Text the palette opens with. The app leaves it empty; snapshot tests
+    /// and previews use it to show a search without typing.
+    var initialPaletteQuery = ""
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         NavigationSplitView {
@@ -11,6 +15,27 @@ struct ContentView: View {
             DetailView(model: model, playerController: model.playerController)
                 .toolbar { toolbarContent }
         }
+        // While the palette is up the window behind it is inert: the
+        // backdrop already catches clicks, and VoiceOver must not wander
+        // into content the panel is covering.
+        .allowsHitTesting(!model.isShowingCommandPalette)
+        .accessibilityHidden(model.isShowingCommandPalette)
+        .overlay {
+            if model.isShowingCommandPalette {
+                CommandPaletteOverlay(model: model, initialQuery: initialPaletteQuery)
+                    .transition(.opacity)
+            }
+        }
+        // A short fade, and none at all under Reduce Motion.
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: model.isShowingCommandPalette)
+        // A sheet takes the window; the palette would be stuck underneath it.
+        .onChange(of: model.isPresentingSheet) { _, isPresenting in
+            if isPresenting { model.isShowingCommandPalette = false }
+        }
+        // A closed window takes an open palette with it, so the next window
+        // starts clean. (Not `onAppear`: ⌘K with the window closed sets the
+        // flag and then opens the window, which must find it set.)
+        .onDisappear { model.isShowingCommandPalette = false }
         .sheet(isPresented: $model.isShowingExportSheet) {
             ExportOptionsView(model: model)
         }

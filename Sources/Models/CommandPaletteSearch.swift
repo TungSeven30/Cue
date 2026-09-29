@@ -266,6 +266,10 @@ enum CommandPaletteSearch {
         /// Character offsets into the item's title / subtitle.
         let titleRanges: [Range<Int>]
         let subtitleRanges: [Range<Int>]
+        /// The keyword that carried the match when neither the title nor the
+        /// subtitle did, so a row can say why it is shown ("whisper" finds
+        /// Models). Nil for title and subtitle matches and for suggestions.
+        var matchedKeyword: String?
     }
 
     struct SectionResult: Equatable, Sendable {
@@ -392,14 +396,20 @@ enum CommandPaletteSearch {
         var total = item.bias
         var titleRanges: [Range<Int>] = []
         var subtitleRanges: [Range<Int>] = []
+        var matchedKeyword: String?
 
         for token in query.tokens {
             let titleHit = hit(for: token, in: item.foldedTitle, kind: .title)
             let subtitleHit = hit(for: token, in: item.foldedSubtitle, kind: .subtitle)
             var keywordScore: Int?
-            for keyword in item.foldedKeywords {
+            var keywordPosition: Int?
+            for (position, keyword) in item.foldedKeywords.enumerated() {
                 if let keywordHit = hit(for: token, in: keyword, kind: .keyword) {
-                    keywordScore = max(keywordScore ?? Int.min, keywordHit.score * FieldWeight.keyword / 100)
+                    let scaled = keywordHit.score * FieldWeight.keyword / 100
+                    if scaled > (keywordScore ?? Int.min) {
+                        keywordScore = scaled
+                        keywordPosition = position
+                    }
                 }
             }
 
@@ -407,6 +417,12 @@ enum CommandPaletteSearch {
             let subtitleScore = subtitleHit.map { $0.score * FieldWeight.subtitle / 100 }
             guard let best = [titleScore, keywordScore, subtitleScore].compactMap({ $0 }).max() else { return nil }
             total += best
+
+            if matchedKeyword == nil, let keywordScore, let keywordPosition, keywordScore == best,
+                (titleScore ?? Int.min) < best, (subtitleScore ?? Int.min) < best
+            {
+                matchedKeyword = item.keywords[keywordPosition]
+            }
 
             // Emphasize only where the row really matched. A scattered fuzzy
             // title hit that lost to a keyword would highlight characters
@@ -426,7 +442,8 @@ enum CommandPaletteSearch {
             isEnabled: item.isEnabled,
             score: total,
             titleRanges: mergeRanges(titleRanges),
-            subtitleRanges: mergeRanges(subtitleRanges)
+            subtitleRanges: mergeRanges(subtitleRanges),
+            matchedKeyword: matchedKeyword
         )
     }
 

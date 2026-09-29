@@ -38,6 +38,7 @@ final class AppModel: ObservableObject {
     @Published var overridesEditorJobID: UUID?
     @Published var isGeneratingSummary = false
     @Published var isShowingBurnInSheet = false
+    @Published var isShowingCommandPalette = false
     /// In-flight and just-failed yt-dlp fetches. Kept out of `jobs` because a
     /// job is identified by a file that does not exist until a fetch lands.
     @Published private(set) var downloads: [MediaDownload] = []

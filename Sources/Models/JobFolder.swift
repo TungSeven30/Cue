@@ -572,14 +572,16 @@ struct SidebarFolderLayout: Equatable, Sendable {
         var folderID: UUID?
     }
 
-    struct Section: Identifiable, Equatable, Sendable {
+    /// One folder's section of the list. Not called `Section`: inside the
+    /// sidebar that would read as `SwiftUI.Section`.
+    struct FolderGroup: Identifiable, Equatable, Sendable {
         var folder: JobFolder
         /// The jobs to show, in display order.
         var jobIDs: [UUID]
         var id: UUID { folder.id }
     }
 
-    var sections: [Section]
+    var groups: [FolderGroup]
     /// Jobs whose folder is missing. Only possible while history is still
     /// loading (or after a damaged folder list); they are never hidden.
     var unfiledJobIDs: [UUID]
@@ -622,7 +624,7 @@ struct SidebarFolderLayout: Equatable, Sendable {
             newestActivity: { newestActivity[$0.id] ?? $0.createdAt }
         )
         return SidebarFolderLayout(
-            sections: ordered.map { Section(folder: $0, jobIDs: byFolder[$0.id] ?? []) },
+            groups: ordered.map { FolderGroup(folder: $0, jobIDs: byFolder[$0.id] ?? []) },
             unfiledJobIDs: unfiled
         )
     }

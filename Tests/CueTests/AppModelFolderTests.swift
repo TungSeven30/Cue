@@ -539,6 +539,26 @@ struct AppModelFolderTests {
         #expect(model.folder(withID: folder)?.isExpanded == true)
     }
 
+    @Test func collapsingAFolderKeepsTheSelectionOfItsJobs() async throws {
+        let a = try job("/v/A/a.mp4", at: 1)
+        let a2 = try job("/v/A/a2.mp4", at: 2)
+        let b = try job("/v/B/b.mp4", at: 3)
+        let harness = try await makeHarness(seed: [a, a2, b])
+        defer { harness.cleanUp() }
+        let model = harness.model
+        let folder = try #require(model.job(withID: a.id)?.folderID)
+
+        model.selectJobs([a.id, a2.id])
+        model.setFolderExpanded(false, for: folder)
+        #expect(model.selectedJobIDs == [a.id, a2.id])
+        #expect(model.selectedJobID != nil)
+
+        model.setAllFoldersExpanded(false)
+        #expect(model.selectedJobIDs == [a.id, a2.id], "collapsing every folder does not clear the selection either")
+        model.setAllFoldersExpanded(true)
+        #expect(model.selectedJobIDs == [a.id, a2.id])
+    }
+
     @Test func theLaunchTimePickDoesNotReopenACollapsedFolder() async throws {
         let base = FileManager.default.temporaryDirectory
             .appendingPathComponent("app-model-folders-launch-\(UUID().uuidString)", isDirectory: true)

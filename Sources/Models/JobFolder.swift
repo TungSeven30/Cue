@@ -333,7 +333,7 @@ struct JobFolderBook: Equatable, Sendable {
                 name: uniqueName(for: placement, forceQualifier: collidesInBatch),
                 sourceKeys: [placement.key],
                 isExpanded: true,
-                createdAt: now,
+                createdAt: now.wholeSeconds,
                 isManual: false
             )
             folders.append(folder)
@@ -362,7 +362,8 @@ struct JobFolderBook: Equatable, Sendable {
         makeID: () -> UUID = { UUID() }
     ) -> UUID? {
         guard case .accepted(let name) = validatedName(raw) else { return nil }
-        let folder = JobFolder(id: makeID(), name: name, sourceKeys: [], isExpanded: true, createdAt: now, isManual: true)
+        let folder = JobFolder(
+            id: makeID(), name: name, sourceKeys: [], isExpanded: true, createdAt: now.wholeSeconds, isManual: true)
         folders.append(folder)
         indexByID[folder.id] = folders.count - 1
         return folder.id
@@ -411,9 +412,19 @@ struct JobFolderBook: Equatable, Sendable {
     }
 
     /// Puts a previously removed (or edited) folder back, replacing any
-    /// current folder with the same id. Keys another folder claimed in the
-    /// meantime stay with that folder.
-    mutating func restore(_ folder: JobFolder) {
+    /// current folder with the same id. By default keys another folder
+    /// claimed in the meantime stay with that folder; undo passes
+    /// `reclaimingKeys` to take them back, because undoing a merge or delete
+    /// must return future videos to the folder the user restored.
+    mutating func restore(_ folder: JobFolder, reclaimingKeys: Bool = false) {
+        if reclaimingKeys {
+            for key in folder.sourceKeys {
+                if let owner = indexByKey[key], owner != folder.id, let ownerIndex = indexByID[owner] {
+                    folders[ownerIndex].sourceKeys.removeAll { $0 == key }
+                }
+            }
+            rebuildIndexes()
+        }
         var restored = folder
         restored.sourceKeys = folder.sourceKeys.filter { key in
             indexByKey[key].map { $0 == folder.id } ?? true
@@ -431,7 +442,9 @@ struct JobFolderBook: Equatable, Sendable {
 
 /// How the sidebar orders its folders.
 enum FolderSortOrder: String, CaseIterable, Identifiable, Sendable {
-    /// The folder with the newest job first.
+    /// The folder holding the most recently added job first. Date added, not
+    /// last update: a running job touches its update time constantly, and
+    /// folders must not jump around while work is in progress.
     case recentActivity
     case name
 
@@ -439,7 +452,7 @@ enum FolderSortOrder: String, CaseIterable, Identifiable, Sendable {
 
     var label: String {
         switch self {
-        case .recentActivity: "Recent activity"
+        case .recentActivity: "Newest job"
         case .name: "Name"
         }
     }
@@ -488,5 +501,129 @@ enum JobSearch {
         guard !trimmed.isEmpty else { return true }
         if title.localizedCaseInsensitiveContains(trimmed) { return true }
         return folderName?.localizedCaseInsensitiveContains(trimmed) ?? false
+    }
+}
+
+// MARK: - Undo, results, reveal
+
+extension Date {
+    /// `folders.json` stores dates as ISO 8601 (whole seconds). Folders are
+    /// created with this so the in-memory value already equals what a reload
+    /// reads back, and "did anything change since launch" stays exact.
+    fileprivate var wholeSeconds: Date {
+        Date(timeIntervalSince1970: timeIntervalSince1970.rounded(.down))
+    }
+}
+
+/// Enough to take one folder operation back without disturbing anything the
+/// user did afterwards: a job that was moved again in the meantime stays
+/// where it is, and a folder someone started using is not removed.
+struct FolderUndoRecord: Equatable, Sendable {
+    struct Move: Equatable, Sendable {
+        var jobID: UUID
+        /// nil when the job had no folder yet; undo then re-places it by the rules.
+        var from: UUID?
+        var to: UUID
+    }
+
+    /// Folders the operation removed (a merge source, a deleted folder),
+    /// exactly as they were, keys included.
+    var removedFolders: [JobFolder] = []
+    /// Folders the operation created; dropped again if nothing is in them.
+    var createdFolderIDs: [UUID] = []
+    var moves: [Move] = []
+}
+
+/// What a folder operation did, for the sidebar's undo notice.
+struct FolderChange: Equatable, Sendable {
+    enum Kind: Equatable, Sendable {
+        case created
+        case moved
+        case merged(sourceName: String)
+        case deleted
+    }
+
+    var kind: Kind
+    /// The folder the change is about: created, moved into, merged into, or
+    /// (for a delete) the one that went away.
+    var folderID: UUID
+    var folderName: String
+    var movedCount: Int
+    var undo: FolderUndoRecord
+}
+
+/// Asks the sidebar to make one job visible: clear whatever hides it, then
+/// scroll to it. `id` is unique per request so revealing the same job twice
+/// still triggers.
+struct JobRevealRequest: Equatable, Identifiable, Sendable {
+    var id = UUID()
+    var jobID: UUID
+    /// The job is archived, so the sidebar must switch to the Archived view.
+    var showsArchived: Bool
+}
+
+// MARK: - Sidebar layout
+
+/// The pure arrangement of the sidebar in Folders mode: which folders show,
+/// in what order, holding which of the already-filtered jobs.
+struct SidebarFolderLayout: Equatable, Sendable {
+    struct Entry: Equatable, Sendable {
+        var id: UUID
+        var folderID: UUID?
+    }
+
+    struct Section: Identifiable, Equatable, Sendable {
+        var folder: JobFolder
+        /// The jobs to show, in display order.
+        var jobIDs: [UUID]
+        var id: UUID { folder.id }
+    }
+
+    var sections: [Section]
+    /// Jobs whose folder is missing. Only possible while history is still
+    /// loading (or after a damaged folder list); they are never hidden.
+    var unfiledJobIDs: [UUID]
+
+    /// - Parameters:
+    ///   - displayed: the jobs that survived the status filter and search, in display order.
+    ///   - newestActivity: each folder's newest job date over ALL its jobs, so
+    ///     filtering does not reshuffle the folders.
+    ///   - isFiltering: a status filter or search text is narrowing the list.
+    static func make(
+        book: JobFolderBook,
+        displayed: [Entry],
+        newestActivity: [UUID: Date],
+        order: FolderSortOrder,
+        isFiltering: Bool,
+        searchQuery: String
+    ) -> SidebarFolderLayout {
+        var byFolder: [UUID: [UUID]] = [:]
+        var unfiled: [UUID] = []
+        for entry in displayed {
+            if let folderID = entry.folderID, book.contains(folderID) {
+                byFolder[folderID, default: []].append(entry.id)
+            } else {
+                unfiled.append(entry.id)
+            }
+        }
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let visible = book.folders.filter { folder in
+            if byFolder[folder.id]?.isEmpty == false { return true }
+            // Automatic folders exist only to hold jobs. A folder the user
+            // made stays put while empty, unless a filter is narrowing the
+            // list and it is not what the search is looking for.
+            guard folder.isManual else { return false }
+            guard isFiltering else { return true }
+            return !query.isEmpty && JobSearch.matches(title: "", folderName: folder.name, query: query)
+        }
+        let ordered = order.sorted(
+            visible,
+            name: { $0.name },
+            newestActivity: { newestActivity[$0.id] ?? $0.createdAt }
+        )
+        return SidebarFolderLayout(
+            sections: ordered.map { Section(folder: $0, jobIDs: byFolder[$0.id] ?? []) },
+            unfiledJobIDs: unfiled
+        )
     }
 }

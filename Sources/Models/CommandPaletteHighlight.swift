@@ -17,9 +17,17 @@ enum PaletteHighlight {
     static func segments(for text: String, ranges: [Range<Int>]) -> [PaletteTextSegment] {
         let characters = Array(text)
         guard !characters.isEmpty else { return [] }
+        let count = characters.count
         let clamped =
             ranges
-            .map { max(0, $0.lowerBound)..<min(characters.count, $0.upperBound) }
+            .map { range -> Range<Int> in
+                // Both ends are pulled inside the text before the range is
+                // built: a range that starts past the end must come out
+                // empty, not as a lower bound above its upper bound (a trap).
+                let lower = min(max(0, range.lowerBound), count)
+                let upper = max(lower, min(count, range.upperBound))
+                return lower..<upper
+            }
             .filter { $0.lowerBound < $0.upperBound }
         guard !clamped.isEmpty else { return [PaletteTextSegment(text: text, isEmphasized: false)] }
 

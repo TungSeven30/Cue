@@ -47,6 +47,11 @@ final class JobStore {
     private let ioQueue = DispatchQueue(label: "Cue.JobStore", qos: .utility)
     private(set) var startupError: String?
 
+    /// The `Cue` directory that holds `jobs/`. Sibling stores (the sidebar
+    /// folder list) derive their location from it so a store built over a
+    /// temporary base directory never reaches the real Application Support.
+    var directoryURL: URL { folderURL }
+
     private nonisolated var fileManager: FileManager { fileManagerBox.value }
 
     init(

@@ -96,11 +96,23 @@ private enum JobStatusFilter: String, CaseIterable, Identifiable {
 
 struct SidebarView: View {
     @ObservedObject var model: AppModel
+    @Environment(\.cueListDensity) private var density
     @ViewState private var searchText = ""
     @ViewState private var editingWatchFolderID: UUID?
     @ViewState private var pendingDeletionIDs: Set<UUID> = []
     @ViewState private var undoNotice: SidebarUndoNotice?
-    @AppStorage("sidebarGroupByStatus") private var groupByStatus = false
+    @ViewState private var folderPrompt: FolderPrompt?
+    @ViewState private var dropTargetFolderID: UUID?
+    /// Folders the user closed while a search was showing every section open.
+    /// Search never changes what is saved.
+    @ViewState private var searchCollapsedFolderIDs: Set<UUID> = []
+    /// A reveal whose search/filter has been cleared and whose scroll is next.
+    @ViewState private var pendingReveal: JobRevealRequest?
+    /// Superseded by `sidebarGrouping`, but still read so a sidebar someone
+    /// had grouped by status stays grouped by status after updating.
+    @AppStorage("sidebarGroupByStatus") private var legacyGroupByStatus = false
+    @AppStorage("sidebarGrouping") private var groupingRaw = ""
+    @AppStorage("sidebarFolderSort") private var folderSortRaw = FolderSortOrder.recentActivity.rawValue
     @AppStorage("sidebarStatusFilter") private var statusFilterRaw = JobStatusFilter.all.rawValue
     @AppStorage("sidebarSortOrder") private var sortOrderRaw = JobSortOrder.queueOrder.rawValue
 
@@ -108,18 +120,52 @@ struct SidebarView: View {
         // Counts, queue positions, selection groups, and visible rows all come
         // from one pass so the extra UI does not regress large-list behavior.
         let listState = makeSidebarListState()
+        ScrollViewReader { proxy in
+            sidebarList(listState)
+                // Revealing a job is two synchronous steps on the main actor,
+                // so the (non-Sendable) proxy never crosses an `await`: the
+                // first clears whatever hides the job, the second scrolls once
+                // the list has been rebuilt without it.
+                .onChange(of: model.revealRequest) { _, request in
+                    if let request { prepareReveal(request) }
+                }
+                .onChange(of: pendingReveal) { _, request in
+                    guard let request else { return }
+                    pendingReveal = nil
+                    proxy.scrollTo(request.jobID, anchor: .center)
+                    model.consumeRevealRequest(request)
+                }
+                .onChange(of: isSearching) { _, searching in
+                    // Folders closed during a search stay closed only for it.
+                    if !searching { searchCollapsedFolderIDs = [] }
+                }
+                .onAppear {
+                    if let request = model.revealRequest { prepareReveal(request) }
+                }
+        }
+        // The name prompt lives outside the List so it cannot compete with the
+        // watch-folder settings sheet attached to the List itself.
+        .sheet(item: $folderPrompt) { prompt in
+            folderPromptSheet(prompt)
+        }
+    }
+
+    private func sidebarList(_ listState: SidebarListState) -> some View {
         List(
             selection: Binding(
                 get: { model.selectedJobIDs },
-                set: { model.selectJobs($0) }
+                set: { applyListSelection($0) }
             )
         ) {
             watchFoldersSection
             downloadsSection
             jobControlsSection(listState.counts)
-            if groupByStatus {
+            switch grouping {
+            case .folders:
+                folderSections(listState)
+            case .status:
                 groupedSections(listState)
-            } else {
+            case .none:
                 flatSection(listState)
             }
         }
@@ -208,9 +254,9 @@ struct SidebarView: View {
                     }
                     Menu {
                         Button("Select All Visible") {
-                            model.selectJobs(Set(listState.displayedJobs.map(\.id)))
+                            model.selectJobs(Set(listState.selectableIDs))
                         }
-                        .disabled(listState.displayedJobs.isEmpty)
+                        .disabled(listState.selectableIDs.isEmpty)
                         Divider()
                         Button("Select Running") {
                             selectJobs(listState.runningIDs, showing: .running)
@@ -237,8 +283,41 @@ struct SidebarView: View {
                         Label("Select Jobs", systemImage: "checkmark.circle")
                     }
                     Divider()
-                    Toggle(isOn: $groupByStatus) {
-                        Label("Group by Status", systemImage: "rectangle.3.group")
+                    Button {
+                        folderPrompt = FolderPrompt(kind: .create(movingJobIDs: []))
+                    } label: {
+                        Label("New Folder…", systemImage: "folder.badge.plus")
+                    }
+                    Button {
+                        folderPrompt = FolderPrompt(kind: .create(movingJobIDs: model.selectedJobIDs))
+                    } label: {
+                        Label("New Folder with Selected Jobs…", systemImage: "folder.badge.plus")
+                    }
+                    .disabled(model.selectedJobIDs.isEmpty)
+                    if grouping == .folders && !model.folders.isEmpty {
+                        Button {
+                            model.setAllFoldersExpanded(true)
+                        } label: {
+                            Label("Expand All Folders", systemImage: "arrow.up.left.and.arrow.down.right")
+                        }
+                        Button {
+                            model.setAllFoldersExpanded(false)
+                        } label: {
+                            Label("Collapse All Folders", systemImage: "arrow.down.right.and.arrow.up.left")
+                        }
+                    }
+                    Divider()
+                    Picker("Group by", selection: groupingBinding) {
+                        ForEach(SidebarGrouping.allCases) { option in
+                            Text(option.label).tag(option)
+                        }
+                    }
+                    if grouping == .folders {
+                        Picker("Sort Folders by", selection: $folderSortRaw) {
+                            ForEach(FolderSortOrder.allCases) { order in
+                                Text(order.label).tag(order.rawValue)
+                            }
+                        }
                     }
                     Picker("Show", selection: $statusFilterRaw) {
                         ForEach(JobStatusFilter.allCases) { filter in
@@ -487,10 +566,29 @@ struct SidebarView: View {
         JobStatusFilter(rawValue: statusFilterRaw) ?? .all
     }
 
+    /// An explicit Group by choice wins. Without one, a sidebar that had been
+    /// grouped by status keeps that; everyone else starts in Folders.
+    private var grouping: SidebarGrouping {
+        SidebarGrouping.resolve(stored: groupingRaw, legacyGroupByStatus: legacyGroupByStatus)
+    }
+
+    private var groupingBinding: Binding<SidebarGrouping> {
+        Binding(get: { grouping }, set: { groupingRaw = $0.rawValue })
+    }
+
+    private var folderSortOrder: FolderSortOrder {
+        FolderSortOrder(rawValue: folderSortRaw) ?? .recentActivity
+    }
+
+    private var isSearching: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// A filled funnel marks an active filter or non-default sort, so a
     /// shortened or rearranged list is never mistaken for missing jobs.
     private var organizeMenuIcon: String {
-        statusFilter == .all && sortOrder == .queueOrder
+        let defaultOrder = sortOrder == .queueOrder && (grouping != .folders || folderSortOrder == .recentActivity)
+        return statusFilter == .all && defaultOrder
             ? "line.3.horizontal.decrease.circle"
             : "line.3.horizontal.decrease.circle.fill"
     }
@@ -506,6 +604,37 @@ struct SidebarView: View {
     private func selectJobs(_ ids: Set<UUID>, showing filter: JobStatusFilter) {
         statusFilterRaw = filter.rawValue
         model.selectJobs(ids)
+        revealFolders(holding: ids)
+    }
+
+    /// Applies the selection the List reports. Closing a folder takes its
+    /// rows off the list, which can come back as a smaller selection; that
+    /// must not drop the job the detail pane is showing, so removals of jobs
+    /// inside closed folders are ignored (see `SidebarSelection`).
+    private func applyListSelection(_ proposed: Set<UUID>) {
+        guard grouping == .folders else {
+            model.selectJobs(proposed)
+            return
+        }
+        let closedFolderIDs = Set(model.folders.lazy.filter { !isSectionOpen($0) }.map(\.id))
+        let accepted = SidebarSelection.accepted(current: model.selectedJobIDs, proposed: proposed) { id in
+            guard let folderID = model.job(withID: id)?.folderID else { return false }
+            return closedFolderIDs.contains(folderID)
+        }
+        if let accepted { model.selectJobs(accepted) }
+    }
+
+    /// Opens every closed folder that holds one of `ids`, so a bulk selection
+    /// is never left hidden inside collapsed sections.
+    private func revealFolders(holding ids: Set<UUID>) {
+        guard grouping == .folders else { return }
+        var folderIDs = Set<UUID>()
+        for job in model.jobs where ids.contains(job.id) {
+            if let folderID = job.folderID { folderIDs.insert(folderID) }
+        }
+        for folderID in folderIDs where model.folder(withID: folderID)?.isExpanded == false {
+            model.setFolderExpanded(true, for: folderID)
+        }
     }
 
     private var deleteSelectionLabel: String {
@@ -588,6 +717,10 @@ struct SidebarView: View {
 
     private func makeSidebarListState() -> SidebarListState {
         let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let inFolders = grouping == .folders
+        // Typing a folder's name lists its jobs, so search also sees folder names.
+        let folderNames = Dictionary(model.folders.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        var newestJobDate: [UUID: Date] = [:]
         var counts = SidebarJobCounts()
         var queuePositions: [UUID: Int] = [:]
         var displayedJobs: [TranscriptionJob] = []
@@ -599,7 +732,15 @@ struct SidebarView: View {
         var nextQueuePosition = 1
 
         for job in model.jobs {
-            let matchesSearch = trimmedSearch.isEmpty || job.title.localizedCaseInsensitiveContains(trimmedSearch)
+            if inFolders, let folderID = job.folderID, job.createdAt > (newestJobDate[folderID] ?? .distantPast) {
+                // Over every job of the folder, filtered or not, so filtering
+                // never reshuffles the folders.
+                newestJobDate[folderID] = job.createdAt
+            }
+            let matchesSearch =
+                trimmedSearch.isEmpty
+                || JobSearch.matches(
+                    title: job.title, folderName: job.folderID.flatMap { folderNames[$0] }, query: trimmedSearch)
             if job.archivedAt == nil {
                 counts.record(job)
                 if job.status == .queued {
@@ -630,6 +771,26 @@ struct SidebarView: View {
                 displayedJobs[$0]
             }
         }
+
+        var folderLayout = SidebarFolderLayout(groups: [], unfiledJobIDs: [])
+        var displayedByID: [UUID: TranscriptionJob] = [:]
+        var selectableIDs = displayedJobs.map(\.id)
+        if inFolders {
+            folderLayout = SidebarFolderLayout.make(
+                book: model.folderBook,
+                displayed: displayedJobs.map { SidebarFolderLayout.Entry(id: $0.id, folderID: $0.folderID) },
+                newestActivity: newestJobDate,
+                order: folderSortOrder,
+                isFiltering: statusFilter != .all || !trimmedSearch.isEmpty,
+                searchQuery: trimmedSearch
+            )
+            displayedByID = Dictionary(displayedJobs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            // "Select All Visible" means what is on screen: not the jobs
+            // inside a closed folder.
+            selectableIDs =
+                folderLayout.groups.filter { isSectionOpen($0.folder) }.flatMap(\.jobIDs)
+                + folderLayout.unfiledJobIDs
+        }
         return SidebarListState(
             displayedJobs: displayedJobs,
             counts: counts,
@@ -638,15 +799,25 @@ struct SidebarView: View {
             queuedIDs: queuedIDs,
             doneIDs: doneIDs,
             failedIDs: failedIDs,
-            retryableFailedIDs: retryableFailedIDs
+            retryableFailedIDs: retryableFailedIDs,
+            folderLayout: folderLayout,
+            displayedByID: displayedByID,
+            selectableIDs: selectableIDs,
+            isFiltering: statusFilter != .all || !trimmedSearch.isEmpty
         )
     }
 
     /// Drag-reorder only works on the full flat list: reordering a filtered
     /// subset would move jobs relative to neighbours the user cannot see.
     private var isReorderable: Bool {
-        !groupByStatus && statusFilter == .all && sortOrder == .queueOrder
-            && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        grouping == .none && statusFilter == .all && sortOrder == .queueOrder && !isSearching
+    }
+
+    /// Whether a folder's rows are showing. While a search is active every
+    /// folder opens so no match hides inside a closed section; the user can
+    /// still close one, but only for the length of the search.
+    private func isSectionOpen(_ folder: JobFolder) -> Bool {
+        isSearching ? !searchCollapsedFolderIDs.contains(folder.id) : folder.isExpanded
     }
 
     @ViewBuilder
@@ -711,16 +882,267 @@ struct SidebarView: View {
         }
     }
 
+    // MARK: - Folders
+
+    @ViewBuilder
+    private func folderSections(_ state: SidebarListState) -> some View {
+        let layout = state.folderLayout
+        if layout.groups.isEmpty && layout.unfiledJobIDs.isEmpty {
+            Section {
+                emptyPlaceholder
+            }
+        } else {
+            ForEach(layout.groups) { group in
+                folderSection(group, state: state)
+            }
+            if !layout.unfiledJobIDs.isEmpty {
+                // Only while history is still loading, or after a damaged
+                // folder list: jobs are never hidden for lack of a folder.
+                Section("Unfiled") {
+                    ForEach(layout.unfiledJobIDs, id: \.self) { id in
+                        if let job = state.displayedByID[id] {
+                            folderRow(for: job, queuePosition: state.queuePositions[id])
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func folderSection(_ group: SidebarFolderLayout.FolderGroup, state: SidebarListState) -> some View {
+        let folder = group.folder
+        return Section(isExpanded: expansionBinding(for: folder)) {
+            if group.jobIDs.isEmpty {
+                Text(SidebarFolderText.emptyFolderHint(isFiltering: state.isFiltering))
+                    .cueFont(.caption)
+                    .foregroundStyle(.secondary)
+                    // Wrap at larger text sizes instead of cutting the hint off.
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .selectionDisabled()
+            } else {
+                ForEach(group.jobIDs, id: \.self) { id in
+                    if let job = state.displayedByID[id] {
+                        folderRow(for: job, queuePosition: state.queuePositions[id])
+                    }
+                }
+            }
+        } header: {
+            FolderHeaderLabel(
+                name: folder.name,
+                count: group.jobIDs.count,
+                isDropTarget: dropTargetFolderID == folder.id
+            )
+            .contextMenu { folderMenu(for: folder, jobIDs: group.jobIDs) }
+            .dropDestination(for: SidebarJobDrag.self) { drops, _ in
+                let ids = Set(drops.flatMap(\.jobIDs))
+                guard !ids.isEmpty else { return false }
+                moveJobsWithUndo(ids, toFolder: folder.id)
+                return true
+            } isTargeted: { isTargeted in
+                if isTargeted {
+                    dropTargetFolderID = folder.id
+                } else if dropTargetFolderID == folder.id {
+                    dropTargetFolderID = nil
+                }
+            }
+        }
+    }
+
+    /// A job row that can be dragged onto a folder header. Dragging a row that
+    /// is part of a multi-selection carries the whole selection.
+    private func folderRow(for job: TranscriptionJob, queuePosition: Int?) -> some View {
+        row(for: job, queuePosition: queuePosition)
+            .draggable(SidebarJobDrag(jobIDs: selectionTargets(for: job).sorted { $0.uuidString < $1.uuidString }))
+    }
+
+    private func expansionBinding(for folder: JobFolder) -> Binding<Bool> {
+        Binding(
+            get: { isSectionOpen(folder) },
+            set: { isOpen in
+                if isSearching {
+                    // A search shows every folder open; closing one here lasts
+                    // only until the search ends and is never saved.
+                    if isOpen {
+                        searchCollapsedFolderIDs.remove(folder.id)
+                    } else {
+                        searchCollapsedFolderIDs.insert(folder.id)
+                    }
+                } else {
+                    model.setFolderExpanded(isOpen, for: folder.id)
+                }
+            }
+        )
+    }
+
+    private var foldersByName: [JobFolder] {
+        model.folders.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    @ViewBuilder
+    private func folderMenu(for folder: JobFolder, jobIDs: [UUID]) -> some View {
+        Button {
+            folderPrompt = FolderPrompt(kind: .rename(folderID: folder.id))
+        } label: {
+            Label("Rename Folder…", systemImage: "pencil")
+        }
+        Button {
+            model.selectJobs(Set(jobIDs))
+        } label: {
+            Label("Select Jobs in Folder", systemImage: "checkmark.circle")
+        }
+        .disabled(jobIDs.isEmpty)
+        Divider()
+        Button {
+            folderPrompt = FolderPrompt(kind: .create(movingJobIDs: []))
+        } label: {
+            Label("New Folder…", systemImage: "folder.badge.plus")
+        }
+        Button {
+            folderPrompt = FolderPrompt(kind: .create(movingJobIDs: model.selectedJobIDs))
+        } label: {
+            Label("New Folder with Selected Jobs…", systemImage: "folder.badge.plus")
+        }
+        .disabled(model.selectedJobIDs.isEmpty)
+        Menu {
+            ForEach(foldersByName.filter { $0.id != folder.id }) { other in
+                Button(other.name) {
+                    mergeFolderWithUndo(folder.id, into: other.id)
+                }
+            }
+        } label: {
+            Label("Merge Into", systemImage: "arrow.triangle.merge")
+        }
+        .disabled(model.folders.count < 2)
+        Divider()
+        Button(role: .destructive) {
+            deleteFolderWithUndo(folder.id)
+        } label: {
+            Label("Delete Folder", systemImage: "trash")
+        }
+    }
+
+    /// "Move to Folder ▸" for the row context menus. The current folder is
+    /// marked when the whole target already lives in one.
+    @ViewBuilder
+    private func moveToFolderMenu(for ids: Set<UUID>) -> some View {
+        let currentFolderIDs = Set(model.jobs.lazy.filter { ids.contains($0.id) }.compactMap(\.folderID))
+        Menu {
+            ForEach(foldersByName) { folder in
+                let isCurrent = currentFolderIDs == [folder.id]
+                Button {
+                    moveJobsWithUndo(ids, toFolder: folder.id)
+                } label: {
+                    if isCurrent {
+                        Label(folder.name, systemImage: "checkmark")
+                    } else {
+                        Text(folder.name)
+                    }
+                }
+                .disabled(isCurrent)
+            }
+            if !model.folders.isEmpty {
+                Divider()
+            }
+            Button("New Folder…") {
+                folderPrompt = FolderPrompt(kind: .create(movingJobIDs: ids))
+            }
+        } label: {
+            Label("Move to Folder", systemImage: "folder")
+        }
+    }
+
+    private func showFolderUndo(_ change: FolderChange?) {
+        guard let change else { return }
+        undoNotice = SidebarUndoNotice(
+            message: SidebarFolderText.undoMessage(for: change),
+            action: .folderChange(change)
+        )
+    }
+
+    private func moveJobsWithUndo(_ ids: Set<UUID>, toFolder folderID: UUID) {
+        showFolderUndo(model.moveJobs(ids, toFolder: folderID))
+    }
+
+    private func mergeFolderWithUndo(_ sourceID: UUID, into targetID: UUID) {
+        showFolderUndo(model.mergeFolder(sourceID, into: targetID))
+    }
+
+    private func deleteFolderWithUndo(_ id: UUID) {
+        showFolderUndo(model.deleteFolder(id))
+    }
+
+    @ViewBuilder
+    private func folderPromptSheet(_ prompt: FolderPrompt) -> some View {
+        switch prompt.kind {
+        case .create(let movingJobIDs):
+            FolderNameSheet(
+                title: movingJobIDs.isEmpty
+                    ? "New Folder" : "New Folder with \(SidebarFolderText.jobCount(movingJobIDs.count))",
+                note: SidebarFolderText.createNote(movingJobs: movingJobIDs.count),
+                confirmTitle: "Create",
+                initialName: model.suggestedFolderName,
+                validate: { model.validatedFolderName($0) },
+                onConfirm: { name in
+                    folderPrompt = nil
+                    showFolderUndo(model.createFolder(named: name, movingJobs: movingJobIDs))
+                },
+                onCancel: { folderPrompt = nil }
+            )
+        case .rename(let folderID):
+            FolderNameSheet(
+                title: "Rename Folder",
+                note: SidebarFolderText.renameNote,
+                confirmTitle: "Rename",
+                initialName: model.folder(withID: folderID)?.name ?? "",
+                validate: { model.validatedFolderName($0, excluding: folderID) },
+                onConfirm: { name in
+                    folderPrompt = nil
+                    model.renameFolder(folderID, to: name)
+                },
+                onCancel: { folderPrompt = nil }
+            )
+        }
+    }
+
+    /// First half of a reveal: clears whatever hides the requested job (a
+    /// search, a status filter that excludes it) and switches to Archived for
+    /// an archived one. The model has already opened the job's folder when it
+    /// selected the job. The scroll is the second half, one update later.
+    private func prepareReveal(_ request: JobRevealRequest) {
+        guard let job = model.job(withID: request.jobID) else {
+            model.consumeRevealRequest(request)
+            return
+        }
+        if isSearching { searchText = "" }
+        if request.showsArchived {
+            statusFilterRaw = JobStatusFilter.archived.rawValue
+        } else if !statusFilter.includes(job) {
+            statusFilterRaw = JobStatusFilter.all.rawValue
+        }
+        pendingReveal = request
+    }
+
     private func row(for job: TranscriptionJob, queuePosition: Int?) -> some View {
         let canRetry = job.status == .failed && model.jobNeedsWork(job)
+        let progressFraction = job.status.isRunning ? job.progress.displayFraction : nil
         return JobRow(
             id: job.id,
             title: job.title,
             status: job.status,
             statusText: rowStatusText(for: job, queuePosition: queuePosition),
-            progressFraction: job.status.isRunning ? job.progress.displayFraction : nil,
+            progressFraction: progressFraction,
             hasOverrides: !job.overrides.isEmpty,
             canRetry: canRetry,
+            density: density,
+            compactStatusText: density == .compact
+                ? SidebarRowText.compactStatus(
+                    for: job.status,
+                    progressPercent: progressFraction.map { Int((min(max($0, 0), 1) * 100).rounded()) },
+                    queuePosition: queuePosition
+                )
+                : "",
+            detail: density.showsDetailLine ? SidebarRowDetail(job: job) : nil,
             onRetry: { model.retryFailedJobs([job.id]) }
         )
         .equatable()
@@ -829,6 +1251,7 @@ struct SidebarView: View {
         if !targets.retryableFailedIDs.isEmpty || !targets.queueableIDs.isEmpty || !targets.queuedIDs.isEmpty {
             Divider()
         }
+        moveToFolderMenu(for: targets.ids)
         if !targets.archivableIDs.isEmpty {
             Button {
                 setArchivedWithUndo(targets.archivableIDs, true)
@@ -893,6 +1316,7 @@ struct SidebarView: View {
         } label: {
             Label("Move to Bottom", systemImage: "arrow.down.to.line")
         }
+        moveToFolderMenu(for: [job.id])
         Button {
             model.overridesEditorJobID = job.id
         } label: {
@@ -982,6 +1406,8 @@ struct SidebarView: View {
             )
             statusFilterRaw = JobStatusFilter.inProgress.rawValue
             model.selectJobs(restoredIDs)
+        case .folderChange(let change):
+            model.undoFolderChange(change)
         }
         undoNotice = nil
     }
@@ -1007,6 +1433,15 @@ private struct SidebarListState {
     let doneIDs: Set<UUID>
     let failedIDs: Set<UUID>
     let retryableFailedIDs: Set<UUID>
+    /// Folders mode only: the sections to draw and the jobs each holds.
+    let folderLayout: SidebarFolderLayout
+    /// Folders mode only: the displayed jobs by id, for the sections' rows.
+    let displayedByID: [UUID: TranscriptionJob]
+    /// What "Select All Visible" selects: the rows on screen, which in Folders
+    /// mode excludes jobs inside a closed folder.
+    let selectableIDs: [UUID]
+    /// A status filter or search is narrowing the list.
+    let isFiltering: Bool
 }
 
 private struct SidebarJobCounts {
@@ -1064,6 +1499,7 @@ private struct SidebarUndoNotice: Identifiable {
     enum Action {
         case setArchived(ids: Set<UUID>, archived: Bool)
         case restoreQueue(ids: Set<UUID>, wasPaused: Bool)
+        case folderChange(FolderChange)
     }
 
     let id = UUID()
@@ -1148,6 +1584,19 @@ private struct DownloadRow: View {
     }
 }
 
+/// A tooltip that exists only when `condition` holds, so the layouts that do
+/// not need it carry no tooltip modifier at all.
+extension View {
+    @ViewBuilder
+    fileprivate func helpWhen(_ condition: Bool, _ text: String) -> some View {
+        if condition {
+            help(text)
+        } else {
+            self
+        }
+    }
+}
+
 private struct JobRow: View, Equatable {
     let id: UUID
     let title: String
@@ -1156,6 +1605,11 @@ private struct JobRow: View, Equatable {
     let progressFraction: Double?
     let hasOverrides: Bool
     let canRetry: Bool
+    let density: ListDensity
+    /// Compact density's short trailing status; empty at the other densities.
+    let compactStatusText: String
+    /// Detailed density's extra line; nil at the other densities.
+    let detail: SidebarRowDetail?
     let onRetry: () -> Void
 
     nonisolated static func == (lhs: JobRow, rhs: JobRow) -> Bool {
@@ -1166,6 +1620,9 @@ private struct JobRow: View, Equatable {
             && lhs.progressFraction == rhs.progressFraction
             && lhs.hasOverrides == rhs.hasOverrides
             && lhs.canRetry == rhs.canRetry
+            && lhs.density == rhs.density
+            && lhs.compactStatusText == rhs.compactStatusText
+            && lhs.detail == rhs.detail
     }
 
     var body: some View {
@@ -1173,25 +1630,39 @@ private struct JobRow: View, Equatable {
             Image(systemName: status.systemImage)
                 .foregroundStyle(status.tint)
                 .frame(width: 18)
-            VStack(alignment: .leading, spacing: 2) {
+            if density.showsSecondaryLine {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .lineLimit(1)
+                    Text(statusText)
+                        .cueFont(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if let detail {
+                        // The fullest wording that fits: at a narrow width the
+                        // date goes first, then the length, never half a word.
+                        ViewThatFits(in: .horizontal) {
+                            detailLine(detail.tiers.complete)
+                            detailLine(detail.tiers.withoutDate)
+                            detailLine(detail.tiers.languagesOnly)
+                        }
+                        .help(detail.text)
+                    }
+                }
+                Spacer(minLength: 0)
+                runningIndicator
+            } else {
                 Text(title)
                     .lineLimit(1)
-                Text(statusText)
+                Spacer(minLength: 4)
+                // The percent stands in for the progress bar, and the full
+                // status is one hover or one VoiceOver read away.
+                Text(compactStatusText)
                     .cueFont(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(status == .failed ? Color.red : Color.secondary)
+                    .monospacedDigit()
                     .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-            if status.isRunning {
-                if let progressFraction {
-                    ProgressView(value: min(max(progressFraction, 0), 1))
-                        .frame(width: 36)
-                        .help(statusText)
-                } else {
-                    ProgressView()
-                        .controlSize(.small)
-                        .help(statusText)
-                }
+                    .fixedSize()
             }
             if canRetry {
                 Button(action: onRetry) {
@@ -1210,8 +1681,41 @@ private struct JobRow: View, Equatable {
                     .help("This job has its own settings")
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, density.showsSecondaryLine ? 2 : 0)
+        // Compact drops the status line and can squeeze the title, so the
+        // hover text carries both.
+        .helpWhen(!density.showsSecondaryLine, "\(title) — \(statusText)")
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(title), \(statusText)")
+        .accessibilityLabel(accessibilityText)
+    }
+
+    private func detailLine(_ text: String) -> some View {
+        Text(text)
+            .cueFont(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+    }
+
+    /// Progress for a running job: a bar when the fraction is known, a
+    /// spinner when it is not.
+    @ViewBuilder
+    private var runningIndicator: some View {
+        if status.isRunning {
+            if let progressFraction {
+                ProgressView(value: min(max(progressFraction, 0), 1))
+                    .frame(width: 36)
+                    .help(statusText)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .help(statusText)
+            }
+        }
+    }
+
+    private var accessibilityText: String {
+        var text = "\(title), \(statusText)"
+        if let detail { text += ", \(detail.text)" }
+        return text
     }
 }

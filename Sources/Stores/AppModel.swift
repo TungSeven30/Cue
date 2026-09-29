@@ -20,6 +20,20 @@ final class AppModel: ObservableObject {
     /// a hit is checked against the job at that position, so any reorder,
     /// insert, or delete is caught and the map is rebuilt once.
     private var jobIndexCache: [UUID: Int] = [:]
+    /// The sidebar's folder list. Which folder a job is in lives on the job
+    /// (`TranscriptionJob.folderID`); the book holds names, source keys and
+    /// disclosure state. Edited only through `// MARK: - Folders`.
+    @Published private(set) var folderBook = JobFolderBook()
+    /// The latest `revealJob(_:)` call, for the sidebar to apply (clear
+    /// filters, scroll) and then `consumeRevealRequest(_:)`.
+    @Published private(set) var revealRequest: JobRevealRequest?
+    /// Where the folder list is saved. Internal so tests can pin that a model
+    /// built over an injected repository keeps its folders in memory.
+    let folderStore: JobFolderStore
+    /// False until the saved folder list has been merged in. Nothing may be
+    /// written before that, or the file on disk would be replaced by the
+    /// (still empty) in-memory list.
+    private var didLoadFolders = false
     /// Every highlighted sidebar job. The detail pane continues to use
     /// `selectedJobID` as the primary member of this selection.
     @Published private(set) var selectedJobIDs: Set<UUID> = []
@@ -155,6 +169,7 @@ final class AppModel: ObservableObject {
         settings: AppSettingsStore? = nil,
         jobStore: JobStore? = nil,
         jobRepository: JobRepository? = nil,
+        folderStore: JobFolderStore? = nil,
         watchLedger: WatchFolderLedger? = nil,
         diagnosticsService: any EnvironmentDiagnosing = EnvironmentDiagnosticsService(),
         translationService: TranslationService = TranslationService()
@@ -162,8 +177,18 @@ final class AppModel: ObservableObject {
         self.settings = settings ?? AppSettingsStore()
         self.watchLedger = watchLedger ?? WatchFolderLedger()
         // Tests inject a repository over a recording store; the app builds
-        // one over the on-disk JobStore.
-        self.jobRepository = jobRepository ?? JobRepository(store: jobStore ?? JobStore())
+        // one over the on-disk JobStore. The folder list lives next to the
+        // job files, so it follows whichever store the jobs use; an injected
+        // repository has no location, so its folders stay in memory and a
+        // test or preview can never write to the real Application Support.
+        if let jobRepository {
+            self.jobRepository = jobRepository
+            self.folderStore = folderStore ?? .inMemory
+        } else {
+            let resolvedJobStore = jobStore ?? JobStore()
+            self.jobRepository = JobRepository(store: resolvedJobStore)
+            self.folderStore = folderStore ?? JobFolderStore(directoryURL: resolvedJobStore.directoryURL)
+        }
         self.diagnosticsService = diagnosticsService
         self.translationService = translationService
         isPlayerVisible = UserDefaults.standard.object(forKey: "isPlayerVisible") as? Bool ?? true
@@ -178,9 +203,10 @@ final class AppModel: ObservableObject {
         NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
             .sink { [weak self] _ in self?.prepareForTermination() }
             .store(in: &cancellables)
-        Publishers.Merge(
+        Publishers.Merge3(
             NotificationCenter.default.publisher(for: JobStore.persistenceDidFail),
-            NotificationCenter.default.publisher(for: WatchFolderLedger.persistenceDidFail)
+            NotificationCenter.default.publisher(for: WatchFolderLedger.persistenceDidFail),
+            NotificationCenter.default.publisher(for: JobFolderStore.persistenceDidFail)
         )
         .receive(on: DispatchQueue.main)
         .compactMap { $0.object as? String }
@@ -221,11 +247,12 @@ final class AppModel: ObservableObject {
         // Decoding a large history takes long enough to notice; do it off
         // the main actor and merge once it lands (see finishHydration).
         let repository = self.jobRepository
+        let folderStore = self.folderStore
         hydrationTask = Task { [weak self] in
-            let snapshot = await Task.detached(priority: .userInitiated) {
-                repository.loadJobsSnapshot()
+            let (snapshot, folders) = await Task.detached(priority: .userInitiated) {
+                (repository.loadJobsSnapshot(), folderStore.load())
             }.value
-            self?.finishHydration(with: snapshot)
+            self?.finishHydration(with: snapshot, folders: folders)
         }
         // Files opened through the Dock icon or Finder's Open With can arrive
         // before this model exists; the delegate parks them until now.
@@ -250,6 +277,7 @@ final class AppModel: ObservableObject {
     func flushPendingWork() {
         flushSubtitleSync()
         jobRepository.flush()
+        folderStore.flush()
         watchLedger.flush()
     }
 
@@ -296,7 +324,7 @@ final class AppModel: ObservableObject {
     /// indices are re-stamped against the loaded ones), duplicates by id are
     /// impossible because early jobs have fresh ids, and only then do the
     /// queue and watch folders start.
-    private func finishHydration(with snapshot: JobLoadSnapshot) {
+    private func finishHydration(with snapshot: JobLoadSnapshot, folders loadedFolders: JobFolderLoadResult) {
         jobRepository.recordStartupFailures(snapshot.failures)
         let loaded = JobLoadOrdering.stableSortedByOrderIndex(snapshot.jobs)
         let earlyIDs = Set(jobs.map(\.id))
@@ -308,10 +336,15 @@ final class AppModel: ObservableObject {
                 early[offset].orderIndex = orderIndex
             }
         }
-        jobs = early + persisted
+        // Folder migration runs on the merged local copy so `jobs` is
+        // published once, and its changes join the early adds in one save.
+        var merged = early + persisted
+        let migratedIDs = migrateFolders(loadedFolders, in: &merged)
+        jobs = merged
         jobIndexCache.removeAll()
-        if !early.isEmpty {
-            jobRepository.save(early)
+        let idsToSave = earlyIDs.union(migratedIDs)
+        if !idsToSave.isEmpty {
+            jobRepository.save(jobs.filter { idsToSave.contains($0.id) })
         }
         // Same precedence as the synchronous load had: a job-history startup
         // failure outranks anything that arrived earlier.
@@ -320,7 +353,9 @@ final class AppModel: ObservableObject {
         }
         autoArchiveOldJobs()
         if selectedJobID == nil {
-            selectJob(jobs.first(where: { $0.archivedAt == nil })?.id ?? jobs.first?.id)
+            // The launch-time pick must not re-open a folder the user
+            // collapsed, so it does not reveal its folder.
+            selectJob(jobs.first(where: { $0.archivedAt == nil })?.id ?? jobs.first?.id, revealingFolder: false)
         }
         isHydratingJobs = false
         syncWatchFolders()
@@ -547,9 +582,19 @@ final class AppModel: ObservableObject {
     }
 
     func selectJob(_ id: UUID?) {
+        selectJob(id, revealingFolder: true)
+    }
+
+    /// `revealingFolder` expands the job's folder when it is collapsed, so a
+    /// selection is never hidden inside a closed section. The launch-time
+    /// pick passes false: it must not undo a collapse the user made.
+    func selectJob(_ id: UUID?, revealingFolder: Bool) {
         enqueuePendingSubtitleSync()
         selectedJobID = id
         selectedJobIDs = id.map { [$0] } ?? []
+        if revealingFolder, let id {
+            expandFolder(containingJob: id)
+        }
     }
 
     /// Updates the native macOS multi-selection while keeping a deterministic
@@ -570,6 +615,9 @@ final class AppModel: ObservableObject {
 
         if let newPrimary = jobs.first(where: { newlySelected.contains($0.id) })?.id {
             selectedJobID = newPrimary
+            // Only a newly chosen primary opens its folder: re-applying an
+            // unchanged selection must not undo a collapse the user just made.
+            expandFolder(containingJob: newPrimary)
         } else if let selectedJobID, validIDs.contains(selectedJobID) {
             // Preserve the current detail when Command-click changes another
             // row in the selection.
@@ -642,7 +690,7 @@ final class AppModel: ObservableObject {
     func addVideos(urls: [URL], origin: JobOrigin = .manual, sourceNote: String? = nil) {
         let batchIndices = QueueOrdering.indicesForBatchAdd(count: urls.count, existing: jobs.map(\.orderIndex))
         let shouldStart = settings.autoStartAddedJobs
-        let newJobs = zip(urls, batchIndices).map { url, orderIndex in
+        var newJobs = zip(urls, batchIndices).map { url, orderIndex in
             var job = TranscriptionJob(sourceURL: url, settings: settings)
             job.origin = origin
             job.log =
@@ -660,6 +708,9 @@ final class AppModel: ObservableObject {
             // Interactive additions intentionally resume a paused queue.
             queuePaused = false
         }
+        // Placed before the insert, so the job is born in its folder and the
+        // one save below already carries it.
+        placeInFolders(&newJobs)
         jobs.insert(contentsOf: newJobs, at: 0)
         selectJob(newJobs.first?.id)
         jobRepository.save(newJobs)
@@ -1405,6 +1456,9 @@ final class AppModel: ObservableObject {
             job.log = "Picked up from the watch folder: \(url.path(percentEncoded: false)).\n"
             newJobs.append(job)
         }
+        // A scan that finds a whole season lands its subfolders in their own
+        // folders in one placement pass (and one folder-list save).
+        placeInFolders(&newJobs)
         jobs.append(contentsOf: newJobs)
         jobRepository.save(newJobs)
         adoptSidecars(for: newJobs.map(\.id))
@@ -1641,6 +1695,323 @@ final class AppModel: ObservableObject {
     private func recordWatchOutcome(for id: UUID, success: Bool) {
         guard let job = self.job(withID: id), job.origin == .watchFolder else { return }
         watchLedger.record(job.sourceFingerprint, outcome: success ? .success : .failure)
+    }
+
+    // MARK: - Folders
+
+    // Every job belongs to exactly one folder (`TranscriptionJob.folderID`).
+    // The list (names, source keys, disclosure state) is `folderBook`, saved
+    // to `Cue/folders.json`; membership saves through the ordinary job path,
+    // so a lost folder file can never lose a job. Every write here mutates a
+    // fresh copy of `jobs` synchronously (no `await` while it is held), so a
+    // folder change can neither clobber nor be clobbered by a concurrent job
+    // update, and none of it touches `updatedAt` (moving a job is not job
+    // activity and must not reorder the "Updated" sort).
+
+    /// The folders in stored order. The sidebar orders them for display.
+    var folders: [JobFolder] { folderBook.folders }
+
+    func folder(withID id: UUID) -> JobFolder? {
+        folderBook.folder(withID: id)
+    }
+
+    func folderID(forJob id: UUID) -> UUID? {
+        job(withID: id)?.folderID
+    }
+
+    /// The name of the folder a job is in, for search and the command palette.
+    func folderName(forJob id: UUID) -> String? {
+        guard let folderID = job(withID: id)?.folderID else { return nil }
+        return folderBook.folder(withID: folderID)?.name
+    }
+
+    /// Live validation for the create and rename prompts.
+    func validatedFolderName(_ raw: String, excluding id: UUID? = nil) -> FolderNameResult {
+        folderBook.validatedName(raw, excluding: id)
+    }
+
+    /// "New Folder", "New Folder 2", ... for the create prompt's default.
+    var suggestedFolderName: String {
+        folderBook.suggestedNewFolderName()
+    }
+
+    /// Selects a job and makes it visible: its folder opens, and the sidebar
+    /// is asked (through `revealRequest`) to clear whatever filter or search
+    /// hides it, switching to Archived for an archived job.
+    func revealJob(_ id: UUID) {
+        guard let job = job(withID: id) else { return }
+        selectJob(id)
+        revealRequest = JobRevealRequest(jobID: id, showsArchived: job.archivedAt != nil)
+    }
+
+    /// The sidebar calls this once it has applied a request.
+    func consumeRevealRequest(_ request: JobRevealRequest) {
+        if revealRequest == request { revealRequest = nil }
+    }
+
+    /// Opens the folder holding `id`, so a selected job is never hidden in a
+    /// collapsed section.
+    private func expandFolder(containingJob id: UUID) {
+        guard didLoadFolders,
+            let folderID = job(withID: id)?.folderID,
+            folderBook.folder(withID: folderID)?.isExpanded == false
+        else { return }
+        setFolderExpanded(true, for: folderID)
+    }
+
+    func setFolderExpanded(_ expanded: Bool, for id: UUID) {
+        guard didLoadFolders else { return }
+        var book = folderBook
+        book.setExpanded(expanded, for: id)
+        commitFolderBook(book)
+    }
+
+    func setAllFoldersExpanded(_ expanded: Bool) {
+        guard didLoadFolders else { return }
+        var book = folderBook
+        book.setAllExpanded(expanded)
+        commitFolderBook(book)
+    }
+
+    /// Creates a folder the user owns, optionally moving jobs into it as one
+    /// change. Returns nil when the name is empty or already taken.
+    @discardableResult
+    func createFolder(named raw: String, movingJobs ids: Set<UUID> = []) -> FolderChange? {
+        guard didLoadFolders else { return nil }
+        var book = folderBook
+        guard let folderID = book.createManualFolder(named: raw) else { return nil }
+        commitFolderBook(book)
+        let moves = assignJobs(ids, toFolder: folderID)
+        return FolderChange(
+            kind: .created,
+            folderID: folderID,
+            folderName: book.folder(withID: folderID)?.name ?? raw,
+            movedCount: moves.count,
+            undo: FolderUndoRecord(createdFolderIDs: [folderID], moves: moves)
+        )
+    }
+
+    /// Changes the name only. The folder keeps its source keys, so future
+    /// videos from the same place still land in it under the new name.
+    @discardableResult
+    func renameFolder(_ id: UUID, to raw: String) -> FolderNameResult {
+        guard didLoadFolders else { return .empty }
+        var book = folderBook
+        let result = book.rename(id, to: raw)
+        if case .accepted = result { commitFolderBook(book) }
+        return result
+    }
+
+    /// Moves jobs into an existing folder. Jobs already there are skipped;
+    /// nil means nothing changed.
+    @discardableResult
+    func moveJobs(_ ids: Set<UUID>, toFolder folderID: UUID) -> FolderChange? {
+        guard didLoadFolders, let folder = folderBook.folder(withID: folderID) else { return nil }
+        let moves = assignJobs(ids, toFolder: folderID)
+        guard !moves.isEmpty else { return nil }
+        // The moved jobs are usually selected; do not hide them in a closed section.
+        setFolderExpanded(true, for: folderID)
+        return FolderChange(
+            kind: .moved,
+            folderID: folderID,
+            folderName: folder.name,
+            movedCount: moves.count,
+            undo: FolderUndoRecord(moves: moves)
+        )
+    }
+
+    /// Moves every job of `sourceID` into `targetID`, gives `targetID` the
+    /// source's keys (so future videos follow), and removes the source.
+    @discardableResult
+    func mergeFolder(_ sourceID: UUID, into targetID: UUID) -> FolderChange? {
+        guard didLoadFolders, sourceID != targetID else { return nil }
+        var book = folderBook
+        guard let source = book.folder(withID: sourceID), let target = book.folder(withID: targetID) else { return nil }
+        let ids = Set(jobs.lazy.filter { $0.folderID == sourceID }.map(\.id))
+        let moves = assignJobs(ids, toFolder: targetID)
+        // `source` was captured before adopt() takes its keys, so undo restores it whole.
+        book.adopt(keys: source.sourceKeys, into: targetID)
+        book.remove(sourceID)
+        book.setExpanded(true, for: targetID)
+        commitFolderBook(book)
+        return FolderChange(
+            kind: .merged(sourceName: source.name),
+            folderID: targetID,
+            folderName: target.name,
+            movedCount: moves.count,
+            undo: FolderUndoRecord(removedFolders: [source], moves: moves)
+        )
+    }
+
+    /// Removes a folder without touching a single job: they return to
+    /// automatic placement, by the same rules a new job follows.
+    @discardableResult
+    func deleteFolder(_ id: UUID) -> FolderChange? {
+        guard didLoadFolders else { return nil }
+        var book = folderBook
+        let idsBefore = Set(book.folders.map(\.id))
+        guard let removed = book.remove(id) else { return nil }
+
+        var updated = jobs
+        var inputs: [FolderPlacementInput] = []
+        for index in updated.indices where updated[index].folderID == id {
+            updated[index].folderID = nil
+            inputs.append(FolderPlacementInput(updated[index]))
+        }
+        let assignments = book.place(inputs)
+        let affected = Set(inputs.map(\.jobID))
+        var moves: [FolderUndoRecord.Move] = []
+        var snapshots: [TranscriptionJob] = []
+        for index in updated.indices where affected.contains(updated[index].id) {
+            if let target = assignments[updated[index].id] {
+                updated[index].folderID = target
+                moves.append(.init(jobID: updated[index].id, from: id, to: target))
+            }
+            snapshots.append(updated[index])
+        }
+        if !snapshots.isEmpty {
+            jobs = updated
+            jobRepository.save(snapshots)
+        }
+        let created = book.folders.map(\.id).filter { !idsBefore.contains($0) }
+        commitFolderBook(book)
+        return FolderChange(
+            kind: .deleted,
+            folderID: id,
+            folderName: removed.name,
+            movedCount: snapshots.count,
+            undo: FolderUndoRecord(removedFolders: [removed], createdFolderIDs: created, moves: moves)
+        )
+    }
+
+    /// Takes one folder change back. Only what the change did is reverted: a
+    /// job the user has moved again since stays where it is, and a folder
+    /// created by the change is removed only if it is still empty.
+    func undoFolderChange(_ change: FolderChange) {
+        guard didLoadFolders else { return }
+        let record = change.undo
+        var book = folderBook
+        // Folders first, so the moves below can target them again.
+        for folder in record.removedFolders {
+            book.restore(folder, reclaimingKeys: true)
+        }
+
+        let movesByJob = Dictionary(record.moves.map { ($0.jobID, $0) }, uniquingKeysWith: { first, _ in first })
+        var updated = jobs
+        var changed = Set<UUID>()
+        var unplaced: [FolderPlacementInput] = []
+        for index in updated.indices {
+            guard let move = movesByJob[updated[index].id], updated[index].folderID == move.to else { continue }
+            changed.insert(updated[index].id)
+            if let origin = move.from, book.contains(origin) {
+                updated[index].folderID = origin
+            } else {
+                // Its old folder is gone too: fall back to automatic placement.
+                updated[index].folderID = nil
+                unplaced.append(FolderPlacementInput(updated[index]))
+            }
+        }
+
+        // Automatic folders the change created (a deleted folder's jobs were
+        // re-placed into fresh ones) have no reason to exist once the
+        // restored folder has taken their keys back; whatever arrived in them
+        // meanwhile (a watch-folder scan, say) belongs with the restored one.
+        let dissolved = Set(
+            record.createdFolderIDs.filter { id in
+                guard let created = book.folder(withID: id) else { return false }
+                return !created.isManual && created.sourceKeys.isEmpty
+            })
+        if !dissolved.isEmpty {
+            for index in updated.indices {
+                guard let folderID = updated[index].folderID, dissolved.contains(folderID) else { continue }
+                updated[index].folderID = nil
+                changed.insert(updated[index].id)
+                unplaced.append(FolderPlacementInput(updated[index]))
+            }
+            for id in dissolved { book.remove(id) }
+        }
+
+        let assignments = book.place(unplaced)
+        for index in updated.indices where changed.contains(updated[index].id) && updated[index].folderID == nil {
+            updated[index].folderID = assignments[updated[index].id]
+        }
+
+        // Anything else the change created goes only if nothing lives in it.
+        let occupied = Set(updated.lazy.compactMap(\.folderID))
+        for id in record.createdFolderIDs where !occupied.contains(id) {
+            book.remove(id)
+        }
+        let snapshots = updated.filter { changed.contains($0.id) }
+        if !snapshots.isEmpty {
+            jobs = updated
+            jobRepository.save(snapshots)
+        }
+        commitFolderBook(book)
+    }
+
+    /// Sets the folder of the given jobs in one indexed pass, saves them as
+    /// one batch, and returns what changed. Does not touch `updatedAt`.
+    private func assignJobs(_ ids: Set<UUID>, toFolder folderID: UUID) -> [FolderUndoRecord.Move] {
+        guard !ids.isEmpty else { return [] }
+        var updated = jobs
+        var moves: [FolderUndoRecord.Move] = []
+        var snapshots: [TranscriptionJob] = []
+        for index in updated.indices where ids.contains(updated[index].id) && updated[index].folderID != folderID {
+            moves.append(.init(jobID: updated[index].id, from: updated[index].folderID, to: folderID))
+            updated[index].folderID = folderID
+            snapshots.append(updated[index])
+        }
+        guard !snapshots.isEmpty else { return [] }
+        jobs = updated
+        jobRepository.save(snapshots)
+        return moves
+    }
+
+    /// Places every job of a new batch, creating automatic folders as
+    /// needed. Before the saved folder list has loaded this does nothing:
+    /// hydration places those jobs (an early add must not create a folder the
+    /// loaded list already has).
+    private func placeInFolders(_ batch: inout [TranscriptionJob]) {
+        guard didLoadFolders else { return }
+        var book = folderBook
+        let assignments = book.place(batch.map { FolderPlacementInput($0) })
+        guard !assignments.isEmpty else { return }
+        for index in batch.indices {
+            if let folderID = assignments[batch[index].id] { batch[index].folderID = folderID }
+        }
+        commitFolderBook(book)
+    }
+
+    /// Adopts the folder list read at launch and places every job whose
+    /// folder is missing or unknown; known folders are left alone. Returns
+    /// the ids of the jobs that changed, for one batched save. Idempotent: a
+    /// second launch changes nothing.
+    private func migrateFolders(_ loaded: JobFolderLoadResult, in jobs: inout [TranscriptionJob]) -> Set<UUID> {
+        var book = JobFolderBook(folders: loaded.folders)
+        let repaired = book
+        let assignments = book.place(jobs.map { FolderPlacementInput($0) })
+        var changed = Set<UUID>()
+        for index in jobs.indices {
+            if let folderID = assignments[jobs[index].id] {
+                jobs[index].folderID = folderID
+                changed.insert(jobs[index].id)
+            }
+        }
+        folderBook = book
+        didLoadFolders = true
+        // A damaged list is reported; the job-history startup error, applied
+        // after this, still outranks it.
+        if let warning = loaded.warnings.last { persistenceError = warning }
+        if book != repaired || !loaded.warnings.isEmpty || book.folders != loaded.folders {
+            folderStore.save(book.folders)
+        }
+        return changed
+    }
+
+    private func commitFolderBook(_ book: JobFolderBook) {
+        guard book != folderBook else { return }
+        folderBook = book
+        folderStore.save(book.folders)
     }
 
     // MARK: - Ordering

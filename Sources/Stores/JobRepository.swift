@@ -34,6 +34,11 @@ final class JobRepository {
 
     var startupError: String? { store.startupError }
 
+    /// When the store is a `JobStore`, scopes failure notifications to that instance.
+    var jobStoreNotificationToken: UUID? {
+        (store as? JobStore)?.notificationToken
+    }
+
     init(store: any JobPersisting, debounceNanoseconds: UInt64 = 400_000_000) {
         self.store = store
         self.debounceNanoseconds = debounceNanoseconds

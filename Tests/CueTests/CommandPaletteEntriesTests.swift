@@ -104,6 +104,43 @@ struct CommandPaletteEntriesTests {
         #expect(PaletteIndex.abbreviatedPath(NSHomeDirectory() + "/Movies/Shows") == "~/Movies/Shows")
     }
 
+    // MARK: - Folders
+
+    @Test func jobSubtitlesNameTheSidebarFolderAndKeepTheDirectorySearchable() throws {
+        var job = Fixtures.job("Interview", status: .transcriptionComplete, folder: "/Volumes/Media/Shows")
+        job.folderName = "Season One"
+        #expect(PaletteIndex.jobSubtitle(job) == "Transcript ready · Season One")
+
+        // The directory left the subtitle, so it moves into the keywords.
+        let results = makeIndex(jobs: [job]).results(for: "/Volumes/Media/Shows")
+        #expect(row("job:\(job.id.uuidString)", in: results) != nil)
+    }
+
+    @Test func foldersAreSearchableAndLeadToTheSidebar() throws {
+        let busy = PaletteFolderSummary(id: UUID(), name: "Season One", jobCount: 3)
+        let single = PaletteFolderSummary(id: UUID(), name: "Seasonal Extras", jobCount: 1)
+        let empty = PaletteFolderSummary(id: UUID(), name: "Someday", jobCount: 0)
+        var snapshot = Fixtures.snapshot()
+        snapshot.folders = [busy, single, empty]
+        let index = PaletteIndex.build(from: snapshot)
+
+        let results = index.results(for: "season")
+        let rows = Fixtures.rows(results, in: .folders)
+        #expect(rows.map(\.entry.title) == ["Season One", "Seasonal Extras"])
+        let first = try #require(rows.first)
+        #expect(first.entry.target == .folder(busy.id))
+        #expect(first.entry.symbol == "folder")
+        #expect(first.entry.actionLabel == "Show in Sidebar")
+        #expect(first.subtitle.hasPrefix("Folder · 3 jobs"))
+
+        #expect(PaletteIndex.folderSubtitle(single) == "Folder · 1 job")
+        #expect(PaletteIndex.folderSubtitle(empty) == "Folder · Empty")
+        // Folders are for finding, not suggesting: none on an empty query.
+        #expect(Fixtures.rows(index.results(for: ""), in: .folders).isEmpty)
+        // Commands mode leaves them out too.
+        #expect(Fixtures.rows(index.results(for: "> season"), in: .folders).isEmpty)
+    }
+
     @Test func jobRowsCarryTheirStatusAndAreFoundByFileName() throws {
         let job = Fixtures.job("Interview", status: .failed)
         let idx = makeIndex(jobs: [job])
@@ -180,7 +217,7 @@ struct CommandPaletteEntriesTests {
         #expect(
             results.emptyState
                 == PaletteEmptyState(
-                    title: "Nothing to show yet", message: "Type to search jobs, commands, and settings."
+                    title: "Nothing to show yet", message: "Type to search jobs, folders, commands, and settings."
                 )
         )
     }

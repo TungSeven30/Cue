@@ -619,6 +619,61 @@ struct AppModelFolderTests {
         #expect(harness.model.revealRequest == second, "consuming a stale request leaves the newer one")
     }
 
+    @Test func paletteJobRowsRevealThroughTheFolderTree() async throws {
+        let a = try job("/v/A/a.mp4", at: 1)
+        let harness = try await makeHarness(seed: [a])
+        defer { harness.cleanUp() }
+        let model = harness.model
+        let folder = try #require(model.job(withID: a.id)?.folderID)
+        model.setFolderExpanded(false, for: folder)
+
+        #expect(model.performPaletteTarget(.job(a.id)) == .done)
+        #expect(model.selectedJobID == a.id)
+        #expect(model.folder(withID: folder)?.isExpanded == true)
+        #expect(model.revealRequest?.jobID == a.id)
+    }
+
+    @Test func paletteFolderRowsOpenTheFolderAtItsNewestLiveJob() async throws {
+        let older = try job("/v/A/older.mp4", at: 1)
+        let newer = try job("/v/A/newer.mp4", at: 2)
+        var archived = try job("/v/A/archived.mp4", at: 3)
+        archived.archivedAt = FolderTestJobs.epoch
+        let other = try job("/v/B/other.mp4", at: 4)
+        let harness = try await makeHarness(seed: [older, newer, archived, other])
+        defer { harness.cleanUp() }
+        let model = harness.model
+        let folder = try #require(model.job(withID: older.id)?.folderID)
+        model.setFolderExpanded(false, for: folder)
+
+        // The snapshot names each job's folder and counts only live jobs.
+        let snapshot = model.makePaletteSnapshot()
+        let summary = try #require(snapshot.folders.first { $0.id == folder })
+        #expect(summary.jobCount == 2)
+        #expect(snapshot.jobs.first { $0.id == newer.id }?.folderName == summary.name)
+
+        #expect(model.performPaletteTarget(.folder(folder)) == .done)
+        #expect(model.folder(withID: folder)?.isExpanded == true)
+        #expect(model.selectedJobID == newer.id)
+        #expect(model.revealRequest?.jobID == newer.id)
+
+        let gone = UUID()
+        #expect(model.paletteUnavailabilityReason(for: .folder(gone)) == "That folder was deleted")
+    }
+
+    @Test func paletteOffersManualEmptyFoldersButNotEmptyAutomaticOnes() async throws {
+        let a = try job("/v/A/a.mp4", at: 1)
+        let harness = try await makeHarness(seed: [a])
+        defer { harness.cleanUp() }
+        let model = harness.model
+        let automatic = try #require(model.job(withID: a.id)?.folderID)
+        let change = try #require(model.createFolder(named: "Later", movingJobs: [a.id]))
+
+        let folders = model.makePaletteSnapshot().folders
+        #expect(folders.map(\.id) == [change.folderID])
+        #expect(folders.first?.jobCount == 1)
+        #expect(!folders.contains { $0.id == automatic }, "the emptied automatic folder is hidden, as in the sidebar")
+    }
+
     @Test func revealingAnUnknownJobDoesNothing() async throws {
         let harness = try await makeHarness()
         defer { harness.cleanUp() }

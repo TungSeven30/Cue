@@ -3,6 +3,7 @@ import Foundation
 /// The groups a ⌘K result can belong to, in their canonical display order.
 enum PaletteSection: Int, CaseIterable, Comparable, Hashable, Sendable {
     case jobs
+    case folders
     case commands
     case settings
     case watchFolders
@@ -16,6 +17,7 @@ enum PaletteSection: Int, CaseIterable, Comparable, Hashable, Sendable {
     var title: String {
         switch self {
         case .jobs: "Jobs"
+        case .folders: "Folders"
         case .commands: "Commands"
         case .settings: "Settings"
         case .watchFolders: "Watch Folders"
@@ -85,7 +87,7 @@ enum CommandPaletteSearch {
         var commandsOnlyCommands: Int
 
         static let standard = Limits(
-            perSection: [.jobs: 8, .commands: 8, .settings: 4, .watchFolders: 3, .downloads: 3],
+            perSection: [.jobs: 8, .folders: 4, .commands: 8, .settings: 4, .watchFolders: 3, .downloads: 3],
             suggestionsPerSection: [.jobs: 5, .commands: 6],
             commandsOnlyCommands: 40
         )

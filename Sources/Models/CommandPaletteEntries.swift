@@ -8,6 +8,7 @@ import Foundation
 /// What a row does when it is chosen.
 enum PaletteTarget: Hashable, Sendable {
     case job(UUID)
+    case folder(UUID)
     case command(PaletteCommandID)
     case setting(SettingsPane)
     case watchFolder(UUID)
@@ -19,6 +20,7 @@ extension PaletteSection {
     var itemNoun: String {
         switch self {
         case .jobs: "Job"
+        case .folders: "Folder"
         case .commands: "Command"
         case .settings: "Setting"
         case .watchFolders: "Watch folder"
@@ -72,6 +74,16 @@ struct PaletteJobSummary: Equatable, Sendable {
     let status: JobStatus
     let isArchived: Bool
     let updatedAt: Date
+    /// The sidebar folder the job is in; the row's subtitle names it.
+    var folderName: String? = nil
+}
+
+/// A sidebar folder worth offering: it has live jobs, or the user made it.
+struct PaletteFolderSummary: Equatable, Sendable {
+    let id: UUID
+    let name: String
+    /// Jobs the sidebar lists in it (archived jobs excluded).
+    let jobCount: Int
 }
 
 struct PaletteWatchFolderSummary: Equatable, Sendable {
@@ -93,6 +105,7 @@ struct PaletteSnapshot: Equatable, Sendable {
     var context = PaletteContext()
     var selectedJobID: UUID?
     var jobs: [PaletteJobSummary] = []
+    var folders: [PaletteFolderSummary] = []
     var watchFolders: [PaletteWatchFolderSummary] = []
     var failedDownloads: [PaletteDownloadSummary] = []
 }
@@ -170,7 +183,7 @@ struct PaletteResults: Equatable, Sendable {
         if query.isEmpty {
             return PaletteEmptyState(
                 title: "Nothing to show yet",
-                message: "Type to search jobs, commands, and settings."
+                message: "Type to search jobs, folders, commands, and settings."
             )
         }
         let shown = query.text
@@ -256,10 +269,26 @@ struct PaletteIndex: Sendable {
             )
             add(
                 entry,
-                keywords: job.fileName == job.title ? [] : [job.fileName],
+                keywords: jobKeywords(job),
                 bias: job.isArchived ? archivedBias : 0,
                 suggestionRank: suggested[job.id]
             )
+        }
+
+        for folder in snapshot.folders {
+            let entry = PaletteEntry(
+                id: "folder:\(folder.id.uuidString)",
+                target: .folder(folder.id),
+                section: .folders,
+                title: folder.name,
+                subtitle: folderSubtitle(folder),
+                symbol: "folder",
+                jobStatus: nil,
+                shortcut: nil,
+                availability: .enabled,
+                actionLabel: "Show in Sidebar"
+            )
+            add(entry, keywords: ["folder"])
         }
 
         for id in PaletteCommandID.allCases {
@@ -391,9 +420,35 @@ struct PaletteIndex: Sendable {
         var parts: [String] = []
         if job.isArchived { parts.append("Archived") }
         parts.append(job.status.label)
-        let folder = abbreviatedPath((job.path as NSString).deletingLastPathComponent)
-        if !folder.isEmpty { parts.append(folder) }
+        // The sidebar folder is what the user sees and may have renamed; the
+        // directory is the fallback before folders load.
+        if let folderName = job.folderName, !folderName.isEmpty {
+            parts.append(folderName)
+        } else {
+            let directory = abbreviatedPath((job.path as NSString).deletingLastPathComponent)
+            if !directory.isEmpty { parts.append(directory) }
+        }
         return parts.joined(separator: " · ")
+    }
+
+    /// The file name when the title differs from it, and the directory when
+    /// the subtitle shows a folder name instead, so both stay searchable.
+    static func jobKeywords(_ job: PaletteJobSummary) -> [String] {
+        var keywords: [String] = []
+        if job.fileName != job.title { keywords.append(job.fileName) }
+        if let folderName = job.folderName, !folderName.isEmpty {
+            let directory = abbreviatedPath((job.path as NSString).deletingLastPathComponent)
+            if !directory.isEmpty { keywords.append(directory) }
+        }
+        return keywords
+    }
+
+    static func folderSubtitle(_ folder: PaletteFolderSummary) -> String {
+        switch folder.jobCount {
+        case 0: "Folder · Empty"
+        case 1: "Folder · 1 job"
+        default: "Folder · \(folder.jobCount) jobs"
+        }
     }
 
     static func settingSubtitle(_ pane: SettingsPane) -> String {

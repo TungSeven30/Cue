@@ -127,8 +127,20 @@ extension AppModel {
                 path: job.sourcePath,
                 status: job.status,
                 isArchived: job.archivedAt != nil,
-                updatedAt: job.updatedAt
+                updatedAt: job.updatedAt,
+                folderName: job.folderID.flatMap { folder(withID: $0)?.name }
             )
+        }
+        // Same visibility rule as the sidebar: folders with live jobs, plus
+        // the ones the user made, which stay visible while empty.
+        var liveCounts: [UUID: Int] = [:]
+        for job in jobs where job.archivedAt == nil {
+            if let folderID = job.folderID { liveCounts[folderID, default: 0] += 1 }
+        }
+        snapshot.folders = folders.compactMap { folder in
+            let count = liveCounts[folder.id] ?? 0
+            guard count > 0 || folder.isManual else { return nil }
+            return PaletteFolderSummary(id: folder.id, name: folder.name, jobCount: count)
         }
         snapshot.watchFolders = settings.watchFolders.map { folder in
             PaletteWatchFolderSummary(id: folder.id, name: folder.name, path: folder.path, isEnabled: folder.enabled)
@@ -141,12 +153,23 @@ extension AppModel {
 
     // MARK: - Running rows
 
-    /// The single place a job row lands. Today it selects the job; the folder
-    /// tree's `revealJob(_:)` (expand the folder, unhide an archived job,
-    /// scroll the sidebar) replaces the body here and nowhere else.
+    /// The single place a job row lands: select it, open its folder, and ask
+    /// the sidebar to clear whatever filter or search hides it.
     func revealJobFromPalette(_ id: UUID) {
         guard job(withID: id) != nil else { return }
-        selectJob(id)
+        revealJob(id)
+    }
+
+    /// A folder row opens the folder and reveals its newest live job (or its
+    /// newest job, when every one is archived), so the sidebar scrolls there.
+    func revealFolderFromPalette(_ id: UUID) {
+        guard folder(withID: id) != nil else { return }
+        setFolderExpanded(true, for: id)
+        let members = jobs.filter { $0.folderID == id }
+        let newest =
+            members.filter { $0.archivedAt == nil }.max { $0.createdAt < $1.createdAt }
+            ?? members.max { $0.createdAt < $1.createdAt }
+        if let newest { revealJob(newest.id) }
     }
 
     /// Runs a row through the same model calls the menus, toolbar, and
@@ -161,6 +184,9 @@ extension AppModel {
         switch target {
         case .job(let id):
             revealJobFromPalette(id)
+            return .done
+        case .folder(let id):
+            revealFolderFromPalette(id)
             return .done
         case .command(let id):
             return performPaletteCommand(id, effects: effects)
@@ -185,6 +211,8 @@ extension AppModel {
         switch target {
         case .job(let id):
             return job(withID: id) == nil ? "That job is no longer in the list" : nil
+        case .folder(let id):
+            return folder(withID: id) == nil ? "That folder was deleted" : nil
         case .command(let id):
             let context = makePaletteContext(canCheckForUpdates: canCheckForUpdates)
             switch PaletteCatalog.availability(of: id, in: context) {

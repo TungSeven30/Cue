@@ -173,8 +173,8 @@ struct CommandPalettePanel: View {
                 .accessibilityHidden(true)
             PaletteSearchField(
                 text: Binding(get: { controller.query }, set: { controller.setQuery($0) }),
-                placeholder: "Search jobs, commands, and settings",
-                accessibilityLabel: "Search jobs, commands, and settings",
+                placeholder: "Search jobs, folders, commands, and settings",
+                accessibilityLabel: "Search jobs, folders, commands, and settings",
                 accessibilityHelp: "Up and Down choose a result. Return runs it. Escape closes.",
                 fontSize: CueFont.pointSize(for: .title2) * scale,
                 design: typography.systemDesign,

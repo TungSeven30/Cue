@@ -437,7 +437,7 @@ struct CommandPaletteSearchTests {
     }
 
     @Test func sectionTitlesAndOrderAreStable() {
-        #expect(PaletteSection.allCases.map(\.title) == ["Jobs", "Commands", "Settings", "Watch Folders", "Downloads"])
+        #expect(PaletteSection.allCases.map(\.title) == ["Jobs", "Folders", "Commands", "Settings", "Watch Folders", "Downloads"])
         #expect(PaletteSection.allCases == PaletteSection.allCases.sorted())
         #expect(PaletteSection.jobs.suggestionTitle == "Recent Jobs")
         #expect(PaletteSection.commands.suggestionTitle == "Suggested Commands")

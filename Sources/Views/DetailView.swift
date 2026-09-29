@@ -138,11 +138,23 @@ struct DetailView: View {
         }
     }
 
+    /// The pane's own height is what the job-settings card budgets against, so
+    /// the workspace is measured once here and sized to exactly what it was
+    /// offered (it already filled the pane).
     private var workspace: some View {
+        GeometryReader { proxy in
+            workspaceContent(paneHeight: proxy.size.height)
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+        }
+    }
+
+    private func workspaceContent(paneHeight: CGFloat) -> some View {
         VStack(spacing: 0) {
             if model.isPlayerVisible {
                 // The full header card would leave no room for the video and
-                // the transcript, so shrink it to one line while previewing.
+                // the transcript, so shrink it to one line while previewing;
+                // the card under the player keeps the job's settings one
+                // click away.
                 compactHeader
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
@@ -151,7 +163,11 @@ struct DetailView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 10)
 
-                HStack(spacing: 8) {
+                JobSettingsCard(
+                    model: model,
+                    paneHeight: paneHeight,
+                    playerHeight: PreviewHeightControl.clamped(playerHeight)
+                ) {
                     playerResizeHandle
                     Text("Preview size")
                         .cueFont(.caption)
@@ -160,7 +176,8 @@ struct DetailView: View {
                         .frame(width: 24, height: 28)
                 }
                 .padding(.horizontal, 20)
-                .padding(.bottom, 2)
+                .padding(.top, 8)
+                .padding(.bottom, 10)
             } else {
                 HeaderCard(model: model)
                     .padding(20)

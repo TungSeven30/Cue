@@ -51,6 +51,8 @@ struct DetailView: View {
     @ViewState private var tab: WorkspaceTab = .transcript
     @AppStorage("followPlayback") private var followPlayback = true
     @AppStorage("playerHeight") private var playerHeight = 280.0
+    @AppStorage(JobSettingsLayout.expandedStorageKey) private var isJobSettingsExpanded = false
+    @Environment(\.cueTextScale) private var cueTextScale
     @ViewState private var dragStartHeight: Double?
     @ViewState private var isHoveringResizeHandle = false
 
@@ -138,29 +140,60 @@ struct DetailView: View {
         }
     }
 
+    /// The pane's own height is what the job-settings card budgets against, so
+    /// the workspace is measured once here and sized to exactly what it was
+    /// offered (it already filled the pane).
     private var workspace: some View {
-        VStack(spacing: 0) {
+        GeometryReader { proxy in
+            workspaceContent(paneHeight: proxy.size.height)
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+        }
+    }
+
+    private func workspaceContent(paneHeight: CGFloat) -> some View {
+        // While the job-settings card is open the video gives up height (never
+        // below the smallest preview) so the card can be read and the
+        // transcript keeps room; the saved preference is untouched. The size
+        // controls act on what is drawn, so they never feel dead.
+        let drawnPlayerHeight = JobSettingsLayout.playerHeight(
+            preferred: PreviewHeightControl.clamped(playerHeight),
+            isPanelOpen: isJobSettingsExpanded,
+            paneHeight: paneHeight,
+            textScale: cueTextScale
+        )
+        return VStack(spacing: 0) {
             if model.isPlayerVisible {
                 // The full header card would leave no room for the video and
-                // the transcript, so shrink it to one line while previewing.
+                // the transcript, so shrink it to one line while previewing;
+                // the card under the player keeps the job's settings one
+                // click away.
                 compactHeader
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
                 PlayerPane(controller: playerController)
-                    .frame(height: PreviewHeightControl.clamped(playerHeight))
+                    .frame(height: drawnPlayerHeight)
                     .padding(.horizontal, 20)
                     .padding(.top, 10)
 
-                HStack(spacing: 8) {
-                    playerResizeHandle
+                JobSettingsCard(
+                    model: model,
+                    isExpanded: $isJobSettingsExpanded,
+                    paneHeight: paneHeight,
+                    playerHeight: drawnPlayerHeight
+                ) {
+                    playerResizeHandle(currentHeight: drawnPlayerHeight)
                     Text("Preview size")
                         .cueFont(.caption)
                         .foregroundStyle(.secondary)
-                    PreviewHeightControl(height: $playerHeight)
+                        // The failure hint is long; it truncates, this doesn't wrap.
+                        .lineLimit(1)
+                        .fixedSize()
+                    PreviewHeightControl(height: Binding(get: { drawnPlayerHeight }, set: { playerHeight = $0 }))
                         .frame(width: 24, height: 28)
                 }
                 .padding(.horizontal, 20)
-                .padding(.bottom, 2)
+                .padding(.top, 8)
+                .padding(.bottom, 10)
             } else {
                 HeaderCard(model: model)
                     .padding(20)
@@ -201,8 +234,10 @@ struct DetailView: View {
         }
     }
 
-    /// Drag up or down to resize the video; double-click to reset.
-    private var playerResizeHandle: some View {
+    /// Drag up or down to resize the video; double-click to reset. A drag
+    /// starts from the height the video is drawn at, which is shorter than the
+    /// saved preference while the job-settings card is squeezing it.
+    private func playerResizeHandle(currentHeight: Double) -> some View {
         RoundedRectangle(cornerRadius: 2.5)
             .fill(.tertiary)
             .frame(width: 44, height: 5)
@@ -232,9 +267,9 @@ struct DetailView: View {
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
                         if dragStartHeight == nil {
-                            dragStartHeight = playerHeight
+                            dragStartHeight = currentHeight
                         }
-                        playerHeight = min(640, max(140, (dragStartHeight ?? playerHeight) + value.translation.height))
+                        playerHeight = min(640, max(140, (dragStartHeight ?? currentHeight) + value.translation.height))
                     }
                     .onEnded { _ in
                         dragStartHeight = nil
@@ -391,7 +426,6 @@ struct DetailView: View {
 
 private struct HeaderCard: View {
     @ObservedObject var model: AppModel
-    @ViewState private var showDiagnostics = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -414,12 +448,12 @@ private struct HeaderCard: View {
 
                 Spacer(minLength: 12)
 
-                diagnosticsPill
+                JobDiagnosticsPill(model: model)
             }
 
-            progressStrip
+            JobProgressStrip(model: model)
 
-            nextActionRow
+            JobNextActionRow(model: model)
 
             Divider()
 
@@ -466,8 +500,14 @@ private struct HeaderCard: View {
         .padding(.vertical, 4)
         .background(.quaternary.opacity(0.6), in: Capsule())
     }
+}
 
-    private var diagnosticsPill: some View {
+/// The environment-check pill: opens the diagnostics popover.
+struct JobDiagnosticsPill: View {
+    @ObservedObject var model: AppModel
+    @ViewState private var showDiagnostics = false
+
+    var body: some View {
         Button {
             showDiagnostics.toggle()
         } label: {
@@ -504,9 +544,15 @@ private struct HeaderCard: View {
     private var diagnosticsColor: Color {
         diagnosticsPillState?.tint ?? .secondary
     }
+}
+
+/// Stage and progress line, the failure banner (reason, Retry, System Setup,
+/// Copy), or the Export strip once a transcript or translation is ready.
+struct JobProgressStrip: View {
+    @ObservedObject var model: AppModel
 
     @ViewBuilder
-    private var progressStrip: some View {
+    var body: some View {
         let progress = model.progress
         let isFailed = progress.stage == .failed
         VStack(alignment: .leading, spacing: 8) {
@@ -633,9 +679,20 @@ private struct HeaderCard: View {
             }
         }
     }
+}
+
+/// Transcribe, Translate or Resume, and the intro-summary action.
+struct JobNextActionRow: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            content
+        }
+    }
 
     @ViewBuilder
-    private var nextActionRow: some View {
+    private var content: some View {
         if model.transcriptSegments.isEmpty {
             Button {
                 model.startTranscription()
@@ -716,7 +773,7 @@ private struct HeaderCard: View {
     }
 }
 
-private struct RunOptionsRow: View {
+struct RunOptionsRow: View {
     @ObservedObject var model: AppModel
     @Environment(\.openSettings) private var openSettings
 

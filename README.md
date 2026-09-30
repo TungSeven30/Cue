@@ -49,8 +49,13 @@ Transcription runs locally. Translation and summaries use only the cloud provide
 - Each job's context menu has "Job Settings…" for per-job overrides — source language, preset, translation target, auto-translate — that inherit from your Settings defaults until you change them; a small slider badge marks jobs with overrides
 - Remove a job from the queue (without deleting it) if you change your mind before it runs
 
+**Folders & navigation**
+- The sidebar groups jobs into folders named after where each video lives: every watch-folder subfolder gets its own folder, and downloads group by site. Rename, merge, or delete folders, or make your own, and drag jobs onto a folder or use **Move to Folder**. Moves, merges, and deletions can be undone. **Group by** switches the sidebar to Status or a plain list
+- **⌘K** (View > Search Commands and Jobs…) searches jobs, folders, commands, Settings sections, watch folders, and downloads; start with `>` to search commands only. Choosing a job opens its folder and selects it
+
 **Review & export**
-- Three-pane UI: job queue sidebar, editable transcript/translation tabs, resizable video preview with the active subtitle highlighted and overlaid on the picture
+- Three-pane UI: job queue sidebar, editable transcript/translation tabs, resizable video preview with the active subtitle highlighted and overlaid on the picture, and the selected job's settings in a card under the preview
+- Settings > Appearance sets the typeface (System, Rounded, Serif, Monospaced), text size (90% to 150%), and list density (Compact, Comfortable, Detailed) for job and subtitle rows
 - Search, warning-filter (empty text, bad timing, overlong cues), and bulk find-and-replace
 - Export SRT, WebVTT, plain text, Markdown, and JSON — original, translated, and bilingual documents, plus run logs
 - Auto-sidecar export drops language-coded `.srt` files next to the source video so media players pick them up automatically
@@ -227,7 +232,7 @@ Other script modes:
 - **UI**: SwiftUI with AppKit panels, single-window, `@MainActor` state in `AppModel`
 - **Transcription**: the default backend calls whisper.cpp (pinned SwiftPM dependency, Metal) in-process, keeping the model weights resident between jobs and running every chunk on a fresh inference state so long files transcribe deterministically; the optional Python backends run in a resident helper process (`--serve` mode of the same self-contained script) that keeps the model loaded between jobs. Qwen reads the cached PCM WAV once, vectorizes silence planning, passes NumPy chunks without temporary files, and streams segments plus structured performance metrics over stderr
 - **Translation/summaries**: direct HTTPS to the explicitly selected provider APIs—or the configured local server—with JSON-schema-constrained outputs and token-aware adaptive batching; no SDK dependencies
-- **Persistence**: one JSON file per job under `~/Library/Application Support/Cue/jobs/`, written atomically off the main thread and flushed on quit; the history is decoded concurrently and merged in after the window appears; corrupt files are quarantined, never overwritten
+- **Persistence**: one JSON file per job under `~/Library/Application Support/Cue/jobs/`, written atomically off the main thread and flushed on quit; the history is decoded concurrently and merged in after the window appears; corrupt files are quarantined, never overwritten. Sidebar folders live in `folders.json` beside them, and each job records only its folder's ID
 - **Command line**: `Sources/CLI` — an argument-driven mode inside the shipped binary (dispatched from `CueApp.init` before any window exists), driving the same services the GUI does, with a JSON manifest as the handoff between stages
 - **Layout**: `Sources/` — `App`, `Views`, `Stores`, `Services`, `Models`, `Support`, `CLI`; `Tests/` — swift-testing suite; `script/` — build, test, and release tooling
 - **Audit/runbooks**: [architecture review](docs/architecture-review-2026-08-08.md), [security model](docs/security-model.md), [dependency policy](docs/dependency-policy.md), [release/rollback](docs/release-runbook.md), and [data recovery](docs/data-recovery.md)

@@ -3,6 +3,38 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
+## 2.9.0 — 2026-09-29
+
+- **Folders in the sidebar.** Every job lands in a folder named after the
+  folder its video is in, so each watch-folder subfolder gets its own folder,
+  and downloads group by site. Rename a folder and it keeps catching new
+  videos from the same place. Create, rename, merge, and delete folders from
+  the sidebar; deleting one sends its jobs back to their automatic folders.
+  Moves, merges, and deletions can be undone. Move jobs by dragging them onto a
+  folder or with **Move to Folder** in a job's menu. Folders collapse, sort by
+  name or by newest job, and search matches folder names. **Group by** still
+  offers Status or a plain list. Existing jobs are sorted into folders on the
+  first launch; nothing is moved on disk or deleted.
+- **Search Commands and Jobs (⌘K).** One search field for jobs, folders,
+  commands, Settings sections, watch folders, and downloads. Choosing a job
+  opens its folder and selects it; type `>` to search commands only. Commands
+  that can't run right now stay visible, dimmed, with the reason. No existing
+  shortcut changed.
+- **Display settings.** Settings ▸ Appearance picks the typeface (System,
+  Rounded, Serif, or Monospaced), the text size (90% to 150%, applied across
+  Cue's windows), and list density (Compact, Comfortable, or Detailed) for job
+  rows and subtitle rows. The defaults look the same as 2.8.0.
+- **Job settings under the video.** With the preview on, the selected job's
+  settings now sit in a card under the player instead of being hidden. Closed,
+  it's a one-line summary next to the preview-size control; open, the video
+  gives up height first so the transcript keeps room to read.
+- **A larger Settings window** with a sidebar: General, Appearance, Models,
+  Transcribe, Translate, Summary, and API Keys. It resizes, remembers the last
+  section, and ⌘K opens any section directly.
+- Qwen models reviewed: Cue already uses the newest Qwen speech models that run
+  on a Mac (Qwen3-ASR 1.7B and 0.6B with the forced aligner), so transcription
+  is unchanged.
+
 ## 2.8.0 — 2026-09-26
 
 - **Built for macOS 27, still supports macOS 14 and later.** Cue now builds

@@ -3,6 +3,14 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
+## 2.9.1 — 2026-10-30
+
+- **Current cloud models in the model picker.** OpenAI: GPT-6 Astra, GPT-6.1
+  Sol, GPT-6.1 Terra, GPT-6 Luna. Anthropic: Claude Fable 5.1, Opus 5.5,
+  Sonnet 5.5, Haiku 5.5. Google: Gemini 4 Argon, Gemini 3.8 Flash, Gemini 3.5
+  Flash-Lite. New installs default to GPT-6.1 Sol. A model you already picked
+  stays selected.
+
 ## 2.9.0 — 2026-09-29
 
 - **Folders in the sidebar.** Every job lands in a folder named after the

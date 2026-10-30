@@ -349,16 +349,16 @@ enum AppSettingPresets {
     // is inferred from the model name; each provider uses its own API key
     // from Settings.
     static let translationModels: [SettingsPreset] = [
-        SettingsPreset(label: "GPT-5.6 Sol", value: "gpt-5.6-sol"),
-        SettingsPreset(label: "GPT-5.6 Terra", value: "gpt-5.6-terra"),
-        SettingsPreset(label: "GPT-5.6 Luna", value: "gpt-5.6-luna"),
-        SettingsPreset(label: "GPT-5.5", value: "gpt-5.5"),
-        SettingsPreset(label: "Claude Fable 5", value: "claude-fable-5"),
-        SettingsPreset(label: "Claude Opus 5", value: "claude-opus-5"),
-        SettingsPreset(label: "Claude Sonnet 5", value: "claude-sonnet-5"),
-        SettingsPreset(label: "Claude Haiku 4.5", value: "claude-haiku-4-5"),
-        SettingsPreset(label: "Gemini 3.1 Pro", value: "gemini-3.1-pro-preview"),
-        SettingsPreset(label: "Gemini 3.6 Flash", value: "gemini-3.6-flash"),
+        SettingsPreset(label: "GPT-6 Astra", value: "gpt-6-astra"),
+        SettingsPreset(label: "GPT-6.1 Sol", value: "gpt-6.1-sol"),
+        SettingsPreset(label: "GPT-6.1 Terra", value: "gpt-6.1-terra"),
+        SettingsPreset(label: "GPT-6 Luna", value: "gpt-6-luna"),
+        SettingsPreset(label: "Claude Fable 5.1", value: "claude-fable-5-1"),
+        SettingsPreset(label: "Claude Opus 5.5", value: "claude-opus-5-5"),
+        SettingsPreset(label: "Claude Sonnet 5.5", value: "claude-sonnet-5-5"),
+        SettingsPreset(label: "Claude Haiku 5.5", value: "claude-haiku-5-5"),
+        SettingsPreset(label: "Gemini 4 Argon", value: "gemini-4-argon"),
+        SettingsPreset(label: "Gemini 3.8 Flash", value: "gemini-3.8-flash"),
         SettingsPreset(label: "Gemini 3.5 Flash-Lite", value: "gemini-3.5-flash-lite"),
         SettingsPreset(label: "Groq: GPT-OSS 120B", value: "groq/openai/gpt-oss-120b"),
         SettingsPreset(label: "Groq: GPT-OSS 20B", value: "groq/openai/gpt-oss-20b"),
@@ -550,7 +550,7 @@ final class AppSettingsStore: ObservableObject {
         transcriptionQualityPreset = TranscriptionQualityPreset(rawValue: defaults.string(forKey: "transcriptionQualityPreset") ?? "") ?? .balanced
         sourceLanguage = defaults.string(forKey: "sourceLanguage") ?? "auto"
         qwenContext = defaults.string(forKey: "qwenContext") ?? ""
-        openAIModel = defaults.string(forKey: "openAIModel") ?? "gpt-5.5"
+        openAIModel = defaults.string(forKey: "openAIModel") ?? "gpt-6.1-sol"
         localTranslationEndpoint = defaults.string(forKey: "localTranslationEndpoint") ?? Self.defaultLocalTranslationEndpoint
         translationSourceLanguage = defaults.string(forKey: "translationSourceLanguage") ?? "auto"
         translationTargetLanguage = defaults.string(forKey: "translationTargetLanguage") ?? "English"

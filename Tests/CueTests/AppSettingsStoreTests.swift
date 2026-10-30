@@ -159,7 +159,14 @@ struct AppSettingsStoreTests {
 
     @Test func translationPresetsIncludeLatestAndFastProviders() {
         let values = Set(AppSettingPresets.translationModels.map(\.value))
-        #expect(values.contains("claude-fable-5"))
+        #expect(values.contains("gpt-6-astra"))
+        #expect(values.contains("gpt-6.1-sol"))
+        #expect(values.contains("claude-fable-5-1"))
+        #expect(values.contains("claude-opus-5-5"))
+        #expect(values.contains("claude-sonnet-5-5"))
+        #expect(values.contains("claude-haiku-5-5"))
+        #expect(values.contains("gemini-4-argon"))
+        #expect(values.contains("gemini-3.8-flash"))
         #expect(values.contains("openrouter/qwen/qwen3.8-max"))
         #expect(values.contains("openrouter/qwen/qwen3.8-flash"))
         #expect(values.contains("openrouter/qwen/qwen3.7-flash"))

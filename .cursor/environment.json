@@ -1,0 +1,4 @@
+{
+  "name": "Cue — Python backend & tooling (Linux CI-equivalent)",
+  "install": "sudo apt-get update -qq && sudo apt-get install -y -qq python3.12-venv python3-pip ffmpeg espeak-ng && python3 -m venv .venv && . .venv/bin/activate && pip install --disable-pip-version-check -q --upgrade pip && pip install --disable-pip-version-check -q -r script/requirements-ci.txt && pip install --disable-pip-version-check -q faster-whisper"
+}

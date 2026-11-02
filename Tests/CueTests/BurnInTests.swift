@@ -135,19 +135,20 @@ struct BurnInProcessTests {
         #expect(kill(pid, 0) == -1 && errno == ESRCH)
     }
 
-    // The "bad" durations (a grandchild holding the pipe for 10 s, a child
-    // ignoring SIGTERM until a 20 s alarm) sit far above the bounds, because
-    // a loaded 3-core CI runner can delay the 100 ms timeout's wake-up by
-    // seconds while the parallel suite runs.
+    // The "bad" durations (a grandchild holding the pipe for 30 s, a child
+    // ignoring SIGTERM until a 60 s alarm) sit far above the 15 s bounds: a
+    // CPU-saturated 3-core CI runner has delayed the 100 ms timeout's
+    // wake-up by 5 s while the parallel suite runs, and a missing timeout
+    // would still blow through the bound.
     @Test func preflightDoesNotWaitForAnInheritedPipe() async {
         let start = ContinuousClock.now
         let output = await BurnInService.runCapturingOutput(
             arguments: [
                 "/usr/bin/python3", "-c",
-                "import os, time; pid = os.fork(); time.sleep(10) if pid == 0 else None; os._exit(0)",
+                "import os, time; pid = os.fork(); time.sleep(30) if pid == 0 else None; os._exit(0)",
             ], timeout: .milliseconds(100))
         #expect(output == nil)
-        #expect(ContinuousClock.now - start < .seconds(5))
+        #expect(ContinuousClock.now - start < .seconds(15))
     }
 
     @Test func preflightTimeoutBoundsAnUnresponsiveChild() async {
@@ -155,11 +156,11 @@ struct BurnInProcessTests {
         let output = await BurnInService.runCapturingOutput(
             arguments: [
                 "/usr/bin/python3", "-c",
-                "import signal, time; signal.alarm(20); signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)",
+                "import signal, time; signal.alarm(60); signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(90)",
             ], timeout: .milliseconds(100))
         let elapsed = ContinuousClock.now - start
         print("AUDIT12 timeout_seconds=\(elapsed)")
         #expect(output == nil)
-        #expect(elapsed < .seconds(5))
+        #expect(elapsed < .seconds(15))
     }
 }

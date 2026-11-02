@@ -153,7 +153,11 @@ impl ModelStore {
             std::fs::remove_file(&path)?;
         }
         let part = self.dir.join(format!("{}.part", artifact.name));
-        download_resumable(&source_url(artifact), &part, artifact.byte_count, cancel, on_progress)?;
+        // A complete part means an earlier run finished downloading but was
+        // stopped while hashing: verify it rather than fetching it again.
+        if std::fs::metadata(&part).map(|m| m.len() != artifact.byte_count).unwrap_or(true) {
+            download_resumable(&source_url(artifact), &part, artifact.byte_count, cancel, on_progress)?;
+        }
         on_progress(ModelProgress::Verifying);
         if sha256_file(&part, cancel)? != artifact.sha256 {
             let _ = std::fs::remove_file(&part);
@@ -221,8 +225,8 @@ fn download_resumable(
     on_progress: &mut dyn FnMut(ModelProgress),
 ) -> Result<(), ModelError> {
     let mut have = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
-    if have >= expected {
-        // Oversized or complete-but-unverified leftovers restart cleanly.
+    if have > expected {
+        // An oversized leftover cannot be resumed; start over.
         std::fs::remove_file(part)?;
         have = 0;
     }
@@ -300,6 +304,23 @@ mod tests {
         assert!(store.is_installed(&fake));
         store.remove(&fake).unwrap();
         assert!(!store.is_installed(&fake));
+    }
+
+    #[test]
+    fn complete_part_is_verified_instead_of_redownloaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ModelStore::new(dir.path());
+        // Real catalog entry, but the network would fail in tests: success
+        // proves no download was attempted for a complete part.
+        let tiny = artifact("tiny").unwrap();
+        let part = dir.path().join(format!("{}.part", tiny.name));
+        let f = File::create(&part).unwrap();
+        f.set_len(tiny.byte_count).unwrap();
+        let err = store.ensure_installed("tiny", &AtomicBool::new(false), &mut |_| {}).unwrap_err();
+        // Zero bytes do not match the real hash, so it fails the check (and
+        // is deleted) rather than reaching the network.
+        assert!(matches!(err, ModelError::ChecksumMismatch), "{err}");
+        assert!(!part.exists());
     }
 
     #[test]

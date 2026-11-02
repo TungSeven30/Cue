@@ -94,7 +94,9 @@ pub fn extract_with_ffmpeg(
     cancel: &AtomicBool,
     on_progress: &mut dyn FnMut(f64),
 ) -> Result<(), AudioError> {
-    let temp = destination.with_extension(format!("partial-{}", std::process::id()));
+    // One stable temp name per destination, so an interrupted run's leftover
+    // is overwritten by the next attempt instead of piling up.
+    let temp = partial_path(destination);
     let mut child = background_command(ffmpeg)
         .args(["-y", "-nostdin", "-hide_banner", "-loglevel", "error", "-progress", "pipe:1", "-i"])
         .arg(source)
@@ -147,6 +149,12 @@ pub fn extract_with_ffmpeg(
     Ok(())
 }
 
+fn partial_path(destination: &Path) -> PathBuf {
+    let mut name = destination.as_os_str().to_owned();
+    name.push(".partial");
+    PathBuf::from(name)
+}
+
 /// Duration in seconds from ffmpeg's banner (no ffprobe needed).
 fn probe_duration(ffmpeg: &Path, source: &Path) -> Option<f64> {
     let out = background_command(ffmpeg)
@@ -169,6 +177,7 @@ pub fn parse_ffmpeg_duration(banner: &str) -> Option<f64> {
 /// Delete least-recently-modified WAVs until the cache fits `limit`, never
 /// touching the one just produced.
 pub fn prune_cache(dir: &Path, keep: &Path, limit: u64) {
+    remove_stale_partials(dir, Duration::from_secs(6 * 3600));
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     let mut files: Vec<(PathBuf, u64, SystemTime)> = entries
         .filter_map(Result::ok)
@@ -189,6 +198,23 @@ pub fn prune_cache(dir: &Path, keep: &Path, limit: u64) {
         }
         if std::fs::remove_file(&path).is_ok() {
             total -= len;
+        }
+    }
+}
+
+/// Delete extraction leftovers (a killed ffmpeg, a crash) older than `age`;
+/// anything newer may still be in progress.
+fn remove_stale_partials(dir: &Path, age: Duration) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let now = SystemTime::now();
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if !path.extension().is_some_and(|x| x == "partial") {
+            continue;
+        }
+        let old = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| now.duration_since(t).ok()).is_some_and(|d| d >= age);
+        if old {
+            let _ = std::fs::remove_file(path);
         }
     }
 }
@@ -272,6 +298,18 @@ mod tests {
         prune_cache(dir.path(), &keep, 150);
         assert!(!old.exists());
         assert!(keep.exists());
+    }
+
+    #[test]
+    fn leftover_partials_reuse_one_name_and_stale_ones_are_pruned() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("abc.wav");
+        assert_eq!(partial_path(&wav), dir.path().join("abc.wav.partial"));
+        std::fs::write(partial_path(&wav), b"x").unwrap();
+        remove_stale_partials(dir.path(), Duration::from_secs(3600));
+        assert!(partial_path(&wav).exists(), "a fresh partial may still be in progress");
+        remove_stale_partials(dir.path(), Duration::ZERO);
+        assert!(!partial_path(&wav).exists());
     }
 
     #[test]

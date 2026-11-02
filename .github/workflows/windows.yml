@@ -1,0 +1,107 @@
+name: Windows
+
+on:
+  push:
+    branches: [master]
+    paths: ["windows/**", ".github/workflows/windows.yml"]
+  pull_request:
+    paths: ["windows/**", ".github/workflows/windows.yml"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: windows
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      CARGO_TERM_COLOR: always
+      CUE_HOME: ${{ github.workspace }}/.cue-home
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
+
+      - name: ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+
+      - name: ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Formatting
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Unit tests
+        run: cargo test --workspace
+
+      - name: Download the tiny model through Cue's own downloader
+        run: cargo run --release -p cue-cli -- models download tiny
+
+      - name: Real transcription test
+        shell: bash
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/jfk.wav" https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.7.2/samples/jfk.wav
+          CUE_TEST_MODEL="$CUE_HOME/models/ggml-tiny.bin" CUE_TEST_WAV="$RUNNER_TEMP/jfk.wav" \
+            cargo test --release -p cue-engine -- --nocapture
+
+      - name: CLI end to end (video in, subtitles out)
+        shell: bash
+        run: |
+          ffmpeg -loglevel error -y -f lavfi -i color=c=black:s=320x240:d=11 -i "$RUNNER_TEMP/jfk.wav" \
+            -shortest -c:v libx264 -c:a aac "$RUNNER_TEMP/jfk.mp4"
+          cargo run --release -p cue-cli -- doctor
+          cargo run --release -p cue-cli -- transcribe "$RUNNER_TEMP/jfk.mp4" -m tiny -l en -f srt,vtt,json --stream
+          cat "$RUNNER_TEMP/jfk.srt"
+          grep -qi "country" "$RUNNER_TEMP/jfk.srt"
+          head -1 "$RUNNER_TEMP/jfk.vtt" | grep -q WEBVTT
+
+  vulkan:
+    name: GPU build (Vulkan, Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      # The Vulkan shader generator nests a CMake project deep under the
+      # target dir; MSBuild's file tracker fails past the 260-char path limit.
+      CARGO_TARGET_DIR: C:/t
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Vulkan SDK (build-time only; users need just a GPU driver)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe -OutFile "$env:RUNNER_TEMP\vulkan-sdk.exe"
+          & "$env:RUNNER_TEMP\vulkan-sdk.exe" --root C:\VulkanSDK --accept-licenses --default-answer --confirm-command install
+          "VULKAN_SDK=C:\VulkanSDK" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "C:\VulkanSDK\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Release build with Vulkan
+        run: cargo build --release -p cue-cli --features vulkan
+
+      - name: Smoke test
+        run: |
+          C:/t/release/cue.exe --version
+          C:/t/release/cue.exe models
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cue-cli-windows-x64-vulkan
+          path: C:/t/release/cue.exe

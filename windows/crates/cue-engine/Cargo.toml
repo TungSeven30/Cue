@@ -1,0 +1,19 @@
+[package]
+name = "cue-engine"
+description = "Built-in whisper.cpp engine for Cue on Windows (CPU by default, Vulkan or CUDA by feature)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# GPU backends. Vulkan covers NVIDIA, AMD and Intel GPUs and is what the
+# Windows release ships; it needs the Vulkan SDK at build time only.
+vulkan = ["whisper-rs/vulkan"]
+cuda = ["whisper-rs/cuda"]
+
+[dependencies]
+cue-core.workspace = true
+thiserror.workspace = true
+whisper-rs = "0.16"

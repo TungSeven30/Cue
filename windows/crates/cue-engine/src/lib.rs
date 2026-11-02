@@ -224,8 +224,19 @@ fn run_chunk(
         let segment = map_segment(starting_id + data.segment as i64, data.start_timestamp, data.end_timestamp, &data.text, offset);
         (segment_cb.lock().unwrap().on_segments)(vec![segment]);
     });
-    let abort = cancel.clone();
-    params.set_abort_callback_safe(move || abort.load(Ordering::Relaxed));
+    // whisper-rs 0.16's `set_abort_callback_safe` reads its boxed closure
+    // back as the wrong type, so whisper.cpp sees a garbage "abort" answer
+    // and fails the encode (-6). Point the raw callback at the cancel flag
+    // instead; `cancel` outlives `state.full` below.
+    unsafe extern "C" fn abort_trampoline(user_data: *mut std::ffi::c_void) -> bool {
+        // SAFETY: user_data is the AtomicBool inside `cancel`, alive for the whole call.
+        unsafe { (*(user_data as *const AtomicBool)).load(Ordering::Relaxed) }
+    }
+    // SAFETY: the pointer stays valid until `state.full` returns.
+    unsafe {
+        params.set_abort_callback(Some(abort_trampoline));
+        params.set_abort_callback_user_data(Arc::as_ptr(cancel) as *mut std::ffi::c_void);
+    }
 
     if let Err(e) = state.full(params, samples) {
         if cancel.load(Ordering::Relaxed) {

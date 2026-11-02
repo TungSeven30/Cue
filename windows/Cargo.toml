@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["crates/cue-core", "crates/cue-engine", "crates/cue-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/TungSeven30/Cue"
+rust-version = "1.85"
+
+[workspace.dependencies]
+cue-core = { path = "crates/cue-core" }
+cue-engine = { path = "crates/cue-engine" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -45,6 +45,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Secrets** live in the macOS Keychain via `KeychainStore` (`Sources/Support/KeychainStore.swift`) — never in job files, settings plists, or exports.
 
+**Windows app (`windows/`)** is a separate Rust workspace, not a port of the Swift sources: `cue-core` (cleanup, chunk planning, subtitle I/O, ffmpeg audio cache, model downloader), `cue-engine` (whisper.cpp via whisper-rs, Vulkan/CUDA by feature) and `cue-cli` (`cue.exe`). It mirrors the Swift behavior and data contracts module by module (each Rust module names its Swift counterpart), so a behavior change on one side usually needs the same change on the other. Run `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings` inside `windows/`; CI is `.github/workflows/windows.yml`. Roadmap: `windows/PLAN.md`.
+
 **Layout:**
 - `Sources/App` — app entry point and menu commands
 - `Sources/Stores` — `AppModel` (central state) and `JobStore` (persistence)

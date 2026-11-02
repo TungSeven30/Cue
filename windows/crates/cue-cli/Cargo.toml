@@ -1,0 +1,23 @@
+[package]
+name = "cue-cli"
+description = "Headless Cue for Windows: transcribe, export, convert, manage models"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "cue"
+path = "src/main.rs"
+
+[features]
+default = []
+vulkan = ["cue-engine/vulkan"]
+cuda = ["cue-engine/cuda"]
+
+[dependencies]
+cue-core.workspace = true
+cue-engine.workspace = true
+serde_json.workspace = true
+clap = { version = "4", features = ["derive"] }
+ctrlc = "3"

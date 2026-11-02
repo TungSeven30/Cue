@@ -75,6 +75,10 @@ jobs:
     name: GPU build (Vulkan, Windows)
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      # The Vulkan shader generator nests a CMake project deep under the
+      # target dir; MSBuild's file tracker fails past the 260-char path limit.
+      CARGO_TARGET_DIR: C:/t
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -94,10 +98,10 @@ jobs:
 
       - name: Smoke test
         run: |
-          target/release/cue.exe --version
-          target/release/cue.exe models
+          C:/t/release/cue.exe --version
+          C:/t/release/cue.exe models
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cue-cli-windows-x64-vulkan
-          path: windows/target/release/cue.exe
+          path: C:/t/release/cue.exe

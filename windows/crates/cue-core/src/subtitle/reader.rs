@@ -8,7 +8,7 @@ use unicode_normalization::UnicodeNormalization;
 /// A 20 MB "subtitle" is a mislabeled video; refuse it rather than read it.
 pub const MAX_FILE_SIZE: u64 = 20 * 1024 * 1024;
 /// 100 hours: longer than any real media, short enough to reject junk.
-const MAX_TIMESTAMP_SECONDS: f64 = 100.0 * 3600.0;
+pub const MAX_TIMESTAMP_SECONDS: f64 = 100.0 * 3600.0;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ReadError {

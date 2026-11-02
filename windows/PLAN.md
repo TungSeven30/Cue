@@ -47,10 +47,10 @@ installers, slow start, frequent antivirus false positives).
 
 ## Phases (one PR each)
 
-1. **Core + CLI** (this PR): cleanup, chunking, subtitle I/O, ffmpeg audio
+1. **Core + CLI** (done): cleanup, chunking, subtitle I/O, ffmpeg audio
    cache, model download, whisper.cpp engine, `cue.exe`, Windows CI with a
    real tiny-model transcription and a Vulkan build.
-2. **Translation**: all seven providers over direct HTTPS, token-aware
+2. **Translation** (this PR): all seven providers over direct HTTPS, token-aware
    batching, schema-validated responses, retries and splitting, resume of
    partial translations, credentials in Credential Manager. Adds
    `cue translate` and `cue pipeline`.

@@ -43,7 +43,22 @@ cue models                       # catalog + what is installed
 cue transcribe movie.mkv         # writes movie.srt next to it
 cue transcribe a.mp4 b.mp4 -l ja -f srt,vtt -o subs --stream
 cue convert old.srt --to vtt
+
+cue keys set openai                          # paste a key; saved in Credential Manager
+cue translate movie.srt --to Vietnamese      # movie.translated.vietnamese.srt
+cue translate movie.srt --to ja -t claude-sonnet-5 --bilingual
+cue translate movie.srt -t local/qwen3 --local-endpoint http://localhost:1234
+cue pipeline movie.mkv --to German -f srt,vtt   # transcribe, then translate
 ```
+
+Translation picks the provider from the model name, like the Mac app:
+`claude*` is Anthropic, `gemini*` Google, `openrouter/`, `groq/`, `cerebras/`
+and `local/` route by prefix, anything else is OpenAI. Keys come from
+Windows Credential Manager (`cue keys set|list|remove`), then
+`CUE_<PROVIDER>_API_KEY`, then the provider's usual variable such as
+`OPENAI_API_KEY`. `CUE_TRANSLATION_MODEL` and `CUE_LOCAL_ENDPOINT` set
+defaults. An interrupted translation leaves a `.partial.json` beside the
+output and the next run picks up where it stopped.
 
 The default model is Large v3 Turbo (quantized), downloaded on first use
 from the same pinned Hugging Face revision the Mac app uses.
@@ -56,3 +71,6 @@ from the same pinned Hugging Face revision the Mac app uses.
   resume points agree across backends.
 - All backends' output goes through the same cleanup before export.
 - Subtitle files are written atomically (temp file, then rename).
+- Translation prompts, JSON schemas, batch sizes and output names match
+  `TranslationService` and `ExportCoordinator`; API keys never touch disk
+  outside Credential Manager.

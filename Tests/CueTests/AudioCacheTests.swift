@@ -22,7 +22,7 @@ struct AudioCacheTests {
     // Empirical parity check against the Python helper's scheme. The file
     // lives under /tmp (a symlink to /private/tmp) so this also proves the
     // Swift side resolves symlinks the same way Python's Path.resolve() does.
-    @Test func cacheKeyMatchesPythonHelperDigest() throws {
+    @Test func cacheKeyMatchesPythonHelperDigest() async throws {
         let file = URL(fileURLWithPath: "/tmp/parity-\(UUID().uuidString).bin")
         try Data([9, 8, 7]).write(to: file)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -37,19 +37,10 @@ struct AudioCacheTests {
             payload = f"{os.path.realpath(p)}|{st.st_size}|{st.st_mtime_ns}|preprocess=False"
             print(hashlib.sha256(payload.encode()).hexdigest()[:24])
             """
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        process.arguments = ["-c", script, file.path]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        try process.run()
-        process.waitUntilExit()
-        let pythonDigest = String(
-            data: pipe.fileHandleForReading.readDataToEndOfFile(),
-            encoding: .utf8
-        )?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let process = try await TestProcess.run("/usr/bin/python3", ["-c", script, file.path])
+        let pythonDigest = process.stdoutText.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        #expect(process.terminationStatus == 0)
+        #expect(process.status == 0)
         #expect(pythonDigest == swiftDigest)
     }
 

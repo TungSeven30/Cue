@@ -16,20 +16,16 @@ import Testing
     }
 
     /// Two seconds of a 440 Hz tone muxed into Matroska by ffmpeg itself.
-    private func makeMKV(in dir: URL) throws -> URL {
+    private func makeMKV(in dir: URL) async throws -> URL {
         let mkv = dir.appendingPathComponent("tone.mkv")
-        let make = Process()
-        make.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        make.environment = ProcessEnvironment.withToolPaths()
-        make.arguments = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
-            "-c:a", "aac", mkv.path,
-        ]
-        make.standardError = FileHandle.nullDevice
-        try make.run()
-        make.waitUntilExit()
-        try #require(make.terminationStatus == 0, "ffmpeg could not build the MKV fixture")
+        let make = try await TestProcess.run(
+            "/usr/bin/env",
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+                "-c:a", "aac", mkv.path,
+            ], environment: ProcessEnvironment.withToolPaths())
+        try #require(make.status == 0, "ffmpeg could not build the MKV fixture")
         return mkv
     }
 
@@ -55,7 +51,7 @@ import Testing
         guard hasFFmpeg else { return }
         let dir = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let mkv = try makeMKV(in: dir)
+        let mkv = try await makeMKV(in: dir)
         await #expect(throws: (any Error).self) {
             try await AudioExtractor.extract(from: mkv, to: dir.appendingPathComponent("native-out.wav"))
         }
@@ -65,7 +61,7 @@ import Testing
         guard hasFFmpeg else { return }
         let dir = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let mkv = try makeMKV(in: dir)
+        let mkv = try await makeMKV(in: dir)
         let out = dir.appendingPathComponent("out.wav")
 
         let route = try await AudioSourceExtractor.extract(from: mkv, to: out, hasFFmpeg: true, progress: nil)
@@ -130,17 +126,13 @@ import Testing
         defer { try? FileManager.default.removeItem(at: dir) }
         // A long synthetic source so ffmpeg is still running when cancelled.
         let long = dir.appendingPathComponent("long.mkv")
-        let make = Process()
-        make.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        make.environment = ProcessEnvironment.withToolPaths()
-        make.arguments = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "lavfi", "-i", "sine=frequency=440:duration=1200", "-c:a", "aac", long.path,
-        ]
-        make.standardError = FileHandle.nullDevice
-        try make.run()
-        make.waitUntilExit()
-        try #require(make.terminationStatus == 0)
+        let make = try await TestProcess.run(
+            "/usr/bin/env",
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=1200", "-c:a", "aac", long.path,
+            ], environment: ProcessEnvironment.withToolPaths())
+        try #require(make.status == 0)
         let out = dir.appendingPathComponent("out.wav")
 
         let task = Task {

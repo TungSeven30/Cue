@@ -10,7 +10,7 @@ struct BackendScriptTests {
     // plain extraction, the unfiltered result must be cached under the
     // preprocess=False key — never under preprocess=True, which would poison
     // future Clean-audio runs for that file.
-    @Test func fallbackExtractionIsNotCachedUnderPreprocessKey() throws {
+    @Test func fallbackExtractionIsNotCachedUnderPreprocessKey() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("backend-script-\(UUID().uuidString)")
         let binDir = root.appendingPathComponent("bin")
@@ -54,25 +54,16 @@ struct BackendScriptTests {
             print("FALSEKEY", m.audio_cache_path(inp, False))
             """
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        process.arguments = ["-c", driver, script.path, input.path, work.path]
-        process.environment = [
-            "PATH": "\(binDir.path):/usr/bin:/bin",
-            "HOME": home.path,
-        ]
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-        try process.run()
-        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let errData = stderr.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        let process = try await TestProcess.run(
+            "/usr/bin/python3", ["-c", driver, script.path, input.path, work.path],
+            environment: [
+                "PATH": "\(binDir.path):/usr/bin:/bin",
+                "HOME": home.path,
+            ])
 
-        let output = String(decoding: outData, as: UTF8.self)
-        let diagnostics = String(decoding: errData, as: UTF8.self)
-        #expect(process.terminationStatus == 0, "helper failed: \(diagnostics)")
+        let output = process.stdoutText
+        let diagnostics = process.stderrText
+        #expect(process.status == 0, "helper failed: \(diagnostics)")
 
         var values: [String: String] = [:]
         for line in output.split(separator: "\n") {

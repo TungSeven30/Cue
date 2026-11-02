@@ -20,16 +20,12 @@ import Testing
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let aiff = dir.appendingPathComponent("fixture.aiff")
-        let say = Process()
-        say.executableURL = URL(fileURLWithPath: "/usr/bin/say")
-        say.arguments = ["-o", aiff.path, "This is a streaming test. The quick brown fox jumps over the lazy dog. Segments should arrive incrementally."]
-        do {
-            try say.run()
-        } catch {
-            return
-        }
-        say.waitUntilExit()
-        guard say.terminationStatus == 0 else { return }
+        guard
+            let say = try? await TestProcess.run(
+                "/usr/bin/say",
+                ["-o", aiff.path, "This is a streaming test. The quick brown fox jumps over the lazy dog. Segments should arrive incrementally."]),
+            say.status == 0
+        else { return }
 
         let wav = dir.appendingPathComponent("fixture.wav")
         try await AudioExtractor.extract(from: aiff, to: wav)

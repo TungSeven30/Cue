@@ -103,7 +103,8 @@ import Testing
             ("qwen3-asr", "Qwen/Qwen3-ASR-1.7B", "mlx_qwen3_asr"),
             ("faster-whisper", "large-v3-turbo", "faster_whisper"),
         ]
-        for entry in backends where BenchmarkFixtures.pythonModuleIsImportable(entry.module) {
+        for entry in backends {
+            guard await BenchmarkFixtures.pythonModuleIsImportable(entry.module) else { continue }
             let pool = PythonWorkerPool()
             let request = PythonJobRequest(
                 inputPath: wav.path, language: "en", qwenContext: "", model: entry.model, backend: entry.backend,
@@ -189,16 +190,10 @@ import Testing
 }
 
 enum BenchmarkFixtures {
-    static func pythonModuleIsImportable(_ module: String) -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.environment = ProcessEnvironment.withToolPaths()
-        process.arguments = ["python3", "-c", "import \(module)"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return false }
-        process.waitUntilExit()
-        return process.terminationStatus == 0
+    static func pythonModuleIsImportable(_ module: String) async -> Bool {
+        let process = try? await TestProcess.run(
+            "/usr/bin/env", ["python3", "-c", "import \(module)"], environment: ProcessEnvironment.withToolPaths())
+        return process?.status == 0
     }
 
     /// Runs the embedded helper once in the pre-existing one-shot form and
@@ -257,14 +252,12 @@ enum BenchmarkFixtures {
             .appendingPathComponent("bench-fixture-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let aiff = dir.appendingPathComponent("fixture.aiff")
-        let say = Process()
-        say.executableURL = URL(fileURLWithPath: "/usr/bin/say")
-        say.arguments = [
-            "-o", aiff.path,
-            "The quick brown fox jumps over the lazy dog. This is a benchmark clip for the transcription engine. We repeat this sentence so the clip is long enough to matter. The quick brown fox jumps over the lazy dog again, and the engine keeps listening.",
-        ]
-        try say.run()
-        say.waitUntilExit()
+        _ = try await TestProcess.run(
+            "/usr/bin/say",
+            [
+                "-o", aiff.path,
+                "The quick brown fox jumps over the lazy dog. This is a benchmark clip for the transcription engine. We repeat this sentence so the clip is long enough to matter. The quick brown fox jumps over the lazy dog again, and the engine keeps listening.",
+            ])
         let wav = dir.appendingPathComponent("fixture.wav")
         try await AudioExtractor.extract(from: aiff, to: wav)
         guard repeats > 1 || gapSeconds > 0 else { return wav }

@@ -569,7 +569,13 @@ impl Runtime {
                 if let Some(id) = jobs::next_gpu_job(&state.jobs, false, false).map(|j| j.id.clone()) {
                     let cancel = Arc::new(AtomicBool::new(false));
                     let job = state.jobs.iter_mut().find(|j| j.id == id).expect("picked from the list");
-                    job.settings = apply_overrides(settings.snapshot(), &job.overrides);
+                    // Keep the fields Windows doesn't manage (Mac-only
+                    // settings ride in `extra`) so a re-run doesn't drop them.
+                    let mut fresh = apply_overrides(settings.snapshot(), &job.overrides);
+                    for (key, value) in std::mem::take(&mut job.settings.extra) {
+                        fresh.extra.entry(key).or_insert(value);
+                    }
+                    job.settings = fresh;
                     job.status = JobStatus::Transcribing;
                     job.progress = JobProgress::new(JobStage::Preflight, "Starting…", None);
                     job.transcription_started_at = Some(Utc::now());
@@ -601,6 +607,7 @@ impl Runtime {
         for (job, cancel, is_transcription) in started {
             self.inner.persister.save(&job);
             self.emit(Event::Job { job: Box::new(JobSummary::of(&job)) });
+            let id = job.id.clone();
             let runtime = self.clone();
             let name = if is_transcription { "cue-transcribe" } else { "cue-translate" };
             let spawned = std::thread::Builder::new().name(name.into()).spawn(move || {
@@ -611,7 +618,18 @@ impl Runtime {
                 }
             });
             if let Err(e) = spawned {
-                self.emit(Event::Notice { message: format!("Could not start a worker thread: {e}") });
+                // Nothing will run the job, so free its slot rather than wedge the queue.
+                let stage = if is_transcription { JobStage::Transcribing } else { JobStage::Translating };
+                self.update(&id, true, true, |job| failed_job(job, stage, &format!("Could not start a worker thread: {e}")));
+                let event = {
+                    let mut state = self.lock();
+                    let slot = if is_transcription { &mut state.transcribing } else { &mut state.translating };
+                    if slot.as_ref().is_some_and(|r| r.id == id) {
+                        *slot = None;
+                    }
+                    queue_event(&state)
+                };
+                self.emit(event);
             }
         }
     }

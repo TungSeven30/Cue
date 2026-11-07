@@ -268,3 +268,20 @@ fn jobs_running_at_quit_load_as_canceled() {
     });
     assert_eq!(runtime.job(&id).unwrap().status, JobStatus::Canceled);
 }
+
+#[test]
+fn transcribing_a_mac_job_keeps_its_mac_only_settings() {
+    // A queued job from the Mac, carrying settings Windows doesn't manage.
+    let dir = tempfile::tempdir().unwrap();
+    let media = dir.path().join("Movie.mp4");
+    std::fs::write(&media, b"video").unwrap();
+    let mut job = Job::new(&media, Settings::default().snapshot(), Utc::now());
+    job.settings.extra.insert("vadFilter".into(), serde_json::json!(true));
+    job.status = JobStatus::Queued;
+    JobStore::new(dir.path().join("jobs")).save(&job).unwrap();
+
+    let h = harness_in(dir, Settings::default());
+    let done = wait_for(&h, &job.id, JobStatus::TranscriptionComplete);
+    assert_eq!(done.settings.extra.get("vadFilter"), Some(&serde_json::json!(true)));
+    assert_eq!(done.settings.whisper_backend, "whisper-cpp");
+}

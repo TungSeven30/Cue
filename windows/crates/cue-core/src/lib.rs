@@ -6,10 +6,12 @@
 
 pub mod audio;
 pub mod chunk_planner;
+pub mod export;
 pub mod models;
 pub mod paths;
 pub mod postprocess;
 pub mod segment;
 pub mod subtitle;
+pub mod translation;
 
 pub use segment::Segment;

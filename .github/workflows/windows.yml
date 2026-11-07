@@ -71,6 +71,12 @@ jobs:
           grep -qi "country" "$RUNNER_TEMP/jfk.srt"
           head -1 "$RUNNER_TEMP/jfk.vtt" | grep -q WEBVTT
 
+      - name: Translate end to end (fake LLM server, interrupted then resumed)
+        shell: bash
+        run: |
+          cargo build --release -p cue-cli
+          bash scripts/e2e_translate.sh target/release/cue
+
   vulkan:
     name: GPU build (Vulkan, Windows)
     runs-on: windows-latest

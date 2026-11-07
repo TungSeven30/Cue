@@ -300,7 +300,14 @@ pub fn fingerprint(path: &std::path::Path) -> String {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0);
-    format!("{}|{size}|{modified}", path.to_string_lossy())
+    fingerprint_of(&path.to_string_lossy(), size, modified)
+}
+
+/// The fingerprint string itself. Swift prints a whole-number `Double` as
+/// `1.0`, so the seconds always carry a decimal point.
+pub fn fingerprint_of(path: &str, size: u64, modified_secs: f64) -> String {
+    let seconds = if modified_secs.fract() == 0.0 { format!("{modified_secs:.1}") } else { format!("{modified_secs}") };
+    format!("{path}|{size}|{seconds}")
 }
 
 /// Swift's `.iso8601` strategy: whole seconds with a `Z`. It rejects

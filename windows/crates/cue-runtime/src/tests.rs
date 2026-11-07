@@ -60,6 +60,10 @@ struct Harness {
 }
 
 fn harness_in(dir: tempfile::TempDir, settings: Settings) -> Harness {
+    harness_with(dir, settings, Tools::default())
+}
+
+fn harness_with(dir: tempfile::TempDir, settings: Settings, tools: Tools) -> Harness {
     settings.save(&dir.path().join("settings.json")).unwrap();
     let media = dir.path().join("Movie.mp4");
     std::fs::write(&media, b"video").unwrap();
@@ -74,6 +78,7 @@ fn harness_in(dir: tempfile::TempDir, settings: Settings) -> Harness {
         emit: Arc::new(move |e| {
             let _ = tx.lock().unwrap().send(e);
         }),
+        tools,
     });
     assert!(failures.is_empty(), "{failures:?}");
     Harness { runtime, events, transcriber, dir, media }
@@ -129,6 +134,7 @@ fn added_file_is_transcribed_translated_and_saved() {
         transport: Arc::new(FakeLlm),
         keys: Arc::new(|_| None),
         emit: Arc::new(|_| {}),
+        tools: Tools::default(),
     });
     assert!(failures.is_empty());
     assert_eq!(again.job(&id).unwrap().translated_segments.len(), 2);
@@ -274,6 +280,7 @@ fn jobs_running_at_quit_load_as_canceled() {
         transport: Arc::new(FakeLlm),
         keys: Arc::new(|_| None),
         emit: Arc::new(|_| {}),
+        tools: Tools::default(),
     });
     assert_eq!(runtime.job(&id).unwrap().status, JobStatus::Canceled);
 }
@@ -293,4 +300,207 @@ fn transcribing_a_mac_job_keeps_its_mac_only_settings() {
     let done = wait_for(&h, &job.id, JobStatus::TranscriptionComplete);
     assert_eq!(done.settings.extra.get("vadFilter"), Some(&serde_json::json!(true)));
     assert_eq!(done.settings.whisper_backend, "whisper-cpp");
+}
+
+/// Polls `check` for up to `seconds`.
+fn eventually<T>(seconds: u64, what: &str, mut check: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    loop {
+        if let Some(value) = check() {
+            return value;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn watched_files_queue_once_settled_and_run_once() {
+    let h = harness(Settings { auto_export_sidecars: false, auto_start_added_jobs: false, ..local_settings() });
+    let folder = h.dir.path().join("Inbox");
+    std::fs::create_dir_all(folder.join("Season 1")).unwrap();
+    h.runtime.set_paused(true);
+    let id = h.runtime.add_watch_folder(&folder).unwrap();
+    assert!(h.runtime.add_watch_folder(&folder).is_err(), "a folder is watched once");
+    h.runtime.set_watch_folder(&id, true, serde_json::json!({"translationTargetLanguage": "French", "sourceLanguage": ""})).unwrap();
+
+    let clip = folder.join("Season 1").join("Episode.mkv");
+    std::fs::write(&clip, b"video").unwrap();
+    let job =
+        eventually(15, "the watched file to queue", || h.runtime.jobs().into_iter().find(|j| j.source_path == clip.to_string_lossy()));
+    let job = h.runtime.job(&job.id).unwrap();
+    assert_eq!(job.origin, JobOrigin::WatchFolder);
+    assert_eq!(job.status, JobStatus::Queued, "ingest never clears the pause");
+    assert!(job.log.starts_with("Picked up from the watch folder: "));
+    assert_eq!(job.overrides, serde_json::json!({"translationTargetLanguage": "French"}));
+    assert!(matches!(h.runtime.queue_state(), Event::Queue { paused: true, .. }));
+
+    h.runtime.set_paused(false);
+    let done = wait_for(&h, &job.id, JobStatus::TranscriptionComplete);
+    // Watch jobs always leave sidecars, whatever the global setting says.
+    let sidecar = folder.join("Season 1").join("Episode.original.srt");
+    eventually(10, "the sidecar", || sidecar.exists().then_some(()));
+    let ledger = h.dir.path().join("watch-ledger.json");
+    eventually(10, "the ledger entry", || {
+        let text = std::fs::read_to_string(&ledger).ok()?;
+        text.contains(&serde_json::to_string(&done.source_fingerprint).unwrap()).then_some(())
+    });
+    assert!(std::fs::read_to_string(&ledger).unwrap().contains("success"));
+
+    // Removed from the list, the file stays done: the ledger blocks it.
+    h.runtime.remove(&job.id).unwrap();
+    std::fs::write(folder.join("notes.txt"), b"wake the watcher").unwrap();
+    std::thread::sleep(Duration::from_secs(4));
+    assert!(h.runtime.jobs().is_empty(), "a finished file must not queue again");
+
+    // Clearing the folder's history runs it again.
+    h.runtime.clear_watch_history(&id).unwrap();
+    eventually(15, "the file to queue again", || h.runtime.jobs().into_iter().next());
+
+    h.runtime.remove_watch_folder(&id).unwrap();
+    assert!(h.runtime.watch_folders().is_empty());
+    assert!(h.runtime.settings().watch_folders.is_empty());
+}
+
+#[test]
+fn update_settings_keeps_the_watch_folders() {
+    let h = harness(local_settings());
+    let folder = h.dir.path().join("Inbox");
+    std::fs::create_dir_all(&folder).unwrap();
+    h.runtime.add_watch_folder(&folder).unwrap();
+    h.runtime.update_settings(Settings { auto_translate: true, ..h.runtime.settings() }.clone_without_folders()).unwrap();
+    assert_eq!(h.runtime.settings().watch_folders.len(), 1);
+    assert!(h.runtime.settings().auto_translate);
+}
+
+impl Settings {
+    fn clone_without_folders(mut self) -> Settings {
+        self.watch_folders.clear();
+        self
+    }
+}
+
+#[cfg(unix)]
+fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join(name);
+    std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+/// A stand-in yt-dlp: the output template is its second-to-last argument.
+#[cfg(unix)]
+const FAKE_YTDLP: &str = r#"
+for last; do :; done
+out=""; prev=""
+for a in "$@"; do if [ "$prev" = "-o" ]; then out="$a"; fi; prev="$a"; done
+dir=$(dirname "$out")
+case "$last" in
+  *fail*) echo "ERROR: Unsupported URL: $last" >&2; exit 1 ;;
+  *slow*) sleep 30 ;;
+esac
+echo "[download] Destination: $dir/Clip.f1.mp4"
+echo "[download]  50.0% of 1.00MiB"
+printf 'a' > "$dir/Clip.f1.mp4"
+printf 'merged' > "$dir/Clip.mp4"
+echo "[Merger] Merging formats into \"$dir/Clip.mp4\""
+"#;
+
+#[cfg(unix)]
+#[test]
+fn urls_download_into_jobs_and_failures_say_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let ytdlp = script(dir.path(), "yt-dlp", FAKE_YTDLP);
+    let downloads = dir.path().join("Downloads");
+    let settings = Settings { download_folder: downloads.to_string_lossy().into(), auto_start_added_jobs: false, ..local_settings() };
+    let h = harness_with(dir, settings, Tools { ytdlp: Some(ytdlp), ffmpeg: None });
+
+    assert!(h.runtime.add_url("mailto:me@example.com").is_err());
+    let id = h.runtime.add_url(" <https://example.com/watch?v=1> ").unwrap();
+    let done =
+        eventually(10, "the download", || h.runtime.downloads().into_iter().find(|d| d.id == id && d.status != DownloadStatus::Running));
+    assert_eq!(done.status, DownloadStatus::Done, "{}", done.detail);
+    let job = h.runtime.job(done.job_id.as_deref().unwrap()).unwrap();
+    assert_eq!(job.origin, JobOrigin::Url);
+    assert_eq!(PathBuf::from(&job.source_path), downloads.join("Clip.mp4"));
+    assert_eq!(std::fs::read(&job.source_path).unwrap(), b"merged");
+    assert!(job.log.contains("Downloaded from https://example.com/watch?v=1"));
+    let leftovers: Vec<_> = std::fs::read_dir(&downloads).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert_eq!(leftovers.len(), 1, "staging folders are removed: {leftovers:?}");
+
+    // The same page again never overwrites the first file.
+    let again = h.runtime.add_url("https://example.com/watch?v=1").unwrap();
+    let second = eventually(10, "the second download", || {
+        h.runtime.downloads().into_iter().find(|d| d.id == again && d.status != DownloadStatus::Running)
+    });
+    assert_eq!(h.runtime.job(second.job_id.as_deref().unwrap()).unwrap().source_path, downloads.join("Clip-2.mp4").to_string_lossy());
+
+    let failing = h.runtime.add_url("https://example.com/fail").unwrap();
+    let failed = eventually(10, "the failure", || {
+        h.runtime.downloads().into_iter().find(|d| d.id == failing && d.status != DownloadStatus::Running)
+    });
+    assert_eq!(failed.status, DownloadStatus::Failed);
+    assert_eq!(failed.detail, "ERROR: Unsupported URL: https://example.com/fail");
+    h.runtime.dismiss_download(&failing).unwrap();
+
+    let slow = h.runtime.add_url("https://example.com/slow").unwrap();
+    assert!(h.runtime.busy());
+    assert!(h.runtime.dismiss_download(&slow).is_err());
+    h.runtime.cancel_download(&slow).unwrap();
+    let canceled =
+        eventually(10, "the cancel", || h.runtime.downloads().into_iter().find(|d| d.id == slow && d.status != DownloadStatus::Running));
+    assert_eq!(canceled.status, DownloadStatus::Canceled);
+    assert_eq!(std::fs::read_dir(&downloads).unwrap().count(), 2);
+}
+
+/// A stand-in ffmpeg that checks it was given subs.srt in its working
+/// folder and writes the output (its last argument).
+#[cfg(unix)]
+const FAKE_FFMPEG: &str = r#"
+for last; do :; done
+[ -f subs.srt ] || { echo "no subs.srt" >&2; exit 1; }
+grep -q "$CUE_FAKE_EXPECT" subs.srt || { echo "wrong subtitles" >&2; exit 1; }
+echo "  Duration: 00:00:10.00, start: 0.000000, bitrate: 1 kb/s" >&2
+printf 'frame=1 time=00:00:05.00 bitrate=1\r' >&2
+printf 'partial' > "$last"
+case "$last" in *broken*) echo "Error opening output" >&2; exit 1 ;; esac
+printf 'burned' > "$last"
+"#;
+
+#[cfg(unix)]
+#[test]
+fn burn_in_renders_a_copy_and_cleans_up_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let ffmpeg = script(dir.path(), "ffmpeg", FAKE_FFMPEG);
+    std::env::set_var("CUE_FAKE_EXPECT", "two");
+    let h = harness_with(dir, local_settings(), Tools { ytdlp: None, ffmpeg: Some(ffmpeg) });
+    let id = h.runtime.add_files(std::slice::from_ref(&h.media)).remove(0);
+    wait_for(&h, &id, JobStatus::TranscriptionComplete);
+    assert!(h.runtime.burn_in(&id, Document::Translated, TextSize::Medium, None).is_err(), "nothing translated yet");
+    assert!(h.runtime.burn_in(&id, Document::Original, TextSize::Small, Some(h.dir.path().join("movie.MP4"))).is_err());
+
+    let finish = |h: &Harness| -> BurnInState {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match h.events.recv_timeout(left) {
+                Ok(Event::BurnIn { state }) if !state.running => return state,
+                Ok(_) => {}
+                Err(_) => panic!("burn-in never finished"),
+            }
+        }
+    };
+    while h.events.try_recv().is_ok() {}
+    let output = h.runtime.burn_in(&id, Document::Original, TextSize::Large, None).unwrap();
+    assert_eq!(output, h.dir.path().join("Movie.subtitled.mp4"));
+    let state = finish(&h);
+    assert_eq!(state.error, None);
+    assert_eq!(std::fs::read(&output).unwrap(), b"burned");
+
+    let broken = h.dir.path().join("broken.mp4");
+    h.runtime.burn_in(&id, Document::Original, TextSize::Large, Some(broken.clone())).unwrap();
+    let state = finish(&h);
+    assert_eq!(state.error.as_deref(), Some("Error opening output"));
+    assert!(!broken.exists(), "partial output is deleted");
 }

@@ -7,17 +7,18 @@ pipeline in Rust and keeps the *contracts* identical. A subtitle, a model
 file, or a job transcript produced on one platform is byte-compatible with
 the other.
 
-Status: **phase 3 of 6**: the engine, the CLI (transcribe and translate) and
-the desktop app. See
+Status: **phase 4 of 6**: the engine, the CLI (transcribe and translate),
+the desktop app and its automation (watch folders, URL downloads, burn-in,
+tray, notifications). See
 [`PLAN.md`](PLAN.md) for the roadmap.
 
 ## Layout
 
 | Crate | What it is | macOS counterpart |
 |---|---|---|
-| `crates/cue-core` | Segments, transcript cleanup, silence-aware chunk planning, SRT/VTT/TXT/MD/JSON export and SRT/VTT import (with legacy-encoding detection), ffmpeg audio extraction + cache, model catalog and resumable, hash-verified downloader | `TranscriptionPostProcessor`, `TranscriptionChunkPlanner`, `SubtitleWriter`, `SubtitleReader`, `AudioCache`, `FFmpegAudioExtractor`, `ModelDownloader` |
+| `crates/cue-core` | Segments, transcript cleanup, silence-aware chunk planning, SRT/VTT/TXT/MD/JSON export and SRT/VTT import (with legacy-encoding detection), ffmpeg audio extraction + cache, model catalog and resumable, hash-verified downloader, watch-folder scanning and ledger, yt-dlp and burn-in argument building | `TranscriptionPostProcessor`, `TranscriptionChunkPlanner`, `SubtitleWriter`, `SubtitleReader`, `AudioCache`, `FFmpegAudioExtractor`, `ModelDownloader`, `WatchFolderScanEngine`, `WatchFolderLedger`, `MediaDownloadService`, `BurnInService` |
 | `crates/cue-engine` | Built-in whisper.cpp engine (CPU, or Vulkan/CUDA by feature), resident model cache, fresh state per chunk, streaming segments, cancel, resume | `WhisperCppEngine`, `WhisperModelCache` |
-| `crates/cue-runtime` | The app's engine room: job queue with one transcription slot and one translation slot, coalesced per-job saves, settings, per-job overrides, sidecar export, events for the UI | `AppModel`, `PipelineCoordinator`, `PipelineScheduler`, `JobRepository`, `ExportCoordinator` |
+| `crates/cue-runtime` | The app's engine room: job queue with one transcription slot and one translation slot, coalesced per-job saves, settings, per-job overrides, sidecar export, watch-folder threads, URL downloads, burn-in, events for the UI | `AppModel`, `PipelineCoordinator`, `PipelineScheduler`, `JobRepository`, `ExportCoordinator`, `WatchFolderService` |
 | `crates/cue-cli` | `cue.exe`: `transcribe`, `translate`, `pipeline`, `models`, `convert`, `keys`, `doctor` | `Sources/CLI` |
 | `crates/cue-app` | `cue-desktop.exe`: Tauri shell over `cue-runtime`; the UI is plain HTML/CSS/JS in `ui/` with no build step | `Sources/Views` |
 
@@ -46,7 +47,11 @@ Video preview plays what WebView2 can decode (MP4/H.264, WebM); other
 containers such as MKV still transcribe and export, just without a preview.
 
 At runtime Cue needs `ffmpeg.exe` next to `cue.exe` or on `PATH` (the
-installer will bundle it). Data lives in `%LOCALAPPDATA%\Cue` (override with
+installer will bundle it). Burn-in needs an ffmpeg built with libass (the
+gyan.dev "full" builds have it). "Add from URL" needs yt-dlp: Settings can
+fetch the official release from GitHub (checked against its published
+SHA-256 sums) into `%LOCALAPPDATA%\Cue\tools`, or put `yt-dlp.exe` next to
+Cue or on `PATH`. Data lives in `%LOCALAPPDATA%\Cue` (override with
 `CUE_HOME`).
 
 ## Use
@@ -76,6 +81,24 @@ output and the next run picks up where it stopped.
 
 The default model is Large v3 Turbo (quantized), downloaded on first use
 from the same pinned Hugging Face revision the Mac app uses.
+
+## Desktop app automation
+
+- **Watch folders** (Settings): new media anywhere under a folder is queued
+  once its size holds still for two seconds, with that folder's language
+  and model overrides. A file that finished or failed is remembered by
+  path, size and modification time in `watch-ledger.json` (the Mac's format),
+  so it runs once; a replaced file runs again. Watched jobs always save
+  `.srt` files next to the video, and ingest never un-pauses the queue.
+- **Add from URL**: yt-dlp downloads into `Videos\Cue Downloads` (or a folder
+  you choose); the finished file joins the list like a dropped one.
+- **Burn in…** renders the original, translation or bilingual subtitles
+  into a new `<video>.subtitled.mp4`; the source is never touched.
+- Closing the window keeps Cue in the notification area (tray menu: Show,
+  Pause/Resume, Quit), finished jobs raise a toast while Cue is in the
+  background, and the PC stays awake while anything runs. Each is a
+  setting.
+- **Ctrl+K** opens a command palette over actions and videos.
 
 ## Invariants carried over from macOS
 

@@ -252,10 +252,19 @@ fn jobs_running_at_quit_load_as_canceled() {
         // Simulate a crash: copy the on-disk state before shutdown.
         let copy = dir.path().join("crashed");
         std::fs::create_dir_all(copy.join("jobs")).unwrap();
+        // The saver may be mid-rename of a temp file; copy finished job files only.
         for entry in std::fs::read_dir(jobs.join("jobs")).unwrap() {
-            let entry = entry.unwrap();
-            std::fs::copy(entry.path(), copy.join("jobs").join(entry.file_name())).unwrap();
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "json") {
+                match std::fs::copy(&path, copy.join("jobs").join(path.file_name().unwrap())) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    other => {
+                        other.unwrap();
+                    }
+                }
+            }
         }
+        assert!(copy.join("jobs").join(format!("{id}.json")).exists());
         h.runtime.shutdown();
         id
     };

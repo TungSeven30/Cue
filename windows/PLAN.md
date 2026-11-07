@@ -54,12 +54,16 @@ installers, slow start, frequent antivirus false positives).
    batching, schema-validated responses, retries and splitting, resume of
    partial translations, credentials in Credential Manager. Adds
    `cue translate` and `cue pipeline`.
-3. **Desktop app (Tauri)** (this PR): job queue with the two-slot scheduler, per-job
+3. **Desktop app (Tauri)** (done): job queue with the two-slot scheduler, per-job
    JSON persistence compatible with the Mac format, transcript/translation
    editor, video preview with subtitle overlay, settings, export dialogs.
-4. **Automation**: watch folders, URL ingest via yt-dlp, tray icon,
-   notifications, keep-awake, burn-in, folders/sidebar grouping, command
-   palette.
+4. **Automation** (this PR): watch folders (recursive, stability gate,
+   Mac-format ledger, per-folder overrides), URL ingest via yt-dlp (with a
+   checksum-verified installer), tray icon with close-to-tray, toast
+   notifications, keep-awake, burn-in via ffmpeg/libass, sidebar grouped by
+   source folder, Ctrl+K command palette. Deferred: the Mac's hand-made
+   folders (its "folder book"); the sidebar groups by the folder a video is
+   in instead.
 5. **Optional backends and extras**: faster-whisper (CUDA) and Qwen3-ASR via
    the shared Python helper in serve mode, intro summary, subtitle import.
 6. **Ship**: installer (NSIS/MSI) bundling ffmpeg, auto-update, Authenticode

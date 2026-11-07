@@ -6,7 +6,7 @@
 use cue_core::jobs::JobSettings;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -29,6 +29,37 @@ pub struct Settings {
     /// Write SRT sidecars next to the video when a stage finishes.
     pub auto_export_sidecars: bool,
     pub sidecar_bilingual: bool,
+    /// Folders whose new media is queued automatically.
+    pub watch_folders: Vec<WatchFolder>,
+    /// Where "Add from URL" saves; empty means `Videos\Cue Downloads`.
+    pub download_folder: String,
+    /// Closing the window keeps Cue running in the notification area.
+    pub keep_in_tray: bool,
+    /// A toast when a job finishes while the window is in the background.
+    pub notifications: bool,
+    /// Keep the PC from sleeping while jobs, downloads or burn-ins run.
+    pub keep_awake: bool,
+}
+
+/// One watched folder. `profile` holds per-job overrides (the same keys as
+/// a job's own overrides) stamped onto every job it queues.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchFolder {
+    pub id: String,
+    pub path: String,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    #[serde(default = "empty_object")]
+    pub profile: Value,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn empty_object() -> Value {
+    Value::Object(Default::default())
 }
 
 impl Default for Settings {
@@ -48,6 +79,11 @@ impl Default for Settings {
             auto_start_added_jobs: true,
             auto_export_sidecars: true,
             sidecar_bilingual: false,
+            watch_folders: Vec::new(),
+            download_folder: String::new(),
+            keep_in_tray: true,
+            notifications: true,
+            keep_awake: true,
         }
     }
 }
@@ -55,6 +91,14 @@ impl Default for Settings {
 impl Settings {
     pub fn load(path: &Path) -> Settings {
         std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    }
+
+    /// The folder downloads land in.
+    pub fn downloads_dir(&self) -> PathBuf {
+        if !self.download_folder.trim().is_empty() {
+            return PathBuf::from(self.download_folder.trim());
+        }
+        dirs::video_dir().or_else(dirs::home_dir).unwrap_or_else(std::env::temp_dir).join("Cue Downloads")
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {

@@ -272,3 +272,62 @@ label.check { display: flex; gap: 8px; align-items: center; }
 .diag dd { margin: 0; overflow-wrap: anywhere; }
 .export-result { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; min-width: 0; }
 .export-result button { display: block; width: 100%; }
+
+/* Sidebar groups and downloads */
+.jobs li.group {
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 10px 6px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  border-radius: 0;
+}
+.jobs li.group:hover { background: none; color: var(--text); }
+.jobs li.group .caret { width: 10px; transition: transform .15s; }
+.jobs li.group.collapsed .caret { transform: rotate(-90deg); }
+.jobs li.group .count { font-weight: 400; margin-left: auto; }
+.jobs li.group span.label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag { font-size: 10.5px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
+.downloads { list-style: none; margin: 0; padding: 0 6px; display: grid; gap: 4px; }
+.downloads:empty { display: none; }
+.downloads li { border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 8px; display: grid; gap: 3px; font-size: 12.5px; }
+.downloads .row { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.downloads .url { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.downloads .detail-text { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.downloads li.failed .detail-text { color: var(--bad); white-space: normal; overflow-wrap: anywhere; }
+.downloads button { padding: 1px 8px; font-size: 12px; }
+.sidebar > .downloads { margin-bottom: 6px; }
+
+/* Watch folders */
+.watch-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.watch-list li { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; display: grid; gap: 6px; }
+.watch-list .head { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.watch-list .head .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.watch-list .profile { display: flex; gap: 8px; flex-wrap: wrap; }
+.watch-list .profile label { display: grid; gap: 2px; font-size: 12px; color: var(--muted); flex: 1 1 140px; }
+.watch-list .profile input, .watch-list .profile select { color: var(--text); }
+.watch-list .error-text { margin: 0; }
+.error-text { color: var(--bad); font-size: 13px; overflow-wrap: anywhere; }
+.sheet-body > label:not(.check) { display: grid; gap: 4px; margin: 6px 0; }
+
+/* Command palette */
+dialog.palette {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0;
+  width: min(560px, calc(100vw - 32px));
+  margin-top: 12vh;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 20px 60px rgba(0,0,0,.3);
+}
+dialog.palette input { width: 100%; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 12px 14px; font-size: 15px; background: transparent; }
+dialog.palette input:focus-visible { outline: none; }
+.palette-list { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow: auto; }
+.palette-list li { padding: 7px 10px; border-radius: 6px; cursor: pointer; display: flex; gap: 10px; align-items: center; }
+.palette-list li .kind { margin-left: auto; font-size: 12px; color: var(--muted); }
+.palette-list li.active { background: var(--accent-soft); }
+.palette-list li.empty { color: var(--muted); cursor: default; }

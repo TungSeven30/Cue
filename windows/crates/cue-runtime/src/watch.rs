@@ -263,7 +263,11 @@ impl Runtime {
             let mut order = state.jobs.iter().map(|j| j.order_index).filter(|o| o.is_finite()).fold(0.0_f64, f64::max);
             for file in files {
                 let fingerprint = file.fingerprint();
-                if state.jobs.iter().any(|j| j.source_fingerprint == fingerprint) {
+                // Same file, or the same path still waiting or running: a
+                // late timestamp change must not queue it twice.
+                let path = file.path.to_string_lossy();
+                let active = |j: &Job| j.source_path == path && (j.status == JobStatus::Queued || j.status.is_running());
+                if state.jobs.iter().any(|j| j.source_fingerprint == fingerprint || active(j)) {
                     continue;
                 }
                 order += 1.0;

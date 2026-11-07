@@ -138,7 +138,8 @@ pub fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 /// sees the same size at least `STABILITY_INTERVAL` after the first.
 #[derive(Default)]
 pub struct ScanEngine {
-    candidates: HashMap<PathBuf, (u64, Instant)>,
+    /// Size and modification time when first seen unchanged, and when.
+    candidates: HashMap<PathBuf, (u64, f64, Instant)>,
 }
 
 impl ScanEngine {
@@ -161,15 +162,17 @@ impl ScanEngine {
                 continue;
             }
             match self.candidates.get(&file.path) {
-                Some(&(size, first)) if size == file.size => {
+                // Size and time both hold still: a copier that stamps the
+                // original mtime at the end must not yield a second fingerprint.
+                Some(&(size, modified, first)) if size == file.size && modified == file.modified => {
                     if now.duration_since(first) >= STABILITY_INTERVAL {
                         ready.push(file.clone());
                         self.candidates.remove(&file.path);
                     }
                 }
-                // New, or still growing: (re)start its clock.
+                // New, or still changing: (re)start its clock.
                 _ => {
-                    self.candidates.insert(file.path.clone(), (file.size, now));
+                    self.candidates.insert(file.path.clone(), (file.size, file.modified, now));
                 }
             }
         }
@@ -291,6 +294,19 @@ mod tests {
         let ready = engine.ready(&[obs("/w/a.mp4", 20)], t0 + Duration::from_secs(5), &none);
         assert_eq!(ready.len(), 1);
         assert!(!engine.has_pending());
+    }
+
+    #[test]
+    fn a_changed_modification_time_restarts_the_clock() {
+        let mut engine = ScanEngine::default();
+        let none = HashSet::new();
+        let t0 = Instant::now();
+        engine.ready(&[obs("/w/a.mp4", 10)], t0, &none);
+        // Same size, but the copier stamped a new time: not settled yet.
+        let restamped = FileObservation { modified: 200.0, ..obs("/w/a.mp4", 10) };
+        assert!(engine.ready(std::slice::from_ref(&restamped), t0 + Duration::from_secs(3), &none).is_empty());
+        let ready = engine.ready(std::slice::from_ref(&restamped), t0 + Duration::from_secs(6), &none);
+        assert_eq!(ready, vec![restamped]);
     }
 
     #[test]

@@ -36,6 +36,9 @@ pub(crate) struct Slot {
     last_emit: Instant,
 }
 
+/// Marks an error whose finished file was left in the staging folder.
+const STRANDED: &str = "The downloaded file was kept at";
+
 /// Keeps a failure readable: yt-dlp prints whole tracebacks.
 const ERROR_TAIL: usize = 4000;
 
@@ -96,7 +99,11 @@ impl Runtime {
         let thread_id = id.clone();
         let spawned = std::thread::Builder::new().name("cue-download".into()).spawn(move || {
             let result = runtime.fetch(&thread_id, &ytdlp, ffmpeg.as_deref(), &url, &staging, &dir, &child, &cancel);
-            let _ = std::fs::remove_dir_all(&staging);
+            // A finished file that couldn't be moved out stays where it is.
+            let stranded = matches!(&result, Err(e) if e.contains(STRANDED));
+            if !stranded {
+                let _ = std::fs::remove_dir_all(&staging);
+            }
             runtime.finish_download(&thread_id, &url, result, cancel.load(Ordering::Relaxed));
         });
         if let Err(e) = spawned {
@@ -130,7 +137,7 @@ impl Runtime {
         // A cancel that landed before the child was stored.
         if cancel.load(Ordering::Relaxed) {
             if let Some(c) = locked(child).as_mut() {
-                let _ = c.kill();
+                kill_tree(c);
             }
         }
         let tail = std::thread::spawn(move || {
@@ -169,7 +176,15 @@ impl Runtime {
         let produced = dl::finished_media(staging).ok_or("yt-dlp finished but produced no media file.")?;
         let name = produced.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "download.mp4".into());
         let destination = dl::unique_destination(&name, dir);
-        std::fs::rename(&produced, &destination).map_err(|e| format!("cannot move the download into {}: {e}", dir.display()))?;
+        if std::fs::rename(&produced, &destination).is_err() {
+            // Rename can fail across volumes or under a virus scanner's lock;
+            // a copy keeps the file either way.
+            if let Err(e) = std::fs::copy(&produced, &destination) {
+                let _ = std::fs::remove_file(&destination);
+                return Err(format!("cannot move the download into {}: {e}. {STRANDED} {}", dir.display(), produced.display()));
+            }
+            let _ = std::fs::remove_file(&produced);
+        }
         Ok(destination)
     }
 
@@ -225,7 +240,7 @@ impl Runtime {
         let slot = downloads.iter().find(|d| d.info.id == id).ok_or("No such download.")?;
         slot.cancel.store(true, Ordering::Relaxed);
         if let Some(child) = locked(&slot.child).as_mut() {
-            let _ = child.kill();
+            kill_tree(child);
         }
         Ok(())
     }
@@ -283,4 +298,19 @@ impl Runtime {
         std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
         Ok(path)
     }
+}
+
+/// Stops yt-dlp and whatever it started: on Windows, killing the parent
+/// leaves its ffmpeg merge running and holding files in the staging folder.
+fn kill_tree(child: &mut Child) {
+    #[cfg(windows)]
+    {
+        let _ = cue_core::audio::background_command(Path::new("taskkill"))
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
 }

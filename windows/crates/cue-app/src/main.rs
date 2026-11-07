@@ -51,9 +51,11 @@ fn startup_failures(app: State<App>) -> Vec<String> {
     app.startup_failures.clone()
 }
 
+/// Async so a folder's walk runs off the main thread.
 #[tauri::command]
-fn add_files(app: State<App>, paths: Vec<PathBuf>) -> Vec<String> {
-    app.runtime.add_files(&media_in(&paths))
+async fn add_files(app: State<'_, App>, paths: Vec<PathBuf>) -> Result<Vec<String>> {
+    let runtime = app.runtime.clone();
+    tauri::async_runtime::spawn_blocking(move || runtime.add_files(&media_in(&paths))).await.map_err(|e| e.to_string())
 }
 
 /// Opens the native picker off the main thread (async command) and adds
@@ -459,8 +461,11 @@ fn main() {
         })
         .on_window_event(|window, event| match event {
             WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
+                // A dropped folder is walked recursively; keep that off the
+                // window's event thread.
                 if let Some(app) = window.try_state::<App>() {
-                    app.runtime.add_files(&media_in(paths));
+                    let (runtime, paths) = (app.runtime.clone(), paths.clone());
+                    std::thread::spawn(move || runtime.add_files(&media_in(&paths)));
                 }
             }
             // With "keep running in the tray", closing only hides.

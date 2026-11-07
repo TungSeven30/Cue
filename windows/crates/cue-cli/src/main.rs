@@ -1,7 +1,6 @@
 //! `cue`: headless Cue for Windows. Mirrors the macOS CLI's spirit: services
 //! driven directly, no queue, no persistence.
 
-mod credentials;
 mod translate;
 
 use clap::{Args, Parser, Subcommand};

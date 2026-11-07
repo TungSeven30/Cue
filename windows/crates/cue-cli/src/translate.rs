@@ -2,7 +2,7 @@
 //! stage of the macOS CLI (Sources/CLI/CLIRunner.swift): the same service,
 //! model routing, prompts and output names.
 
-use crate::credentials::{self, KeySource};
+use cue_core::credentials::{self, KeySource};
 use cue_core::export;
 use cue_core::subtitle::{self, Format};
 use cue_core::translation::{self, bilingual_segments, ChunkMode, Provider, TranslateOptions, Translator, UreqTransport};

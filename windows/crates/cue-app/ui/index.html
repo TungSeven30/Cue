@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cue</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><img src="icon.png" alt=""><span>Cue</span></div>
+    <button id="add" class="primary">Add videos</button>
+    <span class="spacer"></span>
+    <span id="queue-status" class="queue-status"></span>
+    <button id="pause" class="ghost" title="Pause or resume the queue">Pause queue</button>
+    <button id="open-settings" class="ghost">Settings</button>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <input id="filter" type="search" placeholder="Filter videos" aria-label="Filter videos">
+      <ul id="jobs" class="jobs" aria-label="Videos"></ul>
+      <div id="jobs-empty" class="jobs-empty">
+        <p>No videos yet.</p>
+        <p class="hint">Drop video files anywhere in this window, or use Add videos.</p>
+      </div>
+    </aside>
+
+    <main id="detail" class="detail">
+      <section id="welcome" class="welcome">
+        <h1>Subtitles for any video, on this PC.</h1>
+        <p>Drop videos here to transcribe them with Whisper on your GPU. Add a translation model in Settings to translate them as well.</p>
+        <button id="welcome-add" class="primary">Add videos</button>
+      </section>
+
+      <section id="job" class="job" hidden>
+        <div class="job-head">
+          <div class="job-title">
+            <h1 id="job-title"></h1>
+            <button id="job-path" class="link" title="Show in Explorer"></button>
+          </div>
+          <div id="job-actions" class="actions"></div>
+        </div>
+
+        <div class="status-line">
+          <span id="job-status" class="chip"></span>
+          <span id="job-detail" class="muted"></span>
+          <div class="bar"><div id="job-bar"></div></div>
+        </div>
+
+        <div class="overrides">
+          <label>Spoken language
+            <select id="ov-source"></select>
+          </label>
+          <label>Translate to
+            <input id="ov-target" list="target-languages" placeholder="Default">
+          </label>
+          <label>Translation model
+            <input id="ov-model" list="translation-models" placeholder="Default">
+          </label>
+        </div>
+
+        <div class="workspace">
+          <div class="player">
+            <div class="stage">
+              <video id="video" controls preload="metadata"></video>
+              <div id="caption" class="caption" aria-live="off"></div>
+            </div>
+            <div id="video-note" class="video-note" hidden>Preview isn't available for this file type. The transcript and exports still work.</div>
+            <div class="player-tools">
+              <label>Captions
+                <select id="caption-mode">
+                  <option value="both">Original and translation</option>
+                  <option value="original">Original</option>
+                  <option value="translation">Translation</option>
+                  <option value="off">Off</option>
+                </select>
+              </label>
+              <label class="check"><input id="follow" type="checkbox" checked> Follow playback</label>
+            </div>
+          </div>
+
+          <div class="transcript">
+            <div class="transcript-head">
+              <input id="search" type="search" placeholder="Search subtitles" aria-label="Search subtitles">
+              <span id="counts" class="muted"></span>
+            </div>
+            <div id="cues" class="cues" role="table" aria-label="Subtitles"></div>
+            <div id="cues-empty" class="cues-empty" hidden></div>
+          </div>
+        </div>
+
+        <details class="log">
+          <summary>Log</summary>
+          <pre id="job-log"></pre>
+        </details>
+      </section>
+    </main>
+  </div>
+
+  <div id="drop" class="drop" hidden><div>Drop to add</div></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <datalist id="target-languages"></datalist>
+  <datalist id="translation-models"></datalist>
+
+  <dialog id="settings" class="sheet">
+    <form method="dialog">
+      <h2>Settings</h2>
+      <div class="sheet-body">
+        <fieldset>
+          <legend>Transcription</legend>
+          <label>Whisper model <select id="s-model"></select></label>
+          <label>Spoken language <select id="s-source"></select></label>
+          <label class="check"><input id="s-gpu" type="checkbox"> Use the GPU</label>
+          <label>Beam size <input id="s-beam" type="number" min="1" max="16"></label>
+        </fieldset>
+        <fieldset>
+          <legend>Translation</legend>
+          <label>Model <input id="s-tmodel" list="translation-models"></label>
+          <p class="hint">The name picks the provider: claude-… is Anthropic, gemini-… is Google, openrouter/, groq/, cerebras/ and local/ route by prefix, anything else is OpenAI.</p>
+          <label>Translate to <input id="s-target" list="target-languages"></label>
+          <label>Source language <input id="s-tsource" placeholder="auto"></label>
+          <label>Request size
+            <select id="s-chunk"><option value="safer">Safer</option><option value="balanced">Balanced</option><option value="faster">Faster</option></select>
+          </label>
+          <label>Parallel requests <input id="s-parallel" type="number" min="1" max="4"></label>
+          <label>Local server <input id="s-endpoint" placeholder="http://localhost:1234/v1"></label>
+          <label class="check"><input id="s-auto-translate" type="checkbox"> Translate automatically after transcription</label>
+        </fieldset>
+        <fieldset>
+          <legend>Workflow</legend>
+          <label class="check"><input id="s-auto-start" type="checkbox"> Start added videos right away</label>
+          <label class="check"><input id="s-sidecars" type="checkbox"> Save .srt files next to each video when done</label>
+          <label class="check"><input id="s-bilingual" type="checkbox"> Also save a bilingual .srt</label>
+        </fieldset>
+        <fieldset>
+          <legend>API keys</legend>
+          <p class="hint">Keys are stored in Windows Credential Manager, never in files.</p>
+          <div id="keys" class="keys"></div>
+        </fieldset>
+        <fieldset>
+          <legend>About this PC</legend>
+          <dl id="diag" class="diag"></dl>
+        </fieldset>
+      </div>
+      <div class="sheet-foot">
+        <button value="cancel" class="ghost">Cancel</button>
+        <button id="settings-save" value="save" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="export" class="sheet small">
+    <form method="dialog">
+      <h2>Export subtitles</h2>
+      <div class="sheet-body">
+        <fieldset>
+          <legend>Files</legend>
+          <label class="check"><input type="checkbox" name="doc" value="original" checked> Original transcript</label>
+          <label class="check"><input type="checkbox" name="doc" value="translated"> Translation</label>
+          <label class="check"><input type="checkbox" name="doc" value="bilingual"> Bilingual (original over translation)</label>
+        </fieldset>
+        <fieldset>
+          <legend>Formats</legend>
+          <div class="formats">
+            <label class="check"><input type="checkbox" name="fmt" value="srt" checked> SRT</label>
+            <label class="check"><input type="checkbox" name="fmt" value="vtt"> WebVTT</label>
+            <label class="check"><input type="checkbox" name="fmt" value="txt"> Text</label>
+            <label class="check"><input type="checkbox" name="fmt" value="md"> Markdown</label>
+            <label class="check"><input type="checkbox" name="fmt" value="json"> JSON</label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Folder</legend>
+          <div class="folder-row"><span id="export-folder" class="muted">Next to the video</span><button id="export-choose" type="button" class="ghost">Choose…</button></div>
+        </fieldset>
+        <ul id="export-result" class="export-result"></ul>
+      </div>
+      <div class="sheet-foot">
+        <button value="cancel" class="ghost">Close</button>
+        <button id="export-go" type="button" class="primary">Export</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -179,8 +179,7 @@ impl Runtime {
         if std::fs::rename(&produced, &destination).is_err() {
             // Rename can fail across volumes or under a virus scanner's lock;
             // a copy keeps the file either way.
-            if let Err(e) = std::fs::copy(&produced, &destination) {
-                let _ = std::fs::remove_file(&destination);
+            if let Err(e) = copy_new(&produced, &destination) {
                 return Err(format!("cannot move the download into {}: {e}. {STRANDED} {}", dir.display(), produced.display()));
             }
             let _ = std::fs::remove_file(&produced);
@@ -313,4 +312,35 @@ fn kill_tree(child: &mut Child) {
             .status();
     }
     let _ = child.kill();
+}
+
+/// Copies into a file that must not exist yet, so a name another download
+/// just took is never overwritten, and removes only what this call created.
+fn copy_new(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut source = std::fs::File::open(from)?;
+    let mut target = std::fs::OpenOptions::new().write(true).create_new(true).open(to)?;
+    if let Err(e) = std::io::copy(&mut source, &mut target).and_then(|_| target.sync_all()) {
+        drop(target);
+        let _ = std::fs::remove_file(to);
+        return Err(e);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::copy_new;
+
+    #[test]
+    fn the_fallback_copy_never_overwrites_or_deletes_another_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, taken) = (dir.path().join("a.mp4"), dir.path().join("b.mp4"));
+        std::fs::write(&from, b"new").unwrap();
+        std::fs::write(&taken, b"theirs").unwrap();
+        assert!(copy_new(&from, &taken).is_err());
+        assert_eq!(std::fs::read(&taken).unwrap(), b"theirs");
+        let free = dir.path().join("c.mp4");
+        copy_new(&from, &free).unwrap();
+        assert_eq!(std::fs::read(&free).unwrap(), b"new");
+    }
 }

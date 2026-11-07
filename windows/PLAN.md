@@ -50,11 +50,11 @@ installers, slow start, frequent antivirus false positives).
 1. **Core + CLI** (done): cleanup, chunking, subtitle I/O, ffmpeg audio
    cache, model download, whisper.cpp engine, `cue.exe`, Windows CI with a
    real tiny-model transcription and a Vulkan build.
-2. **Translation** (this PR): all seven providers over direct HTTPS, token-aware
+2. **Translation** (done): all seven providers over direct HTTPS, token-aware
    batching, schema-validated responses, retries and splitting, resume of
    partial translations, credentials in Credential Manager. Adds
    `cue translate` and `cue pipeline`.
-3. **Desktop app (Tauri)**: job queue with the two-slot scheduler, per-job
+3. **Desktop app (Tauri)** (this PR): job queue with the two-slot scheduler, per-job
    JSON persistence compatible with the Mac format, transcript/translation
    editor, video preview with subtitle overlay, settings, export dialogs.
 4. **Automation**: watch folders, URL ingest via yt-dlp, tray icon,

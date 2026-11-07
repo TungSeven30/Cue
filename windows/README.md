@@ -7,7 +7,8 @@ pipeline in Rust and keeps the *contracts* identical. A subtitle, a model
 file, or a job transcript produced on one platform is byte-compatible with
 the other.
 
-Status: **phase 1 of 6**, a headless engine and CLI. See
+Status: **phase 3 of 6**: the engine, the CLI (transcribe and translate) and
+the desktop app. See
 [`PLAN.md`](PLAN.md) for the roadmap.
 
 ## Layout
@@ -16,7 +17,14 @@ Status: **phase 1 of 6**, a headless engine and CLI. See
 |---|---|---|
 | `crates/cue-core` | Segments, transcript cleanup, silence-aware chunk planning, SRT/VTT/TXT/MD/JSON export and SRT/VTT import (with legacy-encoding detection), ffmpeg audio extraction + cache, model catalog and resumable, hash-verified downloader | `TranscriptionPostProcessor`, `TranscriptionChunkPlanner`, `SubtitleWriter`, `SubtitleReader`, `AudioCache`, `FFmpegAudioExtractor`, `ModelDownloader` |
 | `crates/cue-engine` | Built-in whisper.cpp engine (CPU, or Vulkan/CUDA by feature), resident model cache, fresh state per chunk, streaming segments, cancel, resume | `WhisperCppEngine`, `WhisperModelCache` |
-| `crates/cue-cli` | `cue.exe`: `transcribe`, `models`, `convert`, `doctor` | `Sources/CLI` |
+| `crates/cue-runtime` | The app's engine room: job queue with one transcription slot and one translation slot, coalesced per-job saves, settings, per-job overrides, sidecar export, events for the UI | `AppModel`, `PipelineCoordinator`, `PipelineScheduler`, `JobRepository`, `ExportCoordinator` |
+| `crates/cue-cli` | `cue.exe`: `transcribe`, `translate`, `pipeline`, `models`, `convert`, `keys`, `doctor` | `Sources/CLI` |
+| `crates/cue-app` | `cue-desktop.exe`: Tauri shell over `cue-runtime`; the UI is plain HTML/CSS/JS in `ui/` with no build step | `Sources/Views` |
+
+Jobs (`cue-core::jobs`) are stored one JSON file per job in
+`%LOCALAPPDATA%\Cue\jobs\<UUID>.json`, in the same format the Mac app writes
+to `~/Library/Application Support/Cue/jobs/`, so a job file copied between
+machines opens on either side. Fields one side doesn't know are kept.
 
 Everything in `cue-core` is platform-neutral and tested on Linux and Windows.
 
@@ -29,7 +37,13 @@ cd windows
 cargo test --workspace
 cargo build --release -p cue-cli                    # CPU
 cargo build --release -p cue-cli --features vulkan  # GPU: NVIDIA, AMD, Intel (needs the Vulkan SDK to build)
+cargo run -p cue-app                                # the desktop app (add --features vulkan for GPU)
 ```
+
+The app uses the WebView2 runtime that ships with Windows 10 and 11. On
+Linux it builds against WebKitGTK (`libwebkit2gtk-4.1-dev`) for development.
+Video preview plays what WebView2 can decode (MP4/H.264, WebM); other
+containers such as MKV still transcribe and export, just without a preview.
 
 At runtime Cue needs `ffmpeg.exe` next to `cue.exe` or on `PATH` (the
 installer will bundle it). Data lives in `%LOCALAPPDATA%\Cue` (override with

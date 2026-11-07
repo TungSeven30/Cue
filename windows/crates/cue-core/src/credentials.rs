@@ -3,7 +3,7 @@
 //! Manager as generic credentials named `Cue/<provider>`, never in files.
 //! Environment variables are a fallback for scripts and CI.
 
-use cue_core::translation::Provider;
+use crate::translation::Provider;
 
 /// Where a key was found, for `cue keys list`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

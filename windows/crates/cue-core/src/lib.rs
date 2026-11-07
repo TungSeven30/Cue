@@ -6,7 +6,9 @@
 
 pub mod audio;
 pub mod chunk_planner;
+pub mod credentials;
 pub mod export;
+pub mod jobs;
 pub mod models;
 pub mod paths;
 pub mod postprocess;

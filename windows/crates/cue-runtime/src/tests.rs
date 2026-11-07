@@ -111,9 +111,14 @@ fn added_file_is_transcribed_translated_and_saved() {
     assert!(job.partial_transcript_segments.is_empty() && job.partial_translated_segments.is_empty());
     assert_eq!(job.settings.translation_model, "local/fake");
 
-    // Mac-named sidecars next to the video.
+    // Mac-named sidecars next to the video. They are written just after the
+    // status flips, so give a slow runner a moment.
+    let deadline = Instant::now() + Duration::from_secs(10);
     for name in ["Movie.original.srt", "Movie.vi.srt", "Movie.bilingual.srt"] {
-        assert!(h.dir.path().join(name).exists(), "{name} missing");
+        while !h.dir.path().join(name).exists() {
+            assert!(Instant::now() < deadline, "{name} missing");
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     // A relaunch over the same folder sees the finished job.

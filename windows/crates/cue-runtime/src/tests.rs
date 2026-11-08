@@ -554,6 +554,19 @@ fn summaries_can_be_written_edited_and_cleared_on_demand() {
 }
 
 #[test]
+fn a_kept_summary_survives_translation_and_goes_with_a_new_transcript() {
+    let h = harness(local_settings());
+    let id = h.runtime.add_files(std::slice::from_ref(&h.media)).remove(0);
+    wait_for(&h, &id, JobStatus::TranscriptionComplete);
+    h.runtime.set_summary(&id, Some("Mine.")).unwrap();
+    h.runtime.start(&id).unwrap();
+    let job = wait_for(&h, &id, JobStatus::TranslationComplete);
+    assert_eq!(job.summary.as_deref(), Some("Mine."), "summaries are off, so nothing replaces it");
+    h.runtime.retranscribe(&id).unwrap();
+    assert_eq!(h.runtime.job(&id).unwrap().summary, None, "it described the old transcript");
+}
+
+#[test]
 fn a_missing_key_skips_the_summary_without_failing_the_job() {
     let h = harness(Settings { generate_summary: true, summary_model: "gpt-5.5".into(), ..local_settings() });
     let id = h.runtime.add_files(std::slice::from_ref(&h.media)).remove(0);

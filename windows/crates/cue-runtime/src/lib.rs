@@ -405,6 +405,7 @@ impl Runtime {
             job.partial_transcript_segments.clear();
             job.partial_translated_segments.clear();
             job.transcription_resume_through = 0.0;
+            job.summary = None;
             queue(job);
             Ok(())
         })?;
@@ -880,7 +881,11 @@ impl Runtime {
             (Ok(translated), false) => {
                 job.log.push_str(&format!("Translated {} subtitles with {}.\n", translated.len(), job.settings.translation_model));
                 job.translated_segments = translated;
-                job.summary = summary;
+                // The transcript did not change, so a summary it already has
+                // (written or edited) stays unless a new one was written.
+                if summary.is_some() {
+                    job.summary = summary;
+                }
                 job.partial_translated_segments.clear();
                 job.status = JobStatus::TranslationComplete;
                 job.progress = JobProgress::new(JobStage::Complete, "Translation ready", Some(1.0));

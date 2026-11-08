@@ -37,6 +37,13 @@ impl Transport for FakeLlm {
         let body: serde_json::Value = serde_json::from_str(&request.body).unwrap();
         let system = body["messages"][0]["content"].as_str().unwrap();
         let user = body["messages"][1]["content"].as_str().unwrap();
+        if system.contains("spoiler-free introductions") {
+            let language = system.split("Write the introduction in ").nth(1).unwrap().split('.').next().unwrap();
+            let first = user.strip_prefix("Subtitles:\n").unwrap().lines().next().unwrap();
+            let content = serde_json::json!({ "summary": format!("Intro ({language}) from {first}") }).to_string();
+            let reply = serde_json::json!({"choices": [{"message": {"content": content}, "finish_reason": "stop"}]});
+            return Ok(HttpResponse { status: 200, headers: vec![], body: reply.to_string().into_bytes() });
+        }
         let target = system.split("Target language: ").nth(1).unwrap().split(".\n").next().unwrap();
         let segments: serde_json::Value = serde_json::from_str(user.split("Segments:\n").nth(1).unwrap()).unwrap();
         let out: Vec<_> = segments
@@ -503,4 +510,69 @@ fn burn_in_renders_a_copy_and_cleans_up_failures() {
     let state = finish(&h);
     assert_eq!(state.error.as_deref(), Some("Error opening output"));
     assert!(!broken.exists(), "partial output is deleted");
+}
+
+#[test]
+fn a_finished_translation_gets_an_intro_in_the_target_language() {
+    let h = harness(Settings { auto_translate: true, generate_summary: true, ..local_settings() });
+    let id = h.runtime.add_files(std::slice::from_ref(&h.media)).remove(0);
+    let job = wait_for(&h, &id, JobStatus::TranslationComplete);
+    assert_eq!(job.summary.as_deref(), Some("Intro (Vietnamese) from [Vietnamese] one"));
+    assert!(job.log.contains("Wrote the intro summary with local/fake"));
+    assert_eq!(h.runtime.jobs()[0].summary, job.summary);
+
+    // The intro opens SRT and VTT exports, never text.
+    let out = h.dir.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    h.runtime.export(&id, &[Document::Translated], &[Format::Srt, Format::Text], Some(&out)).unwrap();
+    let srt = std::fs::read_to_string(out.join("Movie.translated.vietnamese.srt")).unwrap();
+    assert!(srt.starts_with("1\n00:00:00,000 --> 00:00:03,000\nIntro (Vietnamese)"), "{srt}");
+    assert!(srt.contains("\n3\n"), "the subtitles are renumbered after the intro");
+    let txt = std::fs::read_to_string(out.join("Movie.translated.vietnamese.txt")).unwrap();
+    assert!(!txt.contains("Intro"));
+}
+
+#[test]
+fn a_transcript_only_job_is_summarized_in_its_own_language() {
+    let h = harness(Settings { generate_summary: true, ..local_settings() });
+    let id = h.runtime.add_files(std::slice::from_ref(&h.media)).remove(0);
+    let job = wait_for(&h, &id, JobStatus::TranscriptionComplete);
+    assert_eq!(job.summary.as_deref(), Some("Intro (the same language as the subtitles) from one"));
+}
+
+#[test]
+fn summaries_can_be_written_edited_and_cleared_on_demand() {
+    let h = harness(local_settings());
+    let id = h.runtime.add_files(std::slice::from_ref(&h.media)).remove(0);
+    let job = wait_for(&h, &id, JobStatus::TranscriptionComplete);
+    assert_eq!(job.summary, None, "summaries are off by default");
+    assert_eq!(h.runtime.generate_summary(&id).unwrap(), "Intro (the same language as the subtitles) from one");
+    h.runtime.set_summary(&id, Some("  Mine.  ")).unwrap();
+    assert_eq!(h.runtime.job(&id).unwrap().summary.as_deref(), Some("Mine."));
+    h.runtime.set_summary(&id, Some(" ")).unwrap();
+    assert_eq!(h.runtime.job(&id).unwrap().summary, None);
+}
+
+#[test]
+fn a_missing_key_skips_the_summary_without_failing_the_job() {
+    let h = harness(Settings { generate_summary: true, summary_model: "gpt-5.5".into(), ..local_settings() });
+    let id = h.runtime.add_files(std::slice::from_ref(&h.media)).remove(0);
+    let job = wait_for(&h, &id, JobStatus::TranscriptionComplete);
+    assert_eq!(job.summary, None);
+    assert!(job.log.contains("Skipped the intro summary because there is no OpenAI API key"), "{}", job.log);
+    assert!(h.runtime.generate_summary(&id).unwrap_err().contains("no OpenAI API key"));
+}
+
+#[test]
+fn summary_overrides_are_stored_as_the_mac_types() {
+    let h = harness(Settings { auto_start_added_jobs: false, ..local_settings() });
+    let id = h.runtime.add_files(std::slice::from_ref(&h.media)).remove(0);
+    h.runtime.set_override(&id, "generateSummary", Some("true".into())).unwrap();
+    h.runtime.set_override(&id, "summaryDetail", Some("Detailed".into())).unwrap();
+    let overrides = h.runtime.job(&id).unwrap().overrides;
+    assert_eq!(overrides["generateSummary"], serde_json::json!(true));
+    assert_eq!(overrides["summaryDetail"], serde_json::json!("detailed"));
+    assert!(h.runtime.set_override(&id, "generateSummary", Some("yes".into())).is_err());
+    h.runtime.set_override(&id, "generateSummary", None).unwrap();
+    assert!(h.runtime.job(&id).unwrap().overrides.get("generateSummary").is_none());
 }

@@ -157,7 +157,24 @@ pub fn make_request(
     schema: &Value,
     local_endpoint: &str,
 ) -> Result<HttpRequest, TranslationError> {
-    let budget = output_token_budget(user);
+    make_request_with_budget(provider, model, api_key, system, user, schema_name, schema, local_endpoint, None)
+}
+
+/// `make_request` with an explicit output cap; `None` sizes it from the
+/// input like a translation chunk.
+#[allow(clippy::too_many_arguments)]
+pub fn make_request_with_budget(
+    provider: Provider,
+    model: &str,
+    api_key: &str,
+    system: &str,
+    user: &str,
+    schema_name: &str,
+    schema: &Value,
+    local_endpoint: &str,
+    max_output_tokens: Option<usize>,
+) -> Result<HttpRequest, TranslationError> {
+    let budget = max_output_tokens.unwrap_or_else(|| output_token_budget(user));
     let mut headers: Vec<(String, String)> = Vec::new();
     let (url, body) = match provider {
         Provider::OpenAi => {

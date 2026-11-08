@@ -13,6 +13,7 @@ thiserror.workspace = true
 regex = "1"
 encoding_rs = "0.8"
 unicode-normalization = "0.1"
+unicode-segmentation = "1"
 sha2 = "0.10"
 hex = "0.4"
 hound = "3.5"

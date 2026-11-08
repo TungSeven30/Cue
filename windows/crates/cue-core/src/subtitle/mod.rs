@@ -1,8 +1,10 @@
 //! Subtitle export and import. Ports `SubtitleWriter` and `SubtitleReader`.
 
+mod intro;
 mod reader;
 mod writer;
 
+pub use intro::{intro_cue_texts, segments_prepending_intro};
 pub use reader::{
     decode_bytes, parse, parse_document, parse_timestamp, read_file, DecodedText, ParsedDocument, ReadError, MAX_FILE_SIZE,
     MAX_TIMESTAMP_SECONDS,

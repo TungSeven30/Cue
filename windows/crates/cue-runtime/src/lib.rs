@@ -12,6 +12,7 @@ mod burnin;
 mod downloads;
 mod persister;
 mod settings;
+mod summary;
 mod watch;
 pub mod whisper;
 
@@ -127,6 +128,7 @@ pub struct JobSummary {
     pub source_language: String,
     pub target_language: String,
     pub translation_model: String,
+    pub summary: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -148,6 +150,7 @@ impl JobSummary {
             source_language: job.settings.source_language.clone(),
             target_language: job.settings.translation_target_language.clone(),
             translation_model: job.settings.translation_model.clone(),
+            summary: job.summary.clone(),
             created_at: job.created_at.to_rfc3339(),
             updated_at: job.updated_at.to_rfc3339(),
         }
@@ -476,18 +479,41 @@ impl Runtime {
 
     /// Sets (or clears, with `None`) one per-job override.
     pub fn set_override(&self, id: &str, key: &str, value: Option<String>) -> Result<(), String> {
-        const KEYS: [&str; 5] = ["sourceLanguage", "whisperModel", "translationSourceLanguage", "translationTargetLanguage", "openAIModel"];
+        const KEYS: [&str; 7] = [
+            "sourceLanguage",
+            "whisperModel",
+            "translationSourceLanguage",
+            "translationTargetLanguage",
+            "openAIModel",
+            "generateSummary",
+            "summaryDetail",
+        ];
         if !KEYS.contains(&key) {
             return Err(format!("unknown setting {key}"));
         }
+        // The Mac decodes these as a Bool and an enum: a stray string would
+        // make it reject the whole job file.
+        let value: Option<serde_json::Value> = match (key, value.as_deref().map(str::trim).filter(|v| !v.is_empty())) {
+            (_, None) => None,
+            ("generateSummary", Some(v)) => match v {
+                "true" => Some(true.into()),
+                "false" => Some(false.into()),
+                _ => return Err("generateSummary takes true or false.".into()),
+            },
+            ("summaryDetail", Some(v)) => match cue_core::translation::SummaryDetail::parse(v) {
+                Some(detail) => Some(serde_json::to_value(detail).expect("an enum serializes")),
+                None => return Err("summaryDetail takes brief or detailed.".into()),
+            },
+            (_, Some(v)) => Some(v.into()),
+        };
         self.change(id, |job| {
             if !job.overrides.is_object() {
                 job.overrides = serde_json::Value::Object(Default::default());
             }
             let map = job.overrides.as_object_mut().expect("object");
-            match value.filter(|v| !v.trim().is_empty()) {
+            match value {
                 Some(v) => {
-                    map.insert(key.into(), v.into());
+                    map.insert(key.into(), v);
                 }
                 None => {
                     map.remove(key);
@@ -529,6 +555,7 @@ impl Runtime {
                 } else {
                     export::document_path(&dir, &base, &suffix, format)
                 };
+                let segments = export::with_intro(&segments, format, job.summary.as_deref());
                 subtitle::write_file(&segments, format, &path).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
                 written.push(path);
             }
@@ -754,10 +781,16 @@ impl Runtime {
         let result = self.inner.transcriber.transcribe(request, cancel.clone(), report);
         let auto_translate = self.settings().auto_translate;
         let canceled = cancel.load(Ordering::Relaxed);
+        // When a translation follows, the summary is written from it instead.
+        let summary = match &result {
+            Ok(segments) if !canceled && !(auto_translate && !segments.is_empty()) => self.auto_summary(&id, segments, false),
+            _ => None,
+        };
         self.update(&id, true, true, |job| match result {
             Ok(segments) if !canceled => {
                 let count = segments.len();
                 job.transcript_segments = segments;
+                job.summary = summary;
                 job.translated_segments.clear();
                 job.partial_transcript_segments.clear();
                 job.partial_translated_segments.clear();
@@ -814,10 +847,15 @@ impl Runtime {
                 })
         });
         let canceled = cancel.load(Ordering::Relaxed);
+        let summary = match &outcome {
+            Ok(translated) if !canceled => self.auto_summary(&id, translated, true),
+            _ => None,
+        };
         self.update(&id, true, true, |job| match (outcome, canceled) {
             (Ok(translated), false) => {
                 job.log.push_str(&format!("Translated {} subtitles with {}.\n", translated.len(), job.settings.translation_model));
                 job.translated_segments = translated;
+                job.summary = summary;
                 job.partial_translated_segments.clear();
                 job.status = JobStatus::TranslationComplete;
                 job.progress = JobProgress::new(JobStage::Complete, "Translation ready", Some(1.0));
@@ -886,6 +924,7 @@ impl Runtime {
             include_original: after_transcription,
             include_translation: !after_transcription,
             include_bilingual: !after_transcription && settings.sidecar_bilingual,
+            summary: job.summary.as_deref(),
         };
         match export::write_sidecars(Path::new(&job.source_path), &set) {
             Ok(paths) => {

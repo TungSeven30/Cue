@@ -306,6 +306,20 @@ async fn install_ytdlp(app: State<'_, App>) -> Result<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+// MARK: Intro summary
+
+/// Writes the intro summary now; the request runs off the UI thread.
+#[tauri::command]
+async fn generate_summary(app: State<'_, App>, id: String) -> Result<String> {
+    let runtime = app.runtime.clone();
+    tauri::async_runtime::spawn_blocking(move || runtime.generate_summary(&id)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn set_summary(app: State<App>, id: String, text: Option<String>) -> Result<()> {
+    app.runtime.set_summary(&id, text.as_deref())
+}
+
 // MARK: Burn-in
 
 #[tauri::command]
@@ -518,6 +532,8 @@ fn main() {
             pick_burn_in_output,
             burn_in,
             cancel_burn_in,
+            generate_summary,
+            set_summary,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start Cue");

@@ -236,9 +236,51 @@ function renderJob() {
   $("ov-source").value = overrides.sourceLanguage || "";
   $("ov-target").value = overrides.translationTargetLanguage || "";
   $("ov-model").value = overrides.openAIModel || "";
-  for (const id of ["ov-source", "ov-target", "ov-model"]) $(id).disabled = isRunning(status);
+  $("ov-summary").value = overrides.generateSummary == null ? "" : String(overrides.generateSummary);
+  $("ov-summary-detail").value = overrides.summaryDetail || "";
+  for (const id of ["ov-source", "ov-target", "ov-model", "ov-summary"]) $(id).disabled = isRunning(status);
+  renderIntro(summary, status);
 
   renderActions(status, summary);
+}
+
+// The intro box keeps what the user is typing: only a summary that
+// changed on the job (a new one was written) replaces the text.
+function renderIntro(summary, status) {
+  const text = (summary ? summary.summary : state.job.summary) || "";
+  const box = $("intro-text");
+  if (state.introShown !== text || state.introJob !== state.selected) {
+    if (state.introJob !== state.selected || box.value === (state.introShown ?? "")) box.value = text;
+    state.introShown = text;
+    state.introJob = state.selected;
+  }
+  const hasSubtitles = (summary ? summary.transcriptCount : state.job.transcriptSegments.length) > 0;
+  $("intro").hidden = !hasSubtitles && !text;
+  $("intro-state").textContent = state.writingIntro ? "Writing…" : text ? "" : "None yet";
+  $("intro-generate").disabled = state.writingIntro || !hasSubtitles || isRunning(status);
+  $("intro-generate").textContent = text ? "Rewrite with AI" : "Write with AI";
+  $("intro-clear").disabled = !text;
+}
+
+async function writeIntro() {
+  const id = state.selected;
+  state.writingIntro = true;
+  renderJob();
+  try {
+    await invoke("generate_summary", { id });
+    toast("Intro summary written.");
+  } catch (e) {
+    toast(String(e), "error");
+  } finally {
+    state.writingIntro = false;
+    if (state.selected === id) refreshSelected();
+  }
+}
+
+async function saveIntro(text) {
+  await call("set_summary", { id: state.selected, text });
+  state.introShown = null;
+  refreshSelected();
 }
 
 function renderActions(status, summary) {
@@ -414,6 +456,10 @@ async function openSettings() {
   $("s-parallel").value = settings.translationParallelism;
   $("s-endpoint").value = settings.localEndpoint;
   $("s-auto-translate").checked = settings.autoTranslate;
+  $("s-summary").checked = settings.generateSummary;
+  $("s-summary-detail").value = settings.summaryDetail;
+  $("s-summary-model").value = settings.summaryModel;
+  $("s-summary-fallback").value = settings.summaryFallbackModel;
   $("s-auto-start").checked = settings.autoStartAddedJobs;
   $("s-sidecars").checked = settings.autoExportSidecars;
   $("s-bilingual").checked = settings.sidecarBilingual;
@@ -469,6 +515,10 @@ async function saveSettings(event) {
     translationParallelism: Math.min(4, Math.max(1, Number($("s-parallel").value) || 2)),
     localEndpoint: $("s-endpoint").value.trim() || state.settings.localEndpoint,
     autoTranslate: $("s-auto-translate").checked,
+    generateSummary: $("s-summary").checked,
+    summaryDetail: $("s-summary-detail").value,
+    summaryModel: $("s-summary-model").value.trim(),
+    summaryFallbackModel: $("s-summary-fallback").value.trim(),
     autoStartAddedJobs: $("s-auto-start").checked,
     autoExportSidecars: $("s-sidecars").checked,
     sidecarBilingual: $("s-bilingual").checked,
@@ -643,6 +693,7 @@ function paletteCommands() {
     if (!running && !summary.transcriptCount) commands.push(["Transcribe the selected video", () => call("start_job", { id: summary.id })]);
     if (!running && summary.transcriptCount) commands.push(["Translate the selected video", () => call("translate_job", { id: summary.id })]);
     if (summary.transcriptCount) commands.push(["Export subtitles…", openExport], ["Burn in subtitles…", openBurn]);
+    if (!running && summary.transcriptCount) commands.push([summary.summary ? "Rewrite the intro summary" : "Write an intro summary", writeIntro]);
     commands.push(["Show the selected video in Explorer", () => call("reveal", { path: summary.sourcePath })]);
   }
   return commands.map(([label, run]) => ({ label, run, kind: "Command" }));
@@ -816,6 +867,11 @@ async function init() {
   bindOverride("ov-source", "sourceLanguage");
   bindOverride("ov-target", "translationTargetLanguage");
   bindOverride("ov-model", "openAIModel");
+  bindOverride("ov-summary", "generateSummary");
+  bindOverride("ov-summary-detail", "summaryDetail");
+  $("intro-generate").onclick = writeIntro;
+  $("intro-save").onclick = () => saveIntro($("intro-text").value);
+  $("intro-clear").onclick = () => saveIntro(null);
 
   $("add").onclick = addViaPicker;
   $("add-url").onclick = openUrl;

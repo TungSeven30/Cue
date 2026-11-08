@@ -4,6 +4,7 @@
 //! is already running.
 
 use cue_core::jobs::JobSettings;
+use cue_core::translation::SummaryDetail;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -29,6 +30,13 @@ pub struct Settings {
     /// Write SRT sidecars next to the video when a stage finishes.
     pub auto_export_sidecars: bool,
     pub sidecar_bilingual: bool,
+    /// Write a spoiler-free intro when a job finishes.
+    pub generate_summary: bool,
+    pub summary_detail: SummaryDetail,
+    /// Empty means the translation model.
+    pub summary_model: String,
+    /// Tried only when the summary model declines the content; empty is none.
+    pub summary_fallback_model: String,
     /// Folders whose new media is queued automatically.
     pub watch_folders: Vec<WatchFolder>,
     /// Where "Add from URL" saves; empty means `Videos\Cue Downloads`.
@@ -79,6 +87,10 @@ impl Default for Settings {
             auto_start_added_jobs: true,
             auto_export_sidecars: true,
             sidecar_bilingual: false,
+            generate_summary: false,
+            summary_detail: SummaryDetail::Brief,
+            summary_model: String::new(),
+            summary_fallback_model: String::new(),
             watch_folders: Vec::new(),
             download_folder: String::new(),
             keep_in_tray: true,
@@ -108,6 +120,22 @@ impl Settings {
         let tmp = path.with_extension("json.tmp");
         let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
         std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, path)).map_err(|e| e.to_string())
+    }
+
+    /// The model that writes summaries.
+    pub fn resolved_summary_model(&self) -> String {
+        let chosen = self.summary_model.trim();
+        if chosen.is_empty() {
+            self.translation_model.trim().to_string()
+        } else {
+            chosen.to_string()
+        }
+    }
+
+    /// The fallback, unless it is unset or the same as the summary model.
+    pub fn resolved_summary_fallback_model(&self) -> Option<String> {
+        let fallback = self.summary_fallback_model.trim();
+        (!fallback.is_empty() && fallback != self.resolved_summary_model()).then(|| fallback.to_string())
     }
 
     /// The snapshot a job records. Only the keys the Mac requires are

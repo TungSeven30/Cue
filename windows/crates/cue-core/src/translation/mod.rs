@@ -6,12 +6,14 @@ mod planner;
 mod provider;
 mod reconcile;
 mod service;
+mod summary;
 pub mod wire;
 
 pub use planner::{estimated_tokens, pending_chunks, ChunkMode};
 pub use provider::Provider;
 pub use reconcile::{aligned_translations, bilingual_segments};
 pub use service::{HttpResponse, Progress, TranslateOptions, Translator, Transport, UreqTransport};
+pub use summary::{summarize, summary_language, SummaryDetail, SummaryModel, SummaryResult};
 pub use wire::{DEFAULT_LOCAL_ENDPOINT, DEFAULT_MODEL, DEFAULT_PROMPT};
 
 #[derive(Debug, Clone, thiserror::Error)]

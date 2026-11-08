@@ -94,6 +94,17 @@ pub struct SidecarSet<'a> {
     pub include_original: bool,
     pub include_translation: bool,
     pub include_bilingual: bool,
+    /// The intro summary, written as opening cues.
+    pub summary: Option<&'a str>,
+}
+
+/// `ExportCoordinator.applyingIntro`: the summary opens SRT and WebVTT
+/// files only; text, Markdown and JSON stay a faithful transcript.
+pub fn with_intro(segments: &[Segment], format: Format, summary: Option<&str>) -> Vec<Segment> {
+    match format {
+        Format::Srt | Format::Vtt => crate::subtitle::segments_prepending_intro(summary, segments),
+        _ => segments.to_vec(),
+    }
 }
 
 /// `ExportCoordinator.writeSidecars`: SRT files next to the video, named
@@ -118,7 +129,8 @@ pub fn write_sidecars(source: &Path, set: &SidecarSet) -> Result<Vec<PathBuf>, S
     for (name, segments) in documents {
         let path = folder.join(name);
         back_up_existing(&path).map_err(|e| format!("cannot back up {}: {e}", path.display()))?;
-        crate::subtitle::write_file(&segments, Format::Srt, &path).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+        crate::subtitle::write_file(&with_intro(&segments, Format::Srt, set.summary), Format::Srt, &path)
+            .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
         written.push(path);
     }
     Ok(written)
@@ -155,6 +167,7 @@ mod sidecar_tests {
             include_original: true,
             include_translation: true,
             include_bilingual: true,
+            summary: None,
         };
         let names: Vec<String> =
             write_sidecars(&video, &set).unwrap().iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();

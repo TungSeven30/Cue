@@ -154,6 +154,12 @@ input, select {
 .overrides { display: flex; gap: 12px; flex-wrap: wrap; }
 .overrides label { display: grid; gap: 3px; font-size: 12px; color: var(--muted); min-width: 170px; flex: 1 1 170px; max-width: 280px; }
 .overrides input, .overrides select { color: var(--text); font-size: 13.5px; }
+.intro { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 12px; background: var(--panel); }
+.intro > summary { cursor: pointer; font-weight: 600; }
+.intro > summary .muted { font-weight: 400; margin-left: 6px; }
+.intro textarea { display: block; width: 100%; margin: 8px 0; resize: vertical; min-height: 60px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); line-height: 1.45; }
+.intro-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.intro-tools label { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); margin-left: auto; }
 
 .workspace { display: grid; grid-template-columns: minmax(320px, 46%) 1fr; gap: 16px; flex: 1; min-height: 360px; }
 @media (max-width: 1100px) { .workspace { grid-template-columns: 1fr; } }

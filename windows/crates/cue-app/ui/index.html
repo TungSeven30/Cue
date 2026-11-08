@@ -61,7 +61,23 @@
           <label>Translation model
             <input id="ov-model" list="translation-models" placeholder="Default">
           </label>
+          <label>Intro summary
+            <select id="ov-summary"><option value="">Default</option><option value="true">Write one</option><option value="false">Skip</option></select>
+          </label>
         </div>
+
+        <details id="intro" class="intro">
+          <summary>Intro summary <span id="intro-state" class="muted"></span></summary>
+          <textarea id="intro-text" rows="3" placeholder="A spoiler-free introduction shown as the opening subtitles of .srt and .vtt files."></textarea>
+          <div class="intro-tools">
+            <button id="intro-generate" type="button">Write with AI</button>
+            <button id="intro-save" type="button" class="ghost">Save</button>
+            <button id="intro-clear" type="button" class="ghost">Remove</button>
+            <label>Detail
+              <select id="ov-summary-detail"><option value="">Default</option><option value="brief">Brief</option><option value="detailed">Detailed</option></select>
+            </label>
+          </div>
+        </details>
 
         <div class="workspace">
           <div class="player">
@@ -130,6 +146,17 @@
           <label>Parallel requests <input id="s-parallel" type="number" min="1" max="4"></label>
           <label>Local server <input id="s-endpoint" placeholder="http://localhost:1234/v1"></label>
           <label class="check"><input id="s-auto-translate" type="checkbox"> Translate automatically after transcription</label>
+        </fieldset>
+        <fieldset>
+          <legend>Intro summary</legend>
+          <p class="hint">A spoiler-free introduction, written from the subtitles when a video finishes and shown as the opening cues of .srt and .vtt files.</p>
+          <label class="check"><input id="s-summary" type="checkbox"> Write an intro summary for each video</label>
+          <label>Detail
+            <select id="s-summary-detail"><option value="brief">Brief (1-3 sentences)</option><option value="detailed">Detailed (5-8 sentences)</option></select>
+          </label>
+          <label>Model <input id="s-summary-model" list="translation-models" placeholder="Same as translation"></label>
+          <label>Fallback model <input id="s-summary-fallback" list="translation-models" placeholder="None"></label>
+          <p class="hint">The fallback runs only when the first model declines a film for a policy or safety reason.</p>
         </fieldset>
         <fieldset>
           <legend>Workflow</legend>

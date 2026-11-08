@@ -8,20 +8,28 @@
 //! one translation. A job with a finished transcript queues for the
 //! translation slot; a partial transcript never counts.
 
+mod burnin;
+mod downloads;
 mod persister;
 mod settings;
+mod watch;
 pub mod whisper;
 
-pub use settings::{apply_overrides, Settings};
+pub use burnin::BurnInState;
+pub use cue_core::burnin::TextSize;
+pub use downloads::{Download, DownloadStatus};
+pub use settings::{apply_overrides, Settings, WatchFolder};
+pub use watch::WatchStatus;
 
 use chrono::Utc;
 use cue_core::export::{self, SidecarSet};
-use cue_core::jobs::{self, Job, JobProgress, JobStage, JobStatus, JobStore};
+use cue_core::jobs::{self, Job, JobOrigin, JobProgress, JobStage, JobStatus, JobStore};
 use cue_core::subtitle::{self, Format};
 use cue_core::translation::{ChunkMode, Provider, TranslateOptions, TranslationError, Translator, Transport};
 use cue_core::Segment;
 use persister::Persister;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -81,6 +89,25 @@ pub enum Event {
     Notice {
         message: String,
     },
+    /// A job reached the end of its run (not a cancel): for notifications.
+    Finished {
+        id: String,
+        title: String,
+        success: bool,
+        message: String,
+    },
+    WatchFolders {
+        folders: Vec<WatchStatus>,
+    },
+    Download {
+        download: Download,
+    },
+    DownloadRemoved {
+        id: String,
+    },
+    BurnIn {
+        state: BurnInState,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -96,6 +123,7 @@ pub struct JobSummary {
     pub translation_count: usize,
     pub partial_count: usize,
     pub order_index: f64,
+    pub origin: JobOrigin,
     pub source_language: String,
     pub target_language: String,
     pub translation_model: String,
@@ -116,6 +144,7 @@ impl JobSummary {
             translation_count: job.translated_segments.len(),
             partial_count: job.partial_transcript_segments.len(),
             order_index: job.order_index,
+            origin: job.origin,
             source_language: job.settings.source_language.clone(),
             target_language: job.settings.translation_target_language.clone(),
             translation_model: job.settings.translation_model.clone(),
@@ -146,6 +175,14 @@ pub struct Config {
     pub transport: Arc<dyn Transport + Send + Sync>,
     pub keys: KeyLookup,
     pub emit: Arc<dyn Fn(Event) + Send + Sync>,
+    pub tools: Tools,
+}
+
+/// Explicit tool locations; `None` searches the usual places.
+#[derive(Debug, Clone, Default)]
+pub struct Tools {
+    pub ytdlp: Option<PathBuf>,
+    pub ffmpeg: Option<PathBuf>,
 }
 
 impl Config {
@@ -157,6 +194,7 @@ impl Config {
             transport: Arc::new(cue_core::translation::UreqTransport),
             keys: Arc::new(|p| cue_core::credentials::lookup(p).map(|(k, _)| k)),
             emit,
+            tools: Tools::default(),
         }
     }
 }
@@ -184,6 +222,17 @@ struct Inner {
     transport: Arc<dyn Transport + Send + Sync>,
     keys: KeyLookup,
     emit: Arc<dyn Fn(Event) + Send + Sync>,
+    data_dir: PathBuf,
+    tools: Tools,
+    ledger: Mutex<cue_core::watch::Ledger>,
+    watchers: Mutex<HashMap<String, watch::Watcher>>,
+    downloads: Mutex<Vec<downloads::Slot>>,
+    burn: Mutex<Option<burnin::Running>>,
+}
+
+/// Locks a mutex, carrying on past a panicked holder.
+fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 #[derive(Clone)]
@@ -202,6 +251,9 @@ impl Runtime {
         let snapshot = store.load();
         let settings_path = config.data_dir.join("settings.json");
         let settings = Settings::load(&settings_path);
+        let ledger = cue_core::watch::Ledger::open(config.data_dir.join("watch-ledger.json"));
+        let mut failures = snapshot.failures;
+        failures.extend(ledger.startup_error.clone());
         let runtime = Runtime {
             inner: Arc::new(Inner {
                 state: Mutex::new(State {
@@ -218,10 +270,17 @@ impl Runtime {
                 transport: config.transport,
                 keys: config.keys,
                 emit: config.emit,
+                data_dir: config.data_dir,
+                tools: config.tools,
+                ledger: Mutex::new(ledger),
+                watchers: Mutex::new(HashMap::new()),
+                downloads: Mutex::new(Vec::new()),
+                burn: Mutex::new(None),
             }),
         };
         runtime.pump();
-        (runtime, snapshot.failures)
+        runtime.sync_watchers();
+        (runtime, failures)
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -260,6 +319,10 @@ impl Runtime {
     /// Adds media files, skipping any already in the list. Interactive adds
     /// honor "start added jobs automatically".
     pub fn add_files(&self, paths: &[PathBuf]) -> Vec<String> {
+        self.add_paths(paths, JobOrigin::Manual, None)
+    }
+
+    fn add_paths(&self, paths: &[PathBuf], origin: JobOrigin, note: Option<&str>) -> Vec<String> {
         let mut added = Vec::new();
         {
             let mut state = self.lock();
@@ -274,6 +337,10 @@ impl Runtime {
                 let mut job = Job::new(path, snapshot.clone(), Utc::now());
                 // New files join the end of the queue in the order given.
                 job.order_index = first_order + offset as f64;
+                job.origin = origin;
+                if let Some(note) = note {
+                    job.log = format!("{note}\n");
+                }
                 if auto_start {
                     queue(&mut job);
                 }
@@ -488,10 +555,34 @@ impl Runtime {
         }
     }
 
-    pub fn update_settings(&self, settings: Settings) -> Result<(), String> {
+    /// Saves new global settings. Watch folders are managed by their own
+    /// calls, so the list in `settings` is ignored.
+    pub fn update_settings(&self, mut settings: Settings) -> Result<(), String> {
+        let mut state = self.lock();
+        settings.watch_folders = state.settings.watch_folders.clone();
         settings.save(&self.inner.settings_path)?;
-        self.lock().settings = settings;
+        state.settings = settings;
         Ok(())
+    }
+
+    /// Changes settings in place and saves them.
+    fn edit_settings<T>(&self, f: impl FnOnce(&mut Settings) -> Result<T, String>) -> Result<T, String> {
+        let mut state = self.lock();
+        let mut settings = state.settings.clone();
+        let value = f(&mut settings)?;
+        settings.save(&self.inner.settings_path)?;
+        state.settings = settings;
+        Ok(value)
+    }
+
+    /// Whether anything is running that sleep would interrupt.
+    pub fn busy(&self) -> bool {
+        let state = self.lock();
+        let pipeline = state.transcribing.is_some() || state.translating.is_some();
+        drop(state);
+        pipeline
+            || locked(&self.inner.downloads).iter().any(|d| d.info.status == DownloadStatus::Running)
+            || locked(&self.inner.burn).is_some()
     }
 
     /// Stops everything and waits for pending saves. Running jobs keep
@@ -502,6 +593,9 @@ impl Runtime {
             running.cancel.store(true, Ordering::Relaxed);
         }
         drop(state);
+        self.stop_watchers();
+        self.cancel_all_downloads();
+        let _ = self.cancel_burn_in();
         self.inner.persister.flush();
     }
 
@@ -685,7 +779,15 @@ impl Runtime {
         });
         self.emit(Event::SegmentsChanged { id: id.clone() });
         self.write_sidecars(&id, true);
+        let outcome = self.job(&id).and_then(|job| match job.status {
+            JobStatus::TranscriptionComplete => Some(true),
+            JobStatus::Failed => Some(false),
+            _ => None,
+        });
         self.lock().transcribing = None;
+        if let Some(success) = outcome {
+            self.finished(&id, success);
+        }
         self.after_run();
     }
 
@@ -730,7 +832,16 @@ impl Runtime {
         });
         self.emit(Event::SegmentsChanged { id: id.clone() });
         self.write_sidecars(&id, false);
+        let outcome = self.job(&id).and_then(|job| match job.status {
+            _ if canceled => None,
+            JobStatus::TranslationComplete => Some(true),
+            JobStatus::Failed => Some(false),
+            _ => None,
+        });
         self.lock().translating = None;
+        if let Some(success) = outcome {
+            self.finished(&id, success);
+        }
         self.after_run();
     }
 
@@ -755,7 +866,9 @@ impl Runtime {
     fn write_sidecars(&self, id: &str, after_transcription: bool) {
         let settings = self.settings();
         let Some(job) = self.job(id) else { return };
-        if !settings.auto_export_sidecars {
+        // Watch-folder jobs always leave subtitles next to the video: nobody
+        // is there to export them by hand.
+        if !settings.auto_export_sidecars && job.origin != JobOrigin::WatchFolder {
             return;
         }
         let done = matches!(
@@ -783,6 +896,19 @@ impl Runtime {
             }
             Err(e) => self.emit(Event::Notice { message: format!("{}: {e}", job.title()) }),
         }
+    }
+
+    /// A run ended on its own: record a watch-folder file's outcome so it
+    /// isn't queued again, and tell the UI (for a notification).
+    fn finished(&self, id: &str, success: bool) {
+        let Some(job) = self.job(id) else { return };
+        if job.origin == JobOrigin::WatchFolder && !job.source_fingerprint.is_empty() {
+            let outcome = if success { cue_core::watch::Outcome::Success } else { cue_core::watch::Outcome::Failure };
+            if let Err(e) = locked(&self.inner.ledger).record(&job.source_fingerprint, outcome) {
+                self.emit(Event::Notice { message: format!("Could not save watch-folder history: {e}") });
+            }
+        }
+        self.emit(Event::Finished { id: id.into(), title: job.title(), success, message: job.progress.detail.clone() });
     }
 
     fn after_run(&self) {

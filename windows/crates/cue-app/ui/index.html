@@ -10,15 +10,18 @@
   <header class="topbar">
     <div class="brand"><img src="icon.png" alt=""><span>Cue</span></div>
     <button id="add" class="primary">Add videos</button>
+    <button id="add-url" class="ghost" title="Download a video from a web page with yt-dlp">Add from URL</button>
     <span class="spacer"></span>
     <span id="queue-status" class="queue-status"></span>
     <button id="pause" class="ghost" title="Pause or resume the queue">Pause queue</button>
+    <button id="open-palette" class="ghost" title="Commands (Ctrl+K)">Ctrl+K</button>
     <button id="open-settings" class="ghost">Settings</button>
   </header>
 
   <div class="layout">
     <aside class="sidebar">
       <input id="filter" type="search" placeholder="Filter videos" aria-label="Filter videos">
+      <ul id="downloads" class="downloads" aria-label="Downloads"></ul>
       <ul id="jobs" class="jobs" aria-label="Videos"></ul>
       <div id="jobs-empty" class="jobs-empty">
         <p>No videos yet.</p>
@@ -133,6 +136,20 @@
           <label class="check"><input id="s-auto-start" type="checkbox"> Start added videos right away</label>
           <label class="check"><input id="s-sidecars" type="checkbox"> Save .srt files next to each video when done</label>
           <label class="check"><input id="s-bilingual" type="checkbox"> Also save a bilingual .srt</label>
+          <label class="check"><input id="s-tray" type="checkbox"> Keep running in the notification area when the window is closed</label>
+          <label class="check"><input id="s-notify" type="checkbox"> Notify me when a video finishes while Cue is in the background</label>
+          <label class="check"><input id="s-awake" type="checkbox"> Keep the PC awake while jobs run</label>
+        </fieldset>
+        <fieldset>
+          <legend>Watch folders</legend>
+          <p class="hint">New videos in these folders (and their subfolders) are queued automatically once they finish copying, and their .srt files are saved next to them. Changes here apply right away.</p>
+          <ul id="watch-list" class="watch-list"></ul>
+          <button id="watch-add" type="button">Add a folder…</button>
+        </fieldset>
+        <fieldset>
+          <legend>Downloads</legend>
+          <div class="folder-row"><span>Save to <span id="s-download-folder" class="muted"></span></span><button id="s-download-choose" type="button" class="ghost">Choose…</button></div>
+          <div class="folder-row"><span id="ytdlp-state" class="muted"></span><button id="ytdlp-install" type="button" class="ghost">Install yt-dlp</button></div>
         </fieldset>
         <fieldset>
           <legend>API keys</legend>
@@ -182,6 +199,57 @@
         <button id="export-go" type="button" class="primary">Export</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="url" class="sheet small">
+    <form method="dialog">
+      <h2>Add from URL</h2>
+      <div class="sheet-body">
+        <label>Page address <input id="url-input" type="text" placeholder="https://…" autocomplete="off" spellcheck="false"></label>
+        <p class="hint">yt-dlp downloads the video into your downloads folder, then it joins the list like any other file. Only download what you have the right to.</p>
+      </div>
+      <div class="sheet-foot">
+        <button value="cancel" class="ghost">Cancel</button>
+        <button id="url-go" type="button" class="primary">Download</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="burn" class="sheet small">
+    <form method="dialog">
+      <h2>Burn in subtitles</h2>
+      <div class="sheet-body">
+        <p class="hint">Renders the subtitles into a new MP4. The original video is never changed.</p>
+        <fieldset>
+          <legend>Subtitles</legend>
+          <label class="check"><input type="radio" name="burn-doc" value="original" checked> Original transcript</label>
+          <label class="check"><input type="radio" name="burn-doc" value="translated"> Translation</label>
+          <label class="check"><input type="radio" name="burn-doc" value="bilingual"> Bilingual</label>
+        </fieldset>
+        <label>Text size
+          <select id="burn-size"><option value="small">Small</option><option value="medium" selected>Medium</option><option value="large">Large</option></select>
+        </label>
+        <fieldset>
+          <legend>Save as</legend>
+          <div class="folder-row"><span id="burn-output" class="muted"></span><button id="burn-choose" type="button" class="ghost">Choose…</button></div>
+        </fieldset>
+        <div id="burn-progress" class="status-line" hidden>
+          <span id="burn-detail" class="muted"></span>
+          <div class="bar"><div id="burn-bar"></div></div>
+        </div>
+        <p id="burn-error" class="error-text" hidden></p>
+      </div>
+      <div class="sheet-foot">
+        <button value="cancel" class="ghost">Close</button>
+        <button id="burn-cancel" type="button" class="ghost danger" hidden>Stop</button>
+        <button id="burn-go" type="button" class="primary">Burn in</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="palette" class="palette" aria-label="Commands">
+    <input id="palette-input" type="text" placeholder="Type a command or a video name" autocomplete="off" spellcheck="false">
+    <ul id="palette-list" class="palette-list" role="listbox"></ul>
   </dialog>
 
   <script src="app.js"></script>

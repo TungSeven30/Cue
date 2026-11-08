@@ -12,6 +12,7 @@ mod burnin;
 mod downloads;
 mod import;
 mod persister;
+pub mod python;
 mod settings;
 mod summary;
 mod watch;
@@ -54,11 +55,15 @@ pub struct TranscribeRequest {
     pub use_gpu: bool,
     pub resume_through: f64,
     pub partial: Vec<Segment>,
+    /// The Python command from Settings; empty finds one.
+    pub python: String,
 }
 
 pub trait Transcriber: Send + Sync {
     /// Returns the cleaned, final transcript.
     fn transcribe(&self, request: TranscribeRequest, cancel: Arc<AtomicBool>, report: Report) -> Result<Vec<Segment>, String>;
+    /// Stops anything kept running between jobs. Called on quit.
+    fn shut_down(&self) {}
 }
 
 pub type KeyLookup = Arc<dyn Fn(Provider) -> Option<String> + Send + Sync>;
@@ -194,7 +199,10 @@ impl Config {
     pub fn standard(emit: Arc<dyn Fn(Event) + Send + Sync>) -> Self {
         Config {
             data_dir: cue_core::paths::app_data_dir(),
-            transcriber: Arc::new(whisper::WhisperTranscriber::new()),
+            transcriber: Arc::new(python::BackendRouter {
+                built_in: Arc::new(whisper::WhisperTranscriber::new()),
+                python: Arc::new(python::PythonTranscriber::new(cue_core::paths::app_data_dir().join("backend"))),
+            }),
             transport: Arc::new(cue_core::translation::UreqTransport),
             keys: Arc::new(|p| cue_core::credentials::lookup(p).map(|(k, _)| k)),
             emit,
@@ -638,6 +646,7 @@ impl Runtime {
         self.stop_watchers();
         self.cancel_all_downloads();
         let _ = self.cancel_burn_in();
+        self.inner.transcriber.shut_down();
         self.inner.persister.flush();
     }
 
@@ -779,6 +788,7 @@ impl Runtime {
             use_gpu,
             resume_through: job.transcription_resume_through,
             partial: job.partial_transcript_segments.clone(),
+            python: self.settings().python_path,
         };
         let reporter = self.clone();
         let report_id = id.clone();

@@ -548,6 +548,19 @@ def faster_whisper_model(model: str) -> str:
     return model or "large-v3-turbo"
 
 
+def faster_whisper_device():
+    """CUDA in float16 when CTranslate2 sees an NVIDIA GPU (the Windows app's
+    case), otherwise the CPU int8 path every Mac takes."""
+    try:
+        import ctranslate2  # type: ignore
+
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "cuda", "float16"
+    except Exception:
+        pass
+    return "cpu", "int8"
+
+
 def load_with_faster_whisper(
     audio_path: Path,
     model: str,
@@ -565,10 +578,11 @@ def load_with_faster_whisper(
         emit("loadingModel", f"Loading {resolved_model} with Faster Whisper. First run may download the model.", 0.18)
     else:
         emit("loadingModel", f"Loading {resolved_model} with Faster Whisper (mapped from {model}). First run may download the model.", 0.18)
+    device, compute_type = faster_whisper_device()
     runner = cached_model(
         "faster-whisper",
-        resolved_model,
-        lambda: WhisperModel(resolved_model, device="cpu", compute_type="int8"),
+        (resolved_model, device, compute_type),
+        lambda: WhisperModel(resolved_model, device=device, compute_type=compute_type),
     )
     emit("transcribing", "Running Faster Whisper transcription.", 0.35)
     segments, _ = call_with_supported_kwargs(

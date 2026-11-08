@@ -259,7 +259,12 @@ function openLoad(path) {
   $("load-file").textContent = baseName(path);
   const translation = document.querySelector('input[name="load-slot"][value="translation"]');
   translation.disabled = !summary.transcriptCount;
-  document.querySelector(`input[name="load-slot"][value="${summary.transcriptCount ? "translation" : "transcript"}"]`).checked = true;
+  // "Movie.ja.srt" for a Japanese video, or "Movie.original.srt", is the
+  // transcript; any other file goes to the translation once there is one.
+  const tag = (baseName(path).match(/\.([^.]+)\.(srt|vtt)$/i) || [])[1]?.toLowerCase();
+  const original = tag && (tag === "original" || tag === (summary.sourceLanguage || "").toLowerCase());
+  const slot = summary.transcriptCount && !original ? "translation" : "transcript";
+  document.querySelector(`input[name="load-slot"][value="${slot}"]`).checked = true;
   $("load-error").hidden = true;
   $("load").showModal();
 }
@@ -487,6 +492,10 @@ async function openSettings() {
   fillSelect($("s-source"), LANGUAGES, settings.sourceLanguage);
   $("s-gpu").checked = settings.useGpu;
   $("s-beam").value = settings.beamSize;
+  $("s-backend").value = settings.whisperBackend === "faster-whisper" ? "faster-whisper" : "whisper-cpp";
+  $("s-python").value = settings.pythonPath;
+  $("s-python-status").textContent = "";
+  showPythonBox();
   $("s-tmodel").value = settings.translationModel;
   $("s-target").value = settings.translationTargetLanguage;
   $("s-tsource").value = settings.translationSourceLanguage === "auto" ? "" : settings.translationSourceLanguage;
@@ -538,6 +547,27 @@ function renderKeys(keys) {
   }));
 }
 
+function showPythonBox() {
+  $("s-python-box").hidden = $("s-backend").value !== "faster-whisper";
+}
+
+async function checkPython() {
+  const status = $("s-python-status");
+  $("s-python-check").disabled = true;
+  status.textContent = "Checking…";
+  status.classList.remove("error-text");
+  try {
+    const result = await call("check_python", { python: $("s-python").value.trim() });
+    status.textContent = result.detail;
+    status.classList.toggle("error-text", !result.ok);
+  } catch (error) {
+    status.textContent = String(error);
+    status.classList.add("error-text");
+  } finally {
+    $("s-python-check").disabled = false;
+  }
+}
+
 async function saveSettings(event) {
   event.preventDefault();
   const settings = {
@@ -546,6 +576,8 @@ async function saveSettings(event) {
     sourceLanguage: $("s-source").value,
     useGpu: $("s-gpu").checked,
     beamSize: Math.min(16, Math.max(1, Number($("s-beam").value) || 5)),
+    whisperBackend: $("s-backend").value,
+    pythonPath: $("s-python").value.trim(),
     translationModel: $("s-tmodel").value.trim() || state.settings.translationModel,
     translationTargetLanguage: $("s-target").value.trim() || "English",
     translationSourceLanguage: $("s-tsource").value.trim() || "auto",
@@ -910,6 +942,8 @@ async function init() {
   bindOverride("ov-summary-detail", "summaryDetail");
   $("load-go").onclick = runLoad;
   $("intro-generate").onclick = writeIntro;
+  $("s-backend").onchange = showPythonBox;
+  $("s-python-check").onclick = checkPython;
   $("intro-save").onclick = () => saveIntro($("intro-text").value);
   $("intro-clear").onclick = () => saveIntro(null);
 

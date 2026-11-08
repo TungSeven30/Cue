@@ -129,6 +129,14 @@
       <div class="sheet-body">
         <fieldset>
           <legend>Transcription</legend>
+          <label>Engine
+            <select id="s-backend"><option value="whisper-cpp">Built in (whisper.cpp)</option><option value="faster-whisper">Faster Whisper (Python)</option></select>
+          </label>
+          <div id="s-python-box" hidden>
+            <p class="hint">Faster Whisper runs through your own Python 3 with <code>pip install faster-whisper</code>. It uses an NVIDIA GPU through CUDA when CTranslate2 finds one, otherwise the CPU. It downloads its own copy of the model on first use.</p>
+            <label>Python <input id="s-python" placeholder="Found automatically (py -3, then python)"></label>
+            <div class="row-actions"><button type="button" id="s-python-check">Check Python</button> <span id="s-python-status" class="muted"></span></div>
+          </div>
           <label>Whisper model <select id="s-model"></select></label>
           <label>Spoken language <select id="s-source"></select></label>
           <label class="check"><input id="s-gpu" type="checkbox"> Use the GPU</label>

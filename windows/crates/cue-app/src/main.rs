@@ -334,6 +334,12 @@ async fn generate_summary(app: State<'_, App>, id: String) -> Result<String> {
     tauri::async_runtime::spawn_blocking(move || runtime.generate_summary(&id)).await.map_err(|e| e.to_string())?
 }
 
+/// Probes Python and faster-whisper for Settings; blocks off the UI thread.
+#[tauri::command]
+async fn check_python(python: String) -> Result<cue_runtime::python::Check> {
+    tauri::async_runtime::spawn_blocking(move || cue_runtime::python::check(&python)).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn set_summary(app: State<App>, id: String, text: Option<String>) -> Result<()> {
     app.runtime.set_summary(&id, text.as_deref())
@@ -562,6 +568,7 @@ fn main() {
             burn_in,
             cancel_burn_in,
             generate_summary,
+            check_python,
             set_summary,
             pick_subtitle_file,
             load_subtitles,

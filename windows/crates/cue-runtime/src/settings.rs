@@ -4,6 +4,7 @@
 //! is already running.
 
 use cue_core::jobs::JobSettings;
+use cue_core::translation::SummaryDetail;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -16,6 +17,10 @@ pub struct Settings {
     pub source_language: String,
     pub use_gpu: bool,
     pub beam_size: i64,
+    /// "whisper-cpp" (built in) or "faster-whisper" (through Python).
+    pub whisper_backend: String,
+    /// The Python command for faster-whisper; empty finds one.
+    pub python_path: String,
     pub translation_model: String,
     pub translation_source_language: String,
     pub translation_target_language: String,
@@ -29,6 +34,13 @@ pub struct Settings {
     /// Write SRT sidecars next to the video when a stage finishes.
     pub auto_export_sidecars: bool,
     pub sidecar_bilingual: bool,
+    /// Write a spoiler-free intro when a job finishes.
+    pub generate_summary: bool,
+    pub summary_detail: SummaryDetail,
+    /// Empty means the translation model.
+    pub summary_model: String,
+    /// Tried only when the summary model declines the content; empty is none.
+    pub summary_fallback_model: String,
     /// Folders whose new media is queued automatically.
     pub watch_folders: Vec<WatchFolder>,
     /// Where "Add from URL" saves; empty means `Videos\Cue Downloads`.
@@ -69,6 +81,8 @@ impl Default for Settings {
             source_language: "auto".into(),
             use_gpu: true,
             beam_size: 5,
+            whisper_backend: crate::python::BUILT_IN.into(),
+            python_path: String::new(),
             translation_model: cue_core::translation::DEFAULT_MODEL.into(),
             translation_source_language: "auto".into(),
             translation_target_language: "English".into(),
@@ -79,6 +93,10 @@ impl Default for Settings {
             auto_start_added_jobs: true,
             auto_export_sidecars: true,
             sidecar_bilingual: false,
+            generate_summary: false,
+            summary_detail: SummaryDetail::Brief,
+            summary_model: String::new(),
+            summary_fallback_model: String::new(),
             watch_folders: Vec::new(),
             download_folder: String::new(),
             keep_in_tray: true,
@@ -110,6 +128,31 @@ impl Settings {
         std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, path)).map_err(|e| e.to_string())
     }
 
+    /// The backend a job records; anything unknown is the built-in one.
+    pub fn resolved_backend(&self) -> &'static str {
+        if self.whisper_backend.trim() == crate::python::FASTER_WHISPER {
+            crate::python::FASTER_WHISPER
+        } else {
+            crate::python::BUILT_IN
+        }
+    }
+
+    /// The model that writes summaries.
+    pub fn resolved_summary_model(&self) -> String {
+        let chosen = self.summary_model.trim();
+        if chosen.is_empty() {
+            self.translation_model.trim().to_string()
+        } else {
+            chosen.to_string()
+        }
+    }
+
+    /// The fallback, unless it is unset or the same as the summary model.
+    pub fn resolved_summary_fallback_model(&self) -> Option<String> {
+        let fallback = self.summary_fallback_model.trim();
+        (!fallback.is_empty() && fallback != self.resolved_summary_model()).then(|| fallback.to_string())
+    }
+
     /// The snapshot a job records. Only the keys the Mac requires are
     /// written beyond what Windows uses, so the file stays readable there.
     pub fn snapshot(&self) -> JobSettings {
@@ -117,7 +160,7 @@ impl Settings {
             "transcriptionProcessingVersion": JobSettings::PROCESSING_VERSION,
             "sourceLanguage": self.source_language,
             "whisperModel": self.whisper_model,
-            "whisperBackend": "whisper-cpp",
+            "whisperBackend": self.resolved_backend(),
             "openAIModel": self.translation_model,
             "translationSourceLanguage": self.translation_source_language,
             "translationTargetLanguage": self.translation_target_language,

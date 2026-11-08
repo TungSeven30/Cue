@@ -11,7 +11,7 @@ use cue_core::subtitle::Format;
 use cue_core::translation::Provider;
 use cue_runtime::{Config, Document, Download, Event, JobSummary, Runtime, Settings, Slot, TextSize, WatchStatus};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
@@ -306,6 +306,45 @@ async fn install_ytdlp(app: State<'_, App>) -> Result<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+// MARK: Subtitle import
+
+/// Asks for an SRT or WebVTT file, starting in the video's folder.
+#[tauri::command]
+async fn pick_subtitle_file(handle: AppHandle, app: State<'_, App>, id: String) -> Result<Option<String>> {
+    let job = app.runtime.job(&id).ok_or("No such job.")?;
+    let mut dialog = handle.dialog().file().set_title("Load subtitles").add_filter("Subtitles", &["srt", "vtt"]);
+    if let Some(folder) = Path::new(&job.source_path).parent() {
+        dialog = dialog.set_directory(folder);
+    }
+    Ok(dialog.blocking_pick_file().and_then(|p| p.into_path().ok()).map(|p| p.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+async fn load_subtitles(app: State<'_, App>, id: String, path: PathBuf, slot: Slot) -> Result<()> {
+    let runtime = app.runtime.clone();
+    tauri::async_runtime::spawn_blocking(move || runtime.load_subtitles(&id, &path, slot)).await.map_err(|e| e.to_string())?
+}
+
+// MARK: Intro summary
+
+/// Writes the intro summary now; the request runs off the UI thread.
+#[tauri::command]
+async fn generate_summary(app: State<'_, App>, id: String) -> Result<String> {
+    let runtime = app.runtime.clone();
+    tauri::async_runtime::spawn_blocking(move || runtime.generate_summary(&id)).await.map_err(|e| e.to_string())?
+}
+
+/// Probes Python and faster-whisper for Settings; blocks off the UI thread.
+#[tauri::command]
+async fn check_python(python: String) -> Result<cue_runtime::python::Check> {
+    tauri::async_runtime::spawn_blocking(move || cue_runtime::python::check(&python)).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_summary(app: State<App>, id: String, text: Option<String>) -> Result<()> {
+    app.runtime.set_summary(&id, text.as_deref())
+}
+
 // MARK: Burn-in
 
 #[tauri::command]
@@ -461,6 +500,16 @@ fn main() {
         })
         .on_window_event(|window, event| match event {
             WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
+                // Subtitle files go to the UI, which offers to load them into
+                // the selected video.
+                let subtitles: Vec<String> = paths
+                    .iter()
+                    .filter(|p| cue_core::subtitle::Format::importable_from(p).is_some())
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect();
+                if !subtitles.is_empty() {
+                    let _ = window.emit("cue-subtitle-drop", subtitles);
+                }
                 // A dropped folder is walked recursively; keep that off the
                 // window's event thread.
                 if let Some(app) = window.try_state::<App>() {
@@ -518,6 +567,11 @@ fn main() {
             pick_burn_in_output,
             burn_in,
             cancel_burn_in,
+            generate_summary,
+            check_python,
+            set_summary,
+            pick_subtitle_file,
+            load_subtitles,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start Cue");

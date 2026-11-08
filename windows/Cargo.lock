@@ -838,6 +838,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "unicode-normalization",
+ "unicode-segmentation",
  "ureq",
  "uuid",
  "windows-sys 0.61.2",

@@ -7,9 +7,10 @@ pipeline in Rust and keeps the *contracts* identical. A subtitle, a model
 file, or a job transcript produced on one platform is byte-compatible with
 the other.
 
-Status: **phase 4 of 6**: the engine, the CLI (transcribe and translate),
-the desktop app and its automation (watch folders, URL downloads, burn-in,
-tray, notifications). See
+Status: **phase 5 of 6**: the engine, the CLI (transcribe and translate),
+the desktop app, its automation (watch folders, URL downloads, burn-in,
+tray, notifications), faster-whisper through Python, intro summaries and
+subtitle import. See
 [`PLAN.md`](PLAN.md) for the roadmap.
 
 ## Layout
@@ -18,7 +19,7 @@ tray, notifications). See
 |---|---|---|
 | `crates/cue-core` | Segments, transcript cleanup, silence-aware chunk planning, SRT/VTT/TXT/MD/JSON export and SRT/VTT import (with legacy-encoding detection), ffmpeg audio extraction + cache, model catalog and resumable, hash-verified downloader, watch-folder scanning and ledger, yt-dlp and burn-in argument building | `TranscriptionPostProcessor`, `TranscriptionChunkPlanner`, `SubtitleWriter`, `SubtitleReader`, `AudioCache`, `FFmpegAudioExtractor`, `ModelDownloader`, `WatchFolderScanEngine`, `WatchFolderLedger`, `MediaDownloadService`, `BurnInService` |
 | `crates/cue-engine` | Built-in whisper.cpp engine (CPU, or Vulkan/CUDA by feature), resident model cache, fresh state per chunk, streaming segments, cancel, resume | `WhisperCppEngine`, `WhisperModelCache` |
-| `crates/cue-runtime` | The app's engine room: job queue with one transcription slot and one translation slot, coalesced per-job saves, settings, per-job overrides, sidecar export, watch-folder threads, URL downloads, burn-in, events for the UI | `AppModel`, `PipelineCoordinator`, `PipelineScheduler`, `JobRepository`, `ExportCoordinator`, `WatchFolderService` |
+| `crates/cue-runtime` | The app's engine room: job queue with one transcription slot and one translation slot, coalesced per-job saves, settings, per-job overrides, sidecar export, watch-folder threads, URL downloads, burn-in, the resident Python worker for faster-whisper, intro summaries, subtitle import, events for the UI | `AppModel`, `PipelineCoordinator`, `PipelineScheduler`, `JobRepository`, `ExportCoordinator`, `WatchFolderService`, `PythonWorkerPool` |
 | `crates/cue-cli` | `cue.exe`: `transcribe`, `translate`, `pipeline`, `models`, `convert`, `keys`, `doctor` | `Sources/CLI` |
 | `crates/cue-app` | `cue-desktop.exe`: Tauri shell over `cue-runtime`; the UI is plain HTML/CSS/JS in `ui/` with no build step | `Sources/Views` |
 
@@ -53,6 +54,15 @@ fetch the official release from GitHub (checked against its published
 SHA-256 sums) into `%LOCALAPPDATA%\Cue\tools`, or put `yt-dlp.exe` next to
 Cue or on `PATH`. Data lives in `%LOCALAPPDATA%\Cue` (override with
 `CUE_HOME`).
+
+The optional Faster Whisper engine (Settings → Transcription → Engine) runs
+through your own Python 3: `py -3 -m pip install faster-whisper`. It uses an
+NVIDIA GPU when CTranslate2 finds one (which also needs NVIDIA's cuBLAS for
+CUDA 12 and cuDNN 9; see the faster-whisper README), otherwise the CPU. Cue
+writes the shared helper (`transcribe.py`, the same file the Mac app runs)
+to `%LOCALAPPDATA%\Cue\backend\cue_backend.py` and keeps one helper process
+alive between jobs; it exits after ten idle minutes. "Check Python" in
+Settings says what it found.
 
 ## Use
 

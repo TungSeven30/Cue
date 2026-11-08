@@ -10,8 +10,11 @@
 
 mod burnin;
 mod downloads;
+mod import;
 mod persister;
+pub mod python;
 mod settings;
+mod summary;
 mod watch;
 pub mod whisper;
 
@@ -52,11 +55,15 @@ pub struct TranscribeRequest {
     pub use_gpu: bool,
     pub resume_through: f64,
     pub partial: Vec<Segment>,
+    /// The Python command from Settings; empty finds one.
+    pub python: String,
 }
 
 pub trait Transcriber: Send + Sync {
     /// Returns the cleaned, final transcript.
     fn transcribe(&self, request: TranscribeRequest, cancel: Arc<AtomicBool>, report: Report) -> Result<Vec<Segment>, String>;
+    /// Stops anything kept running between jobs. Called on quit.
+    fn shut_down(&self) {}
 }
 
 pub type KeyLookup = Arc<dyn Fn(Provider) -> Option<String> + Send + Sync>;
@@ -127,6 +134,7 @@ pub struct JobSummary {
     pub source_language: String,
     pub target_language: String,
     pub translation_model: String,
+    pub summary: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -148,6 +156,7 @@ impl JobSummary {
             source_language: job.settings.source_language.clone(),
             target_language: job.settings.translation_target_language.clone(),
             translation_model: job.settings.translation_model.clone(),
+            summary: job.summary.clone(),
             created_at: job.created_at.to_rfc3339(),
             updated_at: job.updated_at.to_rfc3339(),
         }
@@ -190,7 +199,10 @@ impl Config {
     pub fn standard(emit: Arc<dyn Fn(Event) + Send + Sync>) -> Self {
         Config {
             data_dir: cue_core::paths::app_data_dir(),
-            transcriber: Arc::new(whisper::WhisperTranscriber::new()),
+            transcriber: Arc::new(python::BackendRouter {
+                built_in: Arc::new(whisper::WhisperTranscriber::new()),
+                python: Arc::new(python::PythonTranscriber::new(cue_core::paths::app_data_dir().join("backend"))),
+            }),
             transport: Arc::new(cue_core::translation::UreqTransport),
             keys: Arc::new(|p| cue_core::credentials::lookup(p).map(|(k, _)| k)),
             emit,
@@ -323,15 +335,28 @@ impl Runtime {
     }
 
     fn add_paths(&self, paths: &[PathBuf], origin: JobOrigin, note: Option<&str>) -> Vec<String> {
+        let listed = |state: &State, path: &Path| {
+            let key = path.to_string_lossy();
+            state.jobs.iter().any(|j| j.source_path == key && j.archived_at.is_none())
+        };
+        // Subtitles already beside the videos are read before the jobs
+        // exist, with no lock held.
+        let (settings, fresh): (Settings, Vec<PathBuf>) = {
+            let state = self.lock();
+            (state.settings.clone(), paths.iter().filter(|p| !listed(&state, p)).cloned().collect())
+        };
+        let snapshot = settings.snapshot();
+        let languages = (snapshot.source_language.clone(), snapshot.translation_target_language.clone());
+        let mut sidecars = self.scan_sidecars(&fresh, |_| languages.clone()).into_iter();
+        let translate_next = settings.auto_translate && self.translation_ready(&settings.translation_model);
         let mut added = Vec::new();
         {
             let mut state = self.lock();
             let auto_start = state.settings.auto_start_added_jobs;
-            let snapshot = state.settings.snapshot();
             let first_order = state.jobs.iter().map(|j| j.order_index).filter(|o| o.is_finite()).fold(0.0_f64, f64::max) + 1.0;
-            for (offset, path) in paths.iter().enumerate() {
-                let key = path.to_string_lossy();
-                if state.jobs.iter().any(|j| j.source_path == key && j.archived_at.is_none()) {
+            for (offset, path) in fresh.iter().enumerate() {
+                let adopted = sidecars.next().unwrap_or_default();
+                if listed(&state, path) {
                     continue;
                 }
                 let mut job = Job::new(path, snapshot.clone(), Utc::now());
@@ -344,6 +369,7 @@ impl Runtime {
                 if auto_start {
                     queue(&mut job);
                 }
+                import::adopt(&mut job, adopted, translate_next);
                 added.push(job.id.clone());
                 self.inner.persister.save(&job);
                 self.emit(Event::Job { job: Box::new(JobSummary::of(&job)) });
@@ -379,6 +405,7 @@ impl Runtime {
             job.partial_transcript_segments.clear();
             job.partial_translated_segments.clear();
             job.transcription_resume_through = 0.0;
+            job.summary = None;
             queue(job);
             Ok(())
         })?;
@@ -476,18 +503,41 @@ impl Runtime {
 
     /// Sets (or clears, with `None`) one per-job override.
     pub fn set_override(&self, id: &str, key: &str, value: Option<String>) -> Result<(), String> {
-        const KEYS: [&str; 5] = ["sourceLanguage", "whisperModel", "translationSourceLanguage", "translationTargetLanguage", "openAIModel"];
+        const KEYS: [&str; 7] = [
+            "sourceLanguage",
+            "whisperModel",
+            "translationSourceLanguage",
+            "translationTargetLanguage",
+            "openAIModel",
+            "generateSummary",
+            "summaryDetail",
+        ];
         if !KEYS.contains(&key) {
             return Err(format!("unknown setting {key}"));
         }
+        // The Mac decodes these as a Bool and an enum: a stray string would
+        // make it reject the whole job file.
+        let value: Option<serde_json::Value> = match (key, value.as_deref().map(str::trim).filter(|v| !v.is_empty())) {
+            (_, None) => None,
+            ("generateSummary", Some(v)) => match v {
+                "true" => Some(true.into()),
+                "false" => Some(false.into()),
+                _ => return Err("generateSummary takes true or false.".into()),
+            },
+            ("summaryDetail", Some(v)) => match cue_core::translation::SummaryDetail::parse(v) {
+                Some(detail) => Some(serde_json::to_value(detail).expect("an enum serializes")),
+                None => return Err("summaryDetail takes brief or detailed.".into()),
+            },
+            (_, Some(v)) => Some(v.into()),
+        };
         self.change(id, |job| {
             if !job.overrides.is_object() {
                 job.overrides = serde_json::Value::Object(Default::default());
             }
             let map = job.overrides.as_object_mut().expect("object");
-            match value.filter(|v| !v.trim().is_empty()) {
+            match value {
                 Some(v) => {
-                    map.insert(key.into(), v.into());
+                    map.insert(key.into(), v);
                 }
                 None => {
                     map.remove(key);
@@ -529,6 +579,7 @@ impl Runtime {
                 } else {
                     export::document_path(&dir, &base, &suffix, format)
                 };
+                let segments = export::with_intro(&segments, format, job.summary.as_deref());
                 subtitle::write_file(&segments, format, &path).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
                 written.push(path);
             }
@@ -596,6 +647,7 @@ impl Runtime {
         self.stop_watchers();
         self.cancel_all_downloads();
         let _ = self.cancel_burn_in();
+        self.inner.transcriber.shut_down();
         self.inner.persister.flush();
     }
 
@@ -737,6 +789,7 @@ impl Runtime {
             use_gpu,
             resume_through: job.transcription_resume_through,
             partial: job.partial_transcript_segments.clone(),
+            python: self.settings().python_path,
         };
         let reporter = self.clone();
         let report_id = id.clone();
@@ -754,10 +807,16 @@ impl Runtime {
         let result = self.inner.transcriber.transcribe(request, cancel.clone(), report);
         let auto_translate = self.settings().auto_translate;
         let canceled = cancel.load(Ordering::Relaxed);
+        // When a translation follows, the summary is written from it instead.
+        let summary = match &result {
+            Ok(segments) if !canceled && !(auto_translate && !segments.is_empty()) => self.auto_summary(&id, segments, false),
+            _ => None,
+        };
         self.update(&id, true, true, |job| match result {
             Ok(segments) if !canceled => {
                 let count = segments.len();
                 job.transcript_segments = segments;
+                job.summary = summary;
                 job.translated_segments.clear();
                 job.partial_transcript_segments.clear();
                 job.partial_translated_segments.clear();
@@ -814,10 +873,19 @@ impl Runtime {
                 })
         });
         let canceled = cancel.load(Ordering::Relaxed);
+        let summary = match &outcome {
+            Ok(translated) if !canceled => self.auto_summary(&id, translated, true),
+            _ => None,
+        };
         self.update(&id, true, true, |job| match (outcome, canceled) {
             (Ok(translated), false) => {
                 job.log.push_str(&format!("Translated {} subtitles with {}.\n", translated.len(), job.settings.translation_model));
                 job.translated_segments = translated;
+                // The transcript did not change, so a summary it already has
+                // (written or edited) stays unless a new one was written.
+                if summary.is_some() {
+                    job.summary = summary;
+                }
                 job.partial_translated_segments.clear();
                 job.status = JobStatus::TranslationComplete;
                 job.progress = JobProgress::new(JobStage::Complete, "Translation ready", Some(1.0));
@@ -886,6 +954,7 @@ impl Runtime {
             include_original: after_transcription,
             include_translation: !after_transcription,
             include_bilingual: !after_transcription && settings.sidecar_bilingual,
+            summary: job.summary.as_deref(),
         };
         match export::write_sidecars(Path::new(&job.source_path), &set) {
             Ok(paths) => {

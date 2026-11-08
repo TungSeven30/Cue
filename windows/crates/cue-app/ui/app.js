@@ -236,9 +236,93 @@ function renderJob() {
   $("ov-source").value = overrides.sourceLanguage || "";
   $("ov-target").value = overrides.translationTargetLanguage || "";
   $("ov-model").value = overrides.openAIModel || "";
-  for (const id of ["ov-source", "ov-target", "ov-model"]) $(id).disabled = isRunning(status);
+  $("ov-summary").value = overrides.generateSummary == null ? "" : String(overrides.generateSummary);
+  $("ov-summary-detail").value = overrides.summaryDetail || "";
+  for (const id of ["ov-source", "ov-target", "ov-model", "ov-summary"]) $(id).disabled = isRunning(status);
+  renderIntro(summary, status);
 
   renderActions(status, summary);
+}
+
+// MARK: Loading subtitle files
+
+async function pickSubtitles() {
+  const path = await call("pick_subtitle_file", { id: state.selected });
+  if (path) openLoad(path);
+}
+
+function openLoad(path) {
+  const summary = state.jobs.get(state.selected);
+  if (!summary) return toast("Select a video first, then load its subtitles.", "error");
+  if (isRunning(summary.status)) return toast("Stop this video before loading subtitles into it.", "error");
+  state.loadPath = path;
+  $("load-file").textContent = baseName(path);
+  const translation = document.querySelector('input[name="load-slot"][value="translation"]');
+  translation.disabled = !summary.transcriptCount;
+  // "Movie.ja.srt" for a Japanese video, or "Movie.original.srt", is the
+  // transcript; any other file goes to the translation once there is one.
+  const tag = (baseName(path).match(/\.([^.]+)\.(srt|vtt)$/i) || [])[1]?.toLowerCase();
+  const original = tag && (tag === "original" || tag === (summary.sourceLanguage || "").toLowerCase());
+  const slot = summary.transcriptCount && !original ? "translation" : "transcript";
+  document.querySelector(`input[name="load-slot"][value="${slot}"]`).checked = true;
+  $("load-error").hidden = true;
+  $("load").showModal();
+}
+
+async function runLoad() {
+  const id = state.selected;
+  const slot = document.querySelector('input[name="load-slot"]:checked').value;
+  const summary = state.jobs.get(id);
+  const filled = slot === "transcript" ? summary.transcriptCount : summary.translationCount;
+  if (filled && !confirmAction(`Replace the ${slot} with ${baseName(state.loadPath)}?`)) return;
+  try {
+    await invoke("load_subtitles", { id, path: state.loadPath, slot });
+    $("load").close();
+    toast(`Loaded ${baseName(state.loadPath)}.`);
+    if (state.selected === id) refreshSelected();
+  } catch (e) {
+    $("load-error").textContent = String(e);
+    $("load-error").hidden = false;
+  }
+}
+
+// The intro box keeps what the user is typing: only a summary that
+// changed on the job (a new one was written) replaces the text.
+function renderIntro(summary, status) {
+  const text = (summary ? summary.summary : state.job.summary) || "";
+  const box = $("intro-text");
+  if (state.introShown !== text || state.introJob !== state.selected) {
+    if (state.introJob !== state.selected || box.value === (state.introShown ?? "")) box.value = text;
+    state.introShown = text;
+    state.introJob = state.selected;
+  }
+  const hasSubtitles = (summary ? summary.transcriptCount : state.job.transcriptSegments.length) > 0;
+  $("intro").hidden = !hasSubtitles && !text;
+  $("intro-state").textContent = state.writingIntro ? "Writing…" : text ? "" : "None yet";
+  $("intro-generate").disabled = state.writingIntro || !hasSubtitles || isRunning(status);
+  $("intro-generate").textContent = text ? "Rewrite with AI" : "Write with AI";
+  $("intro-clear").disabled = !text;
+}
+
+async function writeIntro() {
+  const id = state.selected;
+  state.writingIntro = true;
+  renderJob();
+  try {
+    await invoke("generate_summary", { id });
+    toast("Intro summary written.");
+  } catch (e) {
+    toast(String(e), "error");
+  } finally {
+    state.writingIntro = false;
+    if (state.selected === id) refreshSelected();
+  }
+}
+
+async function saveIntro(text) {
+  await call("set_summary", { id: state.selected, text });
+  state.introShown = null;
+  refreshSelected();
 }
 
 function renderActions(status, summary) {
@@ -256,6 +340,7 @@ function renderActions(status, summary) {
       if (confirmAction("Transcribe again? This replaces the transcript and any translation, including your edits.")) call("retranscribe_job", { id });
     });
   }
+  if (!isRunning(status)) add("Load subtitles…", pickSubtitles);
   if (hasTranscript) add("Export…", openExport);
   if (hasTranscript) add("Burn in…", openBurn);
   add("Move up", () => move(-1), "ghost");
@@ -407,6 +492,10 @@ async function openSettings() {
   fillSelect($("s-source"), LANGUAGES, settings.sourceLanguage);
   $("s-gpu").checked = settings.useGpu;
   $("s-beam").value = settings.beamSize;
+  $("s-backend").value = settings.whisperBackend === "faster-whisper" ? "faster-whisper" : "whisper-cpp";
+  $("s-python").value = settings.pythonPath;
+  $("s-python-status").textContent = "";
+  showPythonBox();
   $("s-tmodel").value = settings.translationModel;
   $("s-target").value = settings.translationTargetLanguage;
   $("s-tsource").value = settings.translationSourceLanguage === "auto" ? "" : settings.translationSourceLanguage;
@@ -414,6 +503,10 @@ async function openSettings() {
   $("s-parallel").value = settings.translationParallelism;
   $("s-endpoint").value = settings.localEndpoint;
   $("s-auto-translate").checked = settings.autoTranslate;
+  $("s-summary").checked = settings.generateSummary;
+  $("s-summary-detail").value = settings.summaryDetail;
+  $("s-summary-model").value = settings.summaryModel;
+  $("s-summary-fallback").value = settings.summaryFallbackModel;
   $("s-auto-start").checked = settings.autoStartAddedJobs;
   $("s-sidecars").checked = settings.autoExportSidecars;
   $("s-bilingual").checked = settings.sidecarBilingual;
@@ -454,6 +547,27 @@ function renderKeys(keys) {
   }));
 }
 
+function showPythonBox() {
+  $("s-python-box").hidden = $("s-backend").value !== "faster-whisper";
+}
+
+async function checkPython() {
+  const status = $("s-python-status");
+  $("s-python-check").disabled = true;
+  status.textContent = "Checking…";
+  status.classList.remove("error-text");
+  try {
+    const result = await call("check_python", { python: $("s-python").value.trim() });
+    status.textContent = result.detail;
+    status.classList.toggle("error-text", !result.ok);
+  } catch (error) {
+    status.textContent = String(error);
+    status.classList.add("error-text");
+  } finally {
+    $("s-python-check").disabled = false;
+  }
+}
+
 async function saveSettings(event) {
   event.preventDefault();
   const settings = {
@@ -462,6 +576,8 @@ async function saveSettings(event) {
     sourceLanguage: $("s-source").value,
     useGpu: $("s-gpu").checked,
     beamSize: Math.min(16, Math.max(1, Number($("s-beam").value) || 5)),
+    whisperBackend: $("s-backend").value,
+    pythonPath: $("s-python").value.trim(),
     translationModel: $("s-tmodel").value.trim() || state.settings.translationModel,
     translationTargetLanguage: $("s-target").value.trim() || "English",
     translationSourceLanguage: $("s-tsource").value.trim() || "auto",
@@ -469,6 +585,10 @@ async function saveSettings(event) {
     translationParallelism: Math.min(4, Math.max(1, Number($("s-parallel").value) || 2)),
     localEndpoint: $("s-endpoint").value.trim() || state.settings.localEndpoint,
     autoTranslate: $("s-auto-translate").checked,
+    generateSummary: $("s-summary").checked,
+    summaryDetail: $("s-summary-detail").value,
+    summaryModel: $("s-summary-model").value.trim(),
+    summaryFallbackModel: $("s-summary-fallback").value.trim(),
     autoStartAddedJobs: $("s-auto-start").checked,
     autoExportSidecars: $("s-sidecars").checked,
     sidecarBilingual: $("s-bilingual").checked,
@@ -643,6 +763,8 @@ function paletteCommands() {
     if (!running && !summary.transcriptCount) commands.push(["Transcribe the selected video", () => call("start_job", { id: summary.id })]);
     if (!running && summary.transcriptCount) commands.push(["Translate the selected video", () => call("translate_job", { id: summary.id })]);
     if (summary.transcriptCount) commands.push(["Export subtitles…", openExport], ["Burn in subtitles…", openBurn]);
+    if (!isRunning(summary.status)) commands.push(["Load subtitles…", pickSubtitles]);
+    if (!running && summary.transcriptCount) commands.push([summary.summary ? "Rewrite the intro summary" : "Write an intro summary", writeIntro]);
     commands.push(["Show the selected video in Explorer", () => call("reveal", { path: summary.sourcePath })]);
   }
   return commands.map(([label, run]) => ({ label, run, kind: "Command" }));
@@ -816,6 +938,14 @@ async function init() {
   bindOverride("ov-source", "sourceLanguage");
   bindOverride("ov-target", "translationTargetLanguage");
   bindOverride("ov-model", "openAIModel");
+  bindOverride("ov-summary", "generateSummary");
+  bindOverride("ov-summary-detail", "summaryDetail");
+  $("load-go").onclick = runLoad;
+  $("intro-generate").onclick = writeIntro;
+  $("s-backend").onchange = showPythonBox;
+  $("s-python-check").onclick = checkPython;
+  $("intro-save").onclick = () => saveIntro($("intro-text").value);
+  $("intro-clear").onclick = () => saveIntro(null);
 
   $("add").onclick = addViaPicker;
   $("add-url").onclick = openUrl;
@@ -870,6 +1000,7 @@ async function init() {
   video.addEventListener("error", () => { if (state.job) $("video-note").hidden = false; });
 
   await listen("cue", (e) => applyEvent(e.payload));
+  await listen("cue-subtitle-drop", (e) => openLoad(e.payload[0]));
   await listen("tauri://drag-enter", () => { $("drop").hidden = false; });
   await listen("tauri://drag-leave", () => { $("drop").hidden = true; });
   await listen("tauri://drag-drop", () => { $("drop").hidden = true; });

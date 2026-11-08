@@ -1,12 +1,16 @@
 //! Subtitle export and import. Ports `SubtitleWriter` and `SubtitleReader`.
 
+mod intro;
 mod reader;
+mod sidecar;
 mod writer;
 
+pub use intro::{intro_cue_texts, segments_prepending_intro};
 pub use reader::{
     decode_bytes, parse, parse_document, parse_timestamp, read_file, DecodedText, ParsedDocument, ReadError, MAX_FILE_SIZE,
     MAX_TIMESTAMP_SECONDS,
 };
+pub use sidecar::{folder_contents, import_file, import_sidecars, match_sidecars, Adopted, SidecarMatch, SidecarSlot};
 pub use writer::{
     format_display_timestamp, format_srt_timestamp, format_vtt_timestamp, plain_cue_text, render, sanitized_cue_text, write_file,
 };

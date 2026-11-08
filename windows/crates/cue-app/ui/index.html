@@ -61,7 +61,23 @@
           <label>Translation model
             <input id="ov-model" list="translation-models" placeholder="Default">
           </label>
+          <label>Intro summary
+            <select id="ov-summary"><option value="">Default</option><option value="true">Write one</option><option value="false">Skip</option></select>
+          </label>
         </div>
+
+        <details id="intro" class="intro">
+          <summary>Intro summary <span id="intro-state" class="muted"></span></summary>
+          <textarea id="intro-text" rows="3" placeholder="A spoiler-free introduction shown as the opening subtitles of .srt and .vtt files."></textarea>
+          <div class="intro-tools">
+            <button id="intro-generate" type="button">Write with AI</button>
+            <button id="intro-save" type="button" class="ghost">Save</button>
+            <button id="intro-clear" type="button" class="ghost">Remove</button>
+            <label>Detail
+              <select id="ov-summary-detail"><option value="">Default</option><option value="brief">Brief</option><option value="detailed">Detailed</option></select>
+            </label>
+          </div>
+        </details>
 
         <div class="workspace">
           <div class="player">
@@ -113,6 +129,14 @@
       <div class="sheet-body">
         <fieldset>
           <legend>Transcription</legend>
+          <label>Engine
+            <select id="s-backend"><option value="whisper-cpp">Built in (whisper.cpp)</option><option value="faster-whisper">Faster Whisper (Python)</option></select>
+          </label>
+          <div id="s-python-box" hidden>
+            <p class="hint">Faster Whisper runs through your own Python 3 with <code>pip install faster-whisper</code>. It uses an NVIDIA GPU through CUDA when CTranslate2 finds one, otherwise the CPU. It downloads its own copy of the model on first use.</p>
+            <label>Python <input id="s-python" placeholder="Found automatically (py -3, then python)"></label>
+            <div class="row-actions"><button type="button" id="s-python-check">Check Python</button> <span id="s-python-status" class="muted"></span></div>
+          </div>
           <label>Whisper model <select id="s-model"></select></label>
           <label>Spoken language <select id="s-source"></select></label>
           <label class="check"><input id="s-gpu" type="checkbox"> Use the GPU</label>
@@ -130,6 +154,17 @@
           <label>Parallel requests <input id="s-parallel" type="number" min="1" max="4"></label>
           <label>Local server <input id="s-endpoint" placeholder="http://localhost:1234/v1"></label>
           <label class="check"><input id="s-auto-translate" type="checkbox"> Translate automatically after transcription</label>
+        </fieldset>
+        <fieldset>
+          <legend>Intro summary</legend>
+          <p class="hint">A spoiler-free introduction, written from the subtitles when a video finishes and shown as the opening cues of .srt and .vtt files.</p>
+          <label class="check"><input id="s-summary" type="checkbox"> Write an intro summary for each video</label>
+          <label>Detail
+            <select id="s-summary-detail"><option value="brief">Brief (1-3 sentences)</option><option value="detailed">Detailed (5-8 sentences)</option></select>
+          </label>
+          <label>Model <input id="s-summary-model" list="translation-models" placeholder="Same as translation"></label>
+          <label>Fallback model <input id="s-summary-fallback" list="translation-models" placeholder="None"></label>
+          <p class="hint">The fallback runs only when the first model declines a film for a policy or safety reason.</p>
         </fieldset>
         <fieldset>
           <legend>Workflow</legend>
@@ -243,6 +278,26 @@
         <button value="cancel" class="ghost">Close</button>
         <button id="burn-cancel" type="button" class="ghost danger" hidden>Stop</button>
         <button id="burn-go" type="button" class="primary">Burn in</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="load" class="sheet small">
+    <form method="dialog">
+      <h2>Load subtitles</h2>
+      <div class="sheet-body">
+        <p id="load-file" class="muted"></p>
+        <fieldset>
+          <legend>Load as</legend>
+          <label class="check"><input type="radio" name="load-slot" value="transcript" checked> Transcript (replaces it, the translation and the intro summary)</label>
+          <label class="check"><input type="radio" name="load-slot" value="translation"> Translation (its cue timings must match the transcript)</label>
+        </fieldset>
+        <p class="hint">Cue copies the subtitles into this video. Edits you make here aren't written back to the file; export when you're done.</p>
+        <p id="load-error" class="error-text" hidden></p>
+      </div>
+      <div class="sheet-foot">
+        <button value="cancel" class="ghost">Cancel</button>
+        <button id="load-go" type="button" class="primary">Load</button>
       </div>
     </form>
   </dialog>

@@ -57,14 +57,20 @@ installers, slow start, frequent antivirus false positives).
 3. **Desktop app (Tauri)** (done): job queue with the two-slot scheduler, per-job
    JSON persistence compatible with the Mac format, transcript/translation
    editor, video preview with subtitle overlay, settings, export dialogs.
-4. **Automation** (this PR): watch folders (recursive, stability gate,
+4. **Automation** (done): watch folders (recursive, stability gate,
    Mac-format ledger, per-folder overrides), URL ingest via yt-dlp (with a
    checksum-verified installer), tray icon with close-to-tray, toast
    notifications, keep-awake, burn-in via ffmpeg/libass, sidebar grouped by
    source folder, Ctrl+K command palette. Deferred: the Mac's hand-made
    folders (its "folder book"); the sidebar groups by the folder a video is
    in instead.
-5. **Optional backends and extras**: faster-whisper (CUDA) and Qwen3-ASR via
-   the shared Python helper in serve mode, intro summary, subtitle import.
+5. **Optional backends and extras** (this PR): faster-whisper (CUDA when
+   CTranslate2 sees an NVIDIA GPU, else CPU) through the shared Python helper
+   in serve mode, with a resident worker like `PythonWorkerPool`; the
+   spoiler-free intro summary (end of run or on demand, editable, shown as
+   the opening cues of SRT/VTT); subtitle import (sidecars beside new and
+   watched videos, and loading a file into either slot by hand). Dropped:
+   Qwen3-ASR, because the helper's Qwen path runs on MLX, which is
+   Apple-only. A PyTorch port of it would be a new backend on both sides.
 6. **Ship**: installer (NSIS/MSI) bundling ffmpeg, auto-update, Authenticode
    signing (needs a code-signing certificate), release workflow.

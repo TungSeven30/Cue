@@ -10,6 +10,7 @@
 
 mod burnin;
 mod downloads;
+mod import;
 mod persister;
 mod settings;
 mod summary;
@@ -326,15 +327,28 @@ impl Runtime {
     }
 
     fn add_paths(&self, paths: &[PathBuf], origin: JobOrigin, note: Option<&str>) -> Vec<String> {
+        let listed = |state: &State, path: &Path| {
+            let key = path.to_string_lossy();
+            state.jobs.iter().any(|j| j.source_path == key && j.archived_at.is_none())
+        };
+        // Subtitles already beside the videos are read before the jobs
+        // exist, with no lock held.
+        let (settings, fresh): (Settings, Vec<PathBuf>) = {
+            let state = self.lock();
+            (state.settings.clone(), paths.iter().filter(|p| !listed(&state, p)).cloned().collect())
+        };
+        let snapshot = settings.snapshot();
+        let languages = (snapshot.source_language.clone(), snapshot.translation_target_language.clone());
+        let mut sidecars = self.scan_sidecars(&fresh, |_| languages.clone()).into_iter();
+        let translate_next = settings.auto_translate && self.translation_ready(&settings.translation_model);
         let mut added = Vec::new();
         {
             let mut state = self.lock();
             let auto_start = state.settings.auto_start_added_jobs;
-            let snapshot = state.settings.snapshot();
             let first_order = state.jobs.iter().map(|j| j.order_index).filter(|o| o.is_finite()).fold(0.0_f64, f64::max) + 1.0;
-            for (offset, path) in paths.iter().enumerate() {
-                let key = path.to_string_lossy();
-                if state.jobs.iter().any(|j| j.source_path == key && j.archived_at.is_none()) {
+            for (offset, path) in fresh.iter().enumerate() {
+                let adopted = sidecars.next().unwrap_or_default();
+                if listed(&state, path) {
                     continue;
                 }
                 let mut job = Job::new(path, snapshot.clone(), Utc::now());
@@ -347,6 +361,7 @@ impl Runtime {
                 if auto_start {
                     queue(&mut job);
                 }
+                import::adopt(&mut job, adopted, translate_next);
                 added.push(job.id.clone());
                 self.inner.persister.save(&job);
                 self.emit(Event::Job { job: Box::new(JobSummary::of(&job)) });

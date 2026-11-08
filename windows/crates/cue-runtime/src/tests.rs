@@ -576,3 +576,71 @@ fn summary_overrides_are_stored_as_the_mac_types() {
     h.runtime.set_override(&id, "generateSummary", None).unwrap();
     assert!(h.runtime.job(&id).unwrap().overrides.get("generateSummary").is_none());
 }
+
+const SRT_JA: &str = "1\n00:00:00,000 --> 00:00:01,000\nいち\n\n2\n00:00:01,000 --> 00:00:02,000\nに\n";
+const SRT_VI: &str = "1\n00:00:00,000 --> 00:00:01,000\nmột\n\n2\n00:00:01,000 --> 00:00:02,000\nhai\n";
+
+#[test]
+fn subtitles_beside_a_new_video_are_adopted_instead_of_transcribing() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("Movie.ja.srt"), SRT_JA).unwrap();
+    std::fs::write(dir.path().join("Movie.vi.srt"), SRT_VI).unwrap();
+    let h = harness_in(dir, Settings { source_language: "ja".into(), ..local_settings() });
+    let id = h.runtime.add_files(std::slice::from_ref(&h.media)).remove(0);
+    let job = h.runtime.job(&id).unwrap();
+    assert_eq!(job.status, JobStatus::TranslationComplete);
+    assert_eq!(job.transcript_segments[1].text, "に");
+    assert_eq!(job.translated_segments[1].text, "hai");
+    assert!(job.log.contains("Loaded subtitles from Movie.ja.srt (2 cues)."), "{}", job.log);
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(h.transcriber.calls.lock().unwrap().is_empty(), "nothing is transcribed");
+}
+
+#[test]
+fn an_adopted_transcript_waits_for_translation_only_when_it_would_run() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("Movie.srt"), SRT_JA).unwrap();
+    // Auto-translate with a local model (no key needed): it queues and translates.
+    let h = harness_in(dir, Settings { auto_translate: true, ..local_settings() });
+    let id = h.runtime.add_files(std::slice::from_ref(&h.media)).remove(0);
+    let job = wait_for(&h, &id, JobStatus::TranslationComplete);
+    assert_eq!(job.translated_segments[0].text, "[Vietnamese] いち");
+    assert!(h.transcriber.calls.lock().unwrap().is_empty());
+
+    // A cloud model with no key: the transcript is simply ready.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("Movie.srt"), SRT_JA).unwrap();
+    let h = harness_in(dir, Settings { auto_translate: true, translation_model: "gpt-5.5".into(), ..local_settings() });
+    let id = h.runtime.add_files(std::slice::from_ref(&h.media)).remove(0);
+    assert_eq!(h.runtime.job(&id).unwrap().status, JobStatus::TranscriptionComplete);
+}
+
+#[test]
+fn subtitles_load_into_either_slot_by_hand() {
+    let h = harness(Settings { auto_start_added_jobs: false, ..local_settings() });
+    let id = h.runtime.add_files(std::slice::from_ref(&h.media)).remove(0);
+    let ja = h.dir.path().join("a.srt");
+    let vi = h.dir.path().join("b.vtt");
+    std::fs::write(&ja, SRT_JA).unwrap();
+    std::fs::write(&vi, format!("WEBVTT\n\n{}", SRT_VI.replace(',', "."))).unwrap();
+    assert!(h.runtime.load_subtitles(&id, &vi, Slot::Translation).unwrap_err().contains("transcript"));
+    h.runtime.load_subtitles(&id, &ja, Slot::Transcript).unwrap();
+    assert_eq!(h.runtime.job(&id).unwrap().status, JobStatus::TranscriptionComplete);
+    h.runtime.load_subtitles(&id, &vi, Slot::Translation).unwrap();
+    let job = h.runtime.job(&id).unwrap();
+    assert_eq!(job.status, JobStatus::TranslationComplete);
+    assert_eq!(job.translated_segments[0].text, "một");
+
+    // Timings that don't line up are refused and change nothing.
+    let off = h.dir.path().join("c.srt");
+    std::fs::write(&off, "1\n00:00:05,000 --> 00:00:06,000\nx\n").unwrap();
+    assert!(h.runtime.load_subtitles(&id, &off, Slot::Translation).unwrap_err().contains("timings"));
+    assert_eq!(h.runtime.job(&id).unwrap().translated_segments[0].text, "một");
+
+    // A new transcript clears the translation and summary that came from the old one.
+    h.runtime.set_summary(&id, Some("old")).unwrap();
+    h.runtime.load_subtitles(&id, &off, Slot::Transcript).unwrap();
+    let job = h.runtime.job(&id).unwrap();
+    assert!(job.translated_segments.is_empty() && job.summary.is_none());
+    assert!(h.runtime.load_subtitles(&id, &h.media, Slot::Transcript).is_err(), "only SRT and WebVTT load");
+}

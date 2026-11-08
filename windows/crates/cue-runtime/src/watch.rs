@@ -254,6 +254,18 @@ impl Runtime {
     }
 
     fn ingest_watch_files(&self, folder_id: &str, root: &Path, files: &[FileObservation]) {
+        // Subtitles already beside the videos, read before taking the lock.
+        let Some((settings, profile)) = ({
+            let state = self.lock();
+            state.settings.watch_folders.iter().find(|f| f.id == folder_id).map(|f| (state.settings.clone(), f.profile.clone()))
+        }) else {
+            return;
+        };
+        let resolved = apply_overrides(settings.snapshot(), &profile);
+        let languages = (resolved.source_language.clone(), resolved.translation_target_language.clone());
+        let paths: Vec<PathBuf> = files.iter().map(|f| f.path.clone()).collect();
+        let mut sidecars = self.scan_sidecars(&paths, |_| languages.clone()).into_iter();
+        let translate_next = settings.auto_translate && self.translation_ready(&resolved.translation_model);
         let mut added = Vec::new();
         {
             let mut state = self.lock();
@@ -262,6 +274,7 @@ impl Runtime {
             let snapshot = state.settings.snapshot();
             let mut order = state.jobs.iter().map(|j| j.order_index).filter(|o| o.is_finite()).fold(0.0_f64, f64::max);
             for file in files {
+                let adopted = sidecars.next().unwrap_or_default();
                 let fingerprint = file.fingerprint();
                 // Same file, or the same path still waiting or running: a
                 // late timestamp change must not queue it twice.
@@ -279,6 +292,7 @@ impl Runtime {
                 job.status = JobStatus::Queued;
                 job.progress = JobProgress::new(JobStage::Queued, "Waiting in queue.", None);
                 job.log = format!("Picked up from the watch folder: {}\n", root.display());
+                super::import::adopt(&mut job, adopted, translate_next);
                 added.push(job.clone());
                 state.jobs.push(job);
             }

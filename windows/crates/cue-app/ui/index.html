@@ -274,6 +274,26 @@
     </form>
   </dialog>
 
+  <dialog id="load" class="sheet small">
+    <form method="dialog">
+      <h2>Load subtitles</h2>
+      <div class="sheet-body">
+        <p id="load-file" class="muted"></p>
+        <fieldset>
+          <legend>Load as</legend>
+          <label class="check"><input type="radio" name="load-slot" value="transcript" checked> Transcript (replaces it, the translation and the intro summary)</label>
+          <label class="check"><input type="radio" name="load-slot" value="translation"> Translation (its cue timings must match the transcript)</label>
+        </fieldset>
+        <p class="hint">Cue copies the subtitles into this video. Edits you make here aren't written back to the file; export when you're done.</p>
+        <p id="load-error" class="error-text" hidden></p>
+      </div>
+      <div class="sheet-foot">
+        <button value="cancel" class="ghost">Cancel</button>
+        <button id="load-go" type="button" class="primary">Load</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="palette" class="palette" aria-label="Commands">
     <input id="palette-input" type="text" placeholder="Type a command or a video name" autocomplete="off" spellcheck="false">
     <ul id="palette-list" class="palette-list" role="listbox"></ul>

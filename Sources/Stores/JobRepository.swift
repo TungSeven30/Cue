@@ -2,11 +2,8 @@ import Foundation
 
 /// The persistence boundary used by `JobRepository`. Keeping AppModel behind
 /// this protocol makes persistence behavior testable without touching disk.
-// Sendable so the repository can hand the store's nonisolated snapshot loader
-// to a background task; every conformer is main-actor-isolated (inherited
-// from this protocol), which already makes it Sendable.
 @MainActor
-protocol JobPersisting: AnyObject, Sendable {
+protocol JobPersisting: AnyObject {
     var startupError: String? { get }
 
     func loadJobs() -> [TranscriptionJob]
@@ -19,12 +16,28 @@ protocol JobPersisting: AnyObject, Sendable {
     func flush()
 }
 
+/// Forwards the store's nonisolated snapshot load so `JobRepository` can
+/// expose a nonisolated entry point without reading a MainActor-isolated
+/// existential from a background thread. The store is immutable after init.
+private final class OffMainSnapshotLoader: @unchecked Sendable {
+    private let store: any JobPersisting
+
+    init(store: any JobPersisting) {
+        self.store = store
+    }
+
+    func loadJobsSnapshot() -> JobLoadSnapshot {
+        store.loadJobsSnapshot()
+    }
+}
+
 /// Owns job persistence policy: immutable snapshots, debounce/coalescing, and
 /// the termination flush. AppModel only decides *when* a mutation is durable;
 /// it no longer manages timers or dirty-id bookkeeping itself.
 @MainActor
 final class JobRepository {
     private let store: any JobPersisting
+    nonisolated private let snapshotLoader: OffMainSnapshotLoader
     private let debounceNanoseconds: UInt64
     private var pendingJobs: [UUID: TranscriptionJob] = [:]
     private var persistTask: Task<Void, Never>?
@@ -36,6 +49,7 @@ final class JobRepository {
 
     init(store: any JobPersisting, debounceNanoseconds: UInt64 = 400_000_000) {
         self.store = store
+        self.snapshotLoader = OffMainSnapshotLoader(store: store)
         self.debounceNanoseconds = debounceNanoseconds
     }
 
@@ -46,7 +60,7 @@ final class JobRepository {
     /// Loads on the calling thread without touching the main actor, so the
     /// app can hydrate its job list after the window is up.
     nonisolated func loadJobsSnapshot() -> JobLoadSnapshot {
-        store.loadJobsSnapshot()
+        snapshotLoader.loadJobsSnapshot()
     }
 
     func recordStartupFailures(_ failures: [String]) {

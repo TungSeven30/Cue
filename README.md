@@ -19,7 +19,7 @@ Transcription runs locally. Translation and summaries use only the cloud provide
 - Audio is extracted natively (AVFoundation) and cached (capped at 10 GB), so re-runs skip the extraction step
 
 **Translation**
-- OpenAI, Anthropic (Claude), Google (Gemini), Groq, Cerebras, OpenRouter, or an OpenAI-compatible local server — the provider is inferred from the model name, so switching is just picking a different model
+- OpenAI, Anthropic (Claude), Google (Gemini), Groq, Cerebras, OpenRouter, Nous Portal (Hermes), or an OpenAI-compatible local server — the provider is inferred from the model name, so switching is just picking a different model
 - Token-aware, schema-validated requests with retries, automatic chunk-splitting on oversized responses, and cross-chunk context so names, tone, and honorifics stay consistent
 - Cloud translation begins after the first useful streamed transcript batch and adapts request size to the actual text instead of waiting for a fixed subtitle count; already translated ranges are never submitted twice
 - Partial translations are saved continuously and resume after an interruption or failed chunk
@@ -104,7 +104,9 @@ Grab `Cue.dmg` (notarized, from a release or shared directly), drag the app to A
 
 Updates are built in: the app offers new versions itself (Sparkle, fed from the public [cue-releases](https://github.com/TungSeven30/cue-releases) repo), or check manually via **Cue > Check for Updates…**. Publishing a complete release is one command on the release machine: `script/release.sh <version>`.
 
-To translate or summarize in the cloud, add the matching OpenAI, Anthropic, Google, Groq, Cerebras, or OpenRouter API key in Settings (⌘,). A `local/…` model uses your configured OpenAI-compatible server and needs no key.
+To translate or summarize in the cloud, add the matching provider key in **Settings → API Keys** (⌘,). A `local/…` model uses your configured OpenAI-compatible server and needs no key.
+
+For Hermes without OpenRouter, add a [Nous Portal API key](https://portal.nousresearch.com/api-docs) and pick **Nous: Hermes 4.3-36B** or enter `nous/Hermes-4.3-36B` as the model. The `nous/` prefix routes to Nous directly; `openrouter/` still uses your OpenRouter key. Nous API requests use [pay-as-you-go credits](https://portal.nousresearch.com/compare/openrouter), not the included Hermes Agent subscription usage. Cue sends subtitle text to the selected provider, not the source video or audio.
 
 Requires macOS 14+ and Apple Silicon (the DMG is arm64-only). On Intel Macs, build from source — the built-in engine runs CPU-only there (slow).
 
@@ -163,6 +165,7 @@ the next command is all the handoff there is:
 ```sh
 cue transcribe episode.mkv --preset bestAccuracy --language ja
 cue translate episode.cue.json --to Vietnamese --bilingual
+cue translate episode.cue.json --to Vietnamese --translation-model nous/Hermes-4.3-36B
 cue burn-in episode.cue.json --text-size large
 ```
 

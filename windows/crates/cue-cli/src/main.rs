@@ -67,7 +67,8 @@ struct TranslateArgs {
     #[arg(long, default_value = "auto")]
     from: String,
     /// The LLM. Its name picks the provider: claude-*, gemini-*,
-    /// local/<model>, openrouter/<id>, groq/<id>, cerebras/<id>, else OpenAI.
+    /// nous/<model-id> (Nous Portal), openrouter/<id>, groq/<id>,
+    /// cerebras/<id>, local/<model>, else OpenAI.
     #[arg(short = 't', long, env = "CUE_TRANSLATION_MODEL", default_value = cue_core::translation::DEFAULT_MODEL)]
     translation_model: String,
     /// Concurrent requests (1-4).
@@ -164,7 +165,7 @@ enum KeysAction {
     List,
     /// Save a key. Reads it from stdin when --value is omitted.
     Set {
-        /// openai, anthropic, google, openrouter, groq or cerebras.
+        /// openai, anthropic, google, openrouter, nous, groq or cerebras.
         provider: String,
         #[arg(long)]
         value: Option<String>,
@@ -475,5 +476,22 @@ fn doctor() -> CliResult {
         Ok(())
     } else {
         Err("some required tools are missing".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn translation_help_shows_the_nous_portal_route() {
+        let help = Cli::try_parse_from(["cue", "translate", "--help"]).err().unwrap().to_string();
+        assert!(help.contains("nous/<model-id> (Nous Portal)"));
+    }
+
+    #[test]
+    fn keys_help_lists_nous_as_a_separate_credential() {
+        let help = Cli::try_parse_from(["cue", "keys", "set", "--help"]).err().unwrap().to_string();
+        assert!(help.contains("openrouter, nous"));
     }
 }

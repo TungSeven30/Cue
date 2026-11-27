@@ -15,7 +15,7 @@ pub const DEFAULT_PROMPT: &str = "You are a professional subtitle translator. Tr
 Preserve meaning, tone, names, numbers, and cultural context. Keep each subtitle concise, readable, and aligned to the original timing.
 Do not add explanations, notes, censorship, markdown, or extra segments.";
 
-pub const DEFAULT_MODEL: &str = "gpt-6.1-sol";
+pub const DEFAULT_MODEL: &str = "gpt-6.2-sol";
 pub const DEFAULT_LOCAL_ENDPOINT: &str = "http://localhost:1234/v1";
 
 /// One outgoing call, independent of the HTTP library.
@@ -130,20 +130,20 @@ fn local_base(endpoint: &str) -> Option<String> {
     Some(base)
 }
 
-fn chat_completions_body(model: &str, system: &str, user: &str, schema_name: &str, schema: &Value, max_tokens: usize) -> Value {
-    json!({
+fn chat_completions_body(model: &str, system: &str, user: &str, format: Option<(&str, &Value)>, max_tokens: usize) -> Value {
+    let mut body = json!({
         "model": model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user}
         ],
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {"name": schema_name, "strict": true, "schema": schema}
-        },
         "max_tokens": max_tokens,
         "stream": false
-    })
+    });
+    if let Some((name, schema)) = format {
+        body["response_format"] = json!({"type": "json_schema", "json_schema": {"name": name, "strict": true, "schema": schema}});
+    }
+    body
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -211,17 +211,19 @@ pub fn make_request(
             // "local/" is routing only; an empty remainder is fine (LM Studio
             // ignores the model when one is loaded).
             let wire = removing_routing_prefix("local/", model);
-            (format!("{base}/chat/completions"), chat_completions_body(&wire, system, user, schema_name, schema, budget))
+            (format!("{base}/chat/completions"), chat_completions_body(&wire, system, user, Some((schema_name, schema)), budget))
         }
-        Provider::OpenRouter | Provider::Groq | Provider::Cerebras => {
+        Provider::OpenRouter | Provider::Nous | Provider::Groq | Provider::Cerebras => {
             let (url, prefix, example) = match provider {
                 Provider::OpenRouter => {
                     headers.push(("HTTP-Referer".into(), "https://github.com/TungSeven30/Cue".into()));
                     headers.push(("X-Title".into(), "Cue".into()));
                     ("https://openrouter.ai/api/v1/chat/completions", "openrouter/", "openrouter/qwen/qwen3.8-max")
                 }
+                Provider::Nous => ("https://inference-api.nousresearch.com/v1/chat/completions", "nous/", "nous/Hermes-4.3-36B"),
                 Provider::Groq => ("https://api.groq.com/openai/v1/chat/completions", "groq/", "groq/openai/gpt-oss-120b"),
-                _ => ("https://api.cerebras.ai/v1/chat/completions", "cerebras/", "cerebras/gpt-oss-120b"),
+                Provider::Cerebras => ("https://api.cerebras.ai/v1/chat/completions", "cerebras/", "cerebras/gpt-oss-120b"),
+                _ => unreachable!(),
             };
             headers.insert(0, ("Authorization".into(), format!("Bearer {api_key}")));
             let wire = removing_routing_prefix(prefix, model);
@@ -231,7 +233,9 @@ pub fn make_request(
                     provider.label()
                 )));
             }
-            (url.to_string(), chat_completions_body(&wire, system, user, schema_name, schema, budget))
+            // Nous Portal does not document response_format. The translation prompt already requests JSON.
+            let format = (provider != Provider::Nous).then_some((schema_name, schema));
+            (url.to_string(), chat_completions_body(&wire, system, user, format, budget))
         }
     };
     headers.push(("Content-Type".into(), "application/json".into()));
@@ -377,7 +381,7 @@ pub fn extract_output_text(provider: Provider, data: &[u8]) -> Result<String, Tr
                 .filter_map(|p| p.text.as_deref())
                 .collect())
         }
-        Provider::Local | Provider::OpenRouter | Provider::Groq | Provider::Cerebras => {
+        Provider::Local | Provider::OpenRouter | Provider::Nous | Provider::Groq | Provider::Cerebras => {
             let decoded: ChatEnvelope = decode(data)?;
             let Some(choice) = decoded.choices.and_then(|c| c.into_iter().next()) else {
                 // Some local servers report errors as a 200 with an "error" body.
@@ -386,6 +390,7 @@ pub fn extract_output_text(provider: Provider, data: &[u8]) -> Result<String, Tr
                     .get("error")
                     .and_then(|e| e.as_str().map(str::to_string).or_else(|| e.get("message")?.as_str().map(str::to_string)));
                 return Err(match message {
+                    Some(m) if provider == Provider::Nous => TranslationError::Api(format!("{} error: {m}", provider.label())),
                     Some(m) => TranslationError::Api(format!("Local server error: {m}")),
                     None => TranslationError::InvalidResponse,
                 });
@@ -671,6 +676,41 @@ mod tests {
             make_request(Provider::Groq, "groq/", "k", "s", "u", "n", &segments_schema(), ""),
             Err(TranslationError::Fatal(_))
         ));
+    }
+
+    #[test]
+    fn nous_uses_fixed_https_endpoint_and_plain_chat_completions() {
+        for (model, id) in [("nous/Hermes-4.3-36B", "Hermes-4.3-36B"), (" NoUs/vendor/Family/Model-X ", "vendor/Family/Model-X")] {
+            let req =
+                make_request(Provider::infer(model), model, "KEY", "sys", "usr", "n", &segments_schema(), "http://localhost:9/v1").unwrap();
+            assert_eq!(req.url, "https://inference-api.nousresearch.com/v1/chat/completions");
+            assert_eq!(req.header("authorization"), Some("Bearer KEY"));
+            assert_eq!(req.header("content-type"), Some("application/json"));
+            assert_eq!(
+                body(&req),
+                json!({
+                    "model": id,
+                    "messages": [{"role": "system", "content": "sys"}, {"role": "user", "content": "usr"}],
+                    "max_tokens": 1024,
+                    "stream": false
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn nous_rejects_an_empty_model_suffix() {
+        let model = "  NOUS/  ";
+        assert!(matches!(
+            make_request(Provider::infer(model), model, "k", "s", "u", "n", &segments_schema(), ""),
+            Err(TranslationError::Fatal(message)) if message.contains("Nous Portal") && message.contains("nous/")
+        ));
+    }
+
+    #[test]
+    fn nous_chat_completion_truncation_uses_the_existing_error() {
+        let length = br#"{"choices":[{"message":{"content":"unfinished"},"finish_reason":"length"}]}"#;
+        assert!(matches!(extract_output_text(Provider::infer("nous/Hermes-4-70B"), length), Err(TranslationError::ResponseTooLarge(_))));
     }
 
     #[test]

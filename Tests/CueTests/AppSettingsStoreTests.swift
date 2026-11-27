@@ -159,14 +159,19 @@ struct AppSettingsStoreTests {
 
     @Test func translationPresetsIncludeLatestAndFastProviders() {
         let values = Set(AppSettingPresets.translationModels.map(\.value))
-        #expect(values.contains("gpt-6-astra"))
-        #expect(values.contains("gpt-6.1-sol"))
-        #expect(values.contains("claude-fable-5-1"))
+        #expect(values.contains("gpt-6.2-astra"))
+        #expect(values.contains("gpt-6.2-sol"))
+        #expect(values.contains("gpt-6-luna"))
+        #expect(values.contains("claude-fable-5-2"))
         #expect(values.contains("claude-opus-5-5"))
         #expect(values.contains("claude-sonnet-5-5"))
         #expect(values.contains("claude-haiku-5-5"))
+        #expect(values.contains("gemini-4-carbon"))
+        #expect(values.contains("gemini-4-neon"))
         #expect(values.contains("gemini-4-argon"))
+        #expect(values.contains("gemini-4-hydrogen"))
         #expect(values.contains("gemini-3.8-flash"))
+        #expect(values.contains("gemini-3.5-flash-lite"))
         #expect(values.contains("openrouter/qwen/qwen3.8-max"))
         #expect(values.contains("openrouter/qwen/qwen3.8-flash"))
         #expect(values.contains("openrouter/qwen/qwen3.7-flash"))
@@ -174,6 +179,99 @@ struct AppSettingsStoreTests {
         #expect(values.contains("groq/qwen/qwen3.8-27b"))
         #expect(values.contains("cerebras/gpt-oss-120b"))
         #expect(values.contains("cerebras/gemma-4-31b"))
+    }
+
+    @Test func freshSettingsDefaultToGPT62Sol() {
+        let (defaults, name) = makeSuite()
+        defer { defaults.removePersistentDomain(forName: name) }
+        #expect(makeStore(defaults: defaults).openAIModel == "gpt-6.2-sol")
+        #expect(defaults.string(forKey: "openAIModel") == "gpt-6.2-sol")
+    }
+
+    @Test(arguments: ["gpt-6.1-sol", "claude-fable-5-1", "openrouter/qwen/qwen3.8-max"])
+    func previouslySelectedModelIsNotMigrated(model: String) {
+        let (defaults, name) = makeSuite()
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(model, forKey: "openAIModel")
+        #expect(makeStore(defaults: defaults).openAIModel == model)
+        #expect(defaults.string(forKey: "openAIModel") == model)
+    }
+
+    @Test(arguments: ["4.3-36B", "4-70B", "4-405B"])
+    func hermesPresetsAreAvailableForTranslationAndSummary(release: String) {
+        let preset = SettingsPreset(label: "Nous: Hermes \(release)", value: "nous/Hermes-\(release)")
+        #expect(AppSettingPresets.translationModels.contains(preset))
+        #expect(AppSettingPresets.summaryModels.contains(preset))
+        #expect(AppSettingPresets.summaryFallbackModels.contains(preset))
+    }
+
+    @Test func nousSettingsReadOnlyTheirOwnKeychainAccount() {
+        let (defaults, name) = makeSuite()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = AppSettingsStore(
+            defaults: defaults,
+            readSecret: { account in
+                switch account {
+                case "openAIAPIKey": return "fixture-openai"
+                case "openRouterAPIKey": return "fixture-openrouter"
+                case "nousAPIKey": return "fixture-nous"
+                default: return nil
+                }
+            },
+            writeSecret: { _, _ in true }
+        )
+        store.openAIModel = "nous/Hermes-4.3-36B"
+        #expect(store.currentTranslationAPIKey == "fixture-nous")
+        #expect(store.isTranslationReady)
+        store.openAIModel = "openrouter/nousresearch/hermes-4-70b"
+        #expect(store.currentTranslationAPIKey == "fixture-openrouter")
+        store.summaryModel = "nous/Vendor/Model"
+        #expect(store.translationAPIKey(for: store.currentSummaryProvider) == "fixture-nous")
+        #expect(store.isSummaryReady)
+        #expect(!store.isModelReady("  NOUS/  "))
+        #expect(store.modelReadinessReason("  NOUS/  ") == "a Nous Portal model ID is required after the nous/ prefix")
+    }
+
+    @Test func nonNousKeysCannotMakeANousModelReady() {
+        let (defaults, name) = makeSuite()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = makeStore(defaults: defaults)
+        store.openAIAPIKey = "fixture-openai"
+        store.openRouterAPIKey = "fixture-openrouter"
+        store.openAIModel = "nous/Hermes-4-70B"
+        #expect(store.currentTranslationAPIKey.isEmpty)
+        #expect(!store.isTranslationReady)
+        #expect(!store.isSummaryReady)
+        #expect(store.modelReadinessReason(store.openAIModel).contains("Nous Portal"))
+    }
+
+    @Test func editingNousKeyWritesOnlyItsKeychainAccount() {
+        let (defaults, name) = makeSuite()
+        defer { defaults.removePersistentDomain(forName: name) }
+        var secrets = ["openRouterAPIKey": "fixture-openrouter"]
+        var writes: [String] = []
+        func makeSettings() -> AppSettingsStore {
+            AppSettingsStore(
+                defaults: defaults,
+                readSecret: { secrets[$0] },
+                writeSecret: { value, account in
+                    secrets[account] = value.isEmpty ? nil : value
+                    writes.append(account)
+                    return true
+                }
+            )
+        }
+
+        let store = makeSettings()
+        store.nousAPIKey = "fixture-nous"
+        #expect(writes == ["nousAPIKey"])
+        #expect(defaults.object(forKey: "nousAPIKey") == nil)
+        let reloaded = makeSettings()
+        #expect(reloaded.nousAPIKey == "fixture-nous")
+        #expect(reloaded.openRouterAPIKey == "fixture-openrouter")
+        reloaded.nousAPIKey = ""
+        #expect(makeSettings().nousAPIKey.isEmpty)
+        #expect(writes == ["nousAPIKey", "nousAPIKey"])
     }
 
     @Test func summaryModelCanDifferFromTranslationAndPersists() {

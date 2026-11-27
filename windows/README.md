@@ -65,17 +65,21 @@ cue convert old.srt --to vtt
 
 cue keys set openai                          # paste a key; saved in Credential Manager
 cue translate movie.srt --to Vietnamese      # movie.translated.vietnamese.srt
-cue translate movie.srt --to ja -t claude-sonnet-5 --bilingual
+cue translate movie.srt --to ja -t claude-sonnet-5-5 --bilingual
+cue keys set nous                            # paste a Nous Portal API key
+cue translate movie.srt --to ja -t nous/Hermes-4.3-36B
 cue translate movie.srt -t local/qwen3 --local-endpoint http://localhost:1234
 cue pipeline movie.mkv --to German -f srt,vtt   # transcribe, then translate
 ```
 
 Translation picks the provider from the model name, like the Mac app:
-`claude*` is Anthropic, `gemini*` Google, `openrouter/`, `groq/`, `cerebras/`
-and `local/` route by prefix, anything else is OpenAI. Keys come from
+`claude*` is Anthropic, `gemini*` Google, `openrouter/`, `nous/`, `groq/`,
+`cerebras/`, and `local/` route by prefix, anything else is OpenAI. Keys come from
 Windows Credential Manager (`cue keys set|list|remove`), then
 `CUE_<PROVIDER>_API_KEY`, then the provider's usual variable such as
-`OPENAI_API_KEY`. `CUE_TRANSLATION_MODEL` and `CUE_LOCAL_ENDPOINT` set
+`OPENAI_API_KEY` or `NOUS_API_KEY`. `nous/` calls [Nous Portal](https://portal.nousresearch.com/api-docs)
+directly using API credits, not OpenRouter or Hermes Agent subscription usage.
+`CUE_TRANSLATION_MODEL` and `CUE_LOCAL_ENDPOINT` set
 defaults. An interrupted translation leaves a `.partial.json` beside the
 output and the next run picks up where it stopped.
 

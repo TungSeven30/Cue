@@ -12,6 +12,8 @@ pub enum Provider {
     Local,
     /// OpenRouter's gateway. "openrouter/<catalog id>".
     OpenRouter,
+    /// Nous Portal's direct gateway. "nous/<model id>".
+    Nous,
     /// GroqCloud. "groq/<model id>".
     Groq,
     /// Cerebras Inference. "cerebras/<model id>".
@@ -19,12 +21,13 @@ pub enum Provider {
 }
 
 impl Provider {
-    pub const ALL: [Provider; 7] = [
+    pub const ALL: [Provider; 8] = [
         Provider::OpenAi,
         Provider::Anthropic,
         Provider::Google,
         Provider::Local,
         Provider::OpenRouter,
+        Provider::Nous,
         Provider::Groq,
         Provider::Cerebras,
     ];
@@ -39,6 +42,8 @@ impl Provider {
             Provider::Local
         } else if normalized.starts_with("openrouter/") {
             Provider::OpenRouter
+        } else if normalized.starts_with("nous/") {
+            Provider::Nous
         } else if normalized.starts_with("groq/") {
             Provider::Groq
         } else if normalized.starts_with("cerebras/") {
@@ -55,6 +60,7 @@ impl Provider {
             Provider::Google => "Google",
             Provider::Local => "Local server",
             Provider::OpenRouter => "OpenRouter",
+            Provider::Nous => "Nous Portal",
             Provider::Groq => "Groq",
             Provider::Cerebras => "Cerebras",
         }
@@ -68,6 +74,7 @@ impl Provider {
             Provider::Google => "google",
             Provider::Local => "local",
             Provider::OpenRouter => "openrouter",
+            Provider::Nous => "nous",
             Provider::Groq => "groq",
             Provider::Cerebras => "cerebras",
         }
@@ -96,6 +103,16 @@ mod tests {
         assert_eq!(Provider::infer("openrouter/qwen/qwen3.8-max"), Provider::OpenRouter);
         assert_eq!(Provider::infer("groq/openai/gpt-oss-120b"), Provider::Groq);
         assert_eq!(Provider::infer("cerebras/gpt-oss-120b"), Provider::Cerebras);
+    }
+
+    #[test]
+    fn nous_routes_to_its_own_keyed_provider() {
+        let provider = Provider::infer(" NoUs/vendor/Hermes-4.3-36B ");
+        assert_eq!(provider.label(), "Nous Portal");
+        assert_eq!(provider.slug(), "nous");
+        assert_eq!(Provider::from_slug("NOUS"), Some(provider));
+        assert!(provider.needs_api_key());
+        assert_ne!(provider, Provider::infer("openrouter/nousresearch/hermes-4-70b"));
     }
 
     #[test]

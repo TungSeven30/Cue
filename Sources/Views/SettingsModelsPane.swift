@@ -97,7 +97,7 @@ struct ModelsSettingsPane: View {
             SettingsSectionHeader("Translation")
         } footer: {
             SettingsFootnote(
-                "The provider is chosen from the model name: gpt-… OpenAI, claude-… Anthropic, gemini-… Google, openrouter/… OpenRouter, groq/… Groq, cerebras/… Cerebras, and local/… for LM Studio or Ollama on your network. Languages, chunking, and the prompt are in Translate."
+                "The provider is chosen from the model name: gpt-… OpenAI, claude-… Anthropic, gemini-… Google, openrouter/… OpenRouter, nous/… Nous Portal, groq/… Groq, cerebras/… Cerebras, and local/… for LM Studio or Ollama on your network. Languages, chunking, and the prompt are in Translate."
             )
         }
     }

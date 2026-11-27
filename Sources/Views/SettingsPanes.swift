@@ -353,13 +353,14 @@ struct APIKeysSettingsPane: View {
                 SecureField("Anthropic", text: $settings.anthropicAPIKey, prompt: Text("Paste key"))
                 SecureField("Google", text: $settings.googleAPIKey, prompt: Text("Paste key"))
                 SecureField("OpenRouter", text: $settings.openRouterAPIKey, prompt: Text("Paste key"))
+                SecureField("Nous Portal", text: $settings.nousAPIKey, prompt: Text("Paste key"))
                 SecureField("Groq", text: $settings.groqAPIKey, prompt: Text("Paste key"))
                 SecureField("Cerebras", text: $settings.cerebrasAPIKey, prompt: Text("Paste key"))
             } header: {
                 SettingsSectionHeader("Cloud providers")
             } footer: {
                 SettingsFootnote(
-                    "Keys are stored in the macOS Keychain. Cue picks the provider, and so the key, from the model name: gpt-… uses OpenAI, claude-… Anthropic, gemini-… Google, openrouter/… OpenRouter, groq/… Groq, and cerebras/… Cerebras. A local/… model needs no key."
+                    "Keys are stored in the macOS Keychain. Cue picks the provider, and so the key, from the model name: gpt-… uses OpenAI, claude-… Anthropic, gemini-… Google, openrouter/… OpenRouter, nous/… Nous Portal, groq/… Groq, and cerebras/… Cerebras. A local/… model needs no key."
                 )
             }
 

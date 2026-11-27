@@ -48,7 +48,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .appearance:
             ["font", "typography", "text size", "scale", "density", "compact", "detailed", "display"]
         case .models:
-            ["whisper", "qwen", "engine", "backend", "model", "llm", "openrouter", "local server", "lm studio"]
+            ["whisper", "qwen", "engine", "backend", "model", "llm", "openrouter", "nous", "hermes", "local server", "lm studio"]
         case .transcribe:
             ["language", "quality", "names", "terms", "decoding", "advanced", "speech"]
         case .translate:
@@ -56,7 +56,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .summary:
             ["intro summary", "summary model", "fallback"]
         case .apiKeys:
-            ["openai", "anthropic", "google", "gemini", "openrouter", "groq", "cerebras", "keychain", "key"]
+            ["openai", "anthropic", "google", "gemini", "openrouter", "nous", "hermes", "groq", "cerebras", "keychain", "key"]
         }
     }
 }

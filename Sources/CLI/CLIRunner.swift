@@ -321,7 +321,7 @@ struct CLIRunner {
         if arguments.value("--language") == nil {
             snapshot.sourceLanguage = manifest.settings.sourceLanguage
         }
-        let credentials = makeCredentials(for: snapshot.openAIModel)
+        let credentials = settings.translationCredentials(for: snapshot.openAIModel)
         guard credentials.provider == .local || !credentials.apiKey.isEmpty else {
             throw CLIError.stageFailed(
                 "No \(credentials.provider.label) API key. Add one in Cue's Settings, or pass --translation-model local/<model>."
@@ -362,9 +362,9 @@ struct CLIRunner {
             : (snapshot.translationTargetLanguage.isEmpty ? "English" : snapshot.translationTargetLanguage)
 
         let primaryModel = arguments.value("--model") ?? settings.resolvedSummaryModel
-        let primary = SummaryModelConfiguration(model: primaryModel, credentials: makeCredentials(for: primaryModel))
+        let primary = SummaryModelConfiguration(model: primaryModel, credentials: settings.translationCredentials(for: primaryModel))
         let fallback = settings.resolvedSummaryFallbackModel.map { model in
-            SummaryModelConfiguration(model: model, credentials: makeCredentials(for: model))
+            SummaryModelConfiguration(model: model, credentials: settings.translationCredentials(for: model))
         }
         var detail = settings.summaryDetail
         if let raw = arguments.value("--detail") {
@@ -519,16 +519,6 @@ struct CLIRunner {
     }
 
     // MARK: - Helpers
-
-    private func makeCredentials(for model: String) -> TranslationCredentials {
-        let provider = TranslationProvider.infer(from: model)
-        return TranslationCredentials(
-            apiKey: settings.translationAPIKey(for: provider),
-            prompt: settings.translationPrompt,
-            provider: provider,
-            localEndpoint: settings.localTranslationEndpoint
-        )
-    }
 
     nonisolated static func durationSeconds(of url: URL) async -> Double {
         let asset = AVURLAsset(url: url)

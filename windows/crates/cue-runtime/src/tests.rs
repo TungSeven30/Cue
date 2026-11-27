@@ -3,6 +3,20 @@ use cue_core::translation::wire::HttpRequest;
 use cue_core::translation::HttpResponse;
 use std::sync::mpsc::{channel, Receiver};
 
+#[test]
+fn translation_model_defaults_to_sol_62_when_no_setting_is_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(Settings::load(&dir.path().join("settings.json")).translation_model, "gpt-6.2-sol");
+}
+
+#[test]
+fn settings_keep_the_previously_saved_translation_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(&path, r#"{"translationModel":"gpt-6.1-sol"}"#).unwrap();
+    assert_eq!(Settings::load(&path).snapshot().translation_model, "gpt-6.1-sol");
+}
+
 /// Emits two streamed batches and a resume point, then returns the
 /// transcript; or waits for cancel when `block` is set.
 struct FakeTranscriber {

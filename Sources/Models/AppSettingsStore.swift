@@ -345,19 +345,21 @@ enum AppSettingPresets {
         SettingsPreset(label: "Vietnamese", value: "Vietnamese"),
     ]
 
-    // The provider (OpenAI, Anthropic, Google, OpenRouter, Groq, Cerebras)
-    // is inferred from the model name; each provider uses its own API key
-    // from Settings.
+    // The provider is inferred from the model name; each cloud provider
+    // uses its own API key from Settings.
     static let translationModels: [SettingsPreset] = [
-        SettingsPreset(label: "GPT-6 Astra", value: "gpt-6-astra"),
-        SettingsPreset(label: "GPT-6.1 Sol", value: "gpt-6.1-sol"),
+        SettingsPreset(label: "GPT-6.2 Astra", value: "gpt-6.2-astra"),
+        SettingsPreset(label: "GPT-6.2 Sol", value: "gpt-6.2-sol"),
         SettingsPreset(label: "GPT-6.1 Terra", value: "gpt-6.1-terra"),
         SettingsPreset(label: "GPT-6 Luna", value: "gpt-6-luna"),
-        SettingsPreset(label: "Claude Fable 5.1", value: "claude-fable-5-1"),
+        SettingsPreset(label: "Claude Fable 5.2", value: "claude-fable-5-2"),
         SettingsPreset(label: "Claude Opus 5.5", value: "claude-opus-5-5"),
         SettingsPreset(label: "Claude Sonnet 5.5", value: "claude-sonnet-5-5"),
         SettingsPreset(label: "Claude Haiku 5.5", value: "claude-haiku-5-5"),
+        SettingsPreset(label: "Gemini 4 Carbon", value: "gemini-4-carbon"),
+        SettingsPreset(label: "Gemini 4 Neon", value: "gemini-4-neon"),
         SettingsPreset(label: "Gemini 4 Argon", value: "gemini-4-argon"),
+        SettingsPreset(label: "Gemini 4 Hydrogen", value: "gemini-4-hydrogen"),
         SettingsPreset(label: "Gemini 3.8 Flash", value: "gemini-3.8-flash"),
         SettingsPreset(label: "Gemini 3.5 Flash-Lite", value: "gemini-3.5-flash-lite"),
         SettingsPreset(label: "Groq: GPT-OSS 120B", value: "groq/openai/gpt-oss-120b"),
@@ -369,6 +371,9 @@ enum AppSettingPresets {
         SettingsPreset(label: "OpenRouter: Qwen 3.8 Max", value: "openrouter/qwen/qwen3.8-max"),
         SettingsPreset(label: "OpenRouter: Qwen 3.8 Flash", value: "openrouter/qwen/qwen3.8-flash"),
         SettingsPreset(label: "OpenRouter: Qwen 3.7 Flash", value: "openrouter/qwen/qwen3.7-flash"),
+        SettingsPreset(label: "Nous: Hermes 4.3-36B", value: "nous/Hermes-4.3-36B"),
+        SettingsPreset(label: "Nous: Hermes 4-70B", value: "nous/Hermes-4-70B"),
+        SettingsPreset(label: "Nous: Hermes 4-405B", value: "nous/Hermes-4-405B"),
     ]
 
     static let summaryModels: [SettingsPreset] =
@@ -411,13 +416,14 @@ final class AppSettingsStore: ObservableObject {
         }
     }
     /// The translation model. Despite the name (kept for stored-settings
-    /// compatibility) it can be an OpenAI, Anthropic, Google, OpenRouter,
-    /// Groq, or Cerebras model; the provider is inferred from the model name.
+    /// compatibility) it can be any supported cloud or local model; the
+    /// provider is inferred from the model name.
     @Published var openAIModel: String { didSet { save() } }
     @Published var openAIAPIKey: String { didSet { save() } }
     @Published var anthropicAPIKey: String { didSet { save() } }
     @Published var googleAPIKey: String { didSet { save() } }
     @Published var openRouterAPIKey: String { didSet { save() } }
+    @Published var nousAPIKey: String { didSet { save() } }
     @Published var groqAPIKey: String { didSet { save() } }
     @Published var cerebrasAPIKey: String { didSet { save() } }
     @Published var secretPersistenceError: String? = nil
@@ -513,6 +519,7 @@ final class AppSettingsStore: ObservableObject {
     private static let anthropicKeyAccount = "anthropicAPIKey"
     private static let googleKeyAccount = "googleAPIKey"
     private static let openRouterKeyAccount = "openRouterAPIKey"
+    private static let nousKeyAccount = "nousAPIKey"
     private static let groqKeyAccount = "groqAPIKey"
     private static let cerebrasKeyAccount = "cerebrasAPIKey"
     nonisolated static let mlxTurboModel = "mlx-community/whisper-large-v3-turbo"
@@ -550,7 +557,7 @@ final class AppSettingsStore: ObservableObject {
         transcriptionQualityPreset = TranscriptionQualityPreset(rawValue: defaults.string(forKey: "transcriptionQualityPreset") ?? "") ?? .balanced
         sourceLanguage = defaults.string(forKey: "sourceLanguage") ?? "auto"
         qwenContext = defaults.string(forKey: "qwenContext") ?? ""
-        openAIModel = defaults.string(forKey: "openAIModel") ?? "gpt-6.1-sol"
+        openAIModel = defaults.string(forKey: "openAIModel") ?? "gpt-6.2-sol"
         localTranslationEndpoint = defaults.string(forKey: "localTranslationEndpoint") ?? Self.defaultLocalTranslationEndpoint
         translationSourceLanguage = defaults.string(forKey: "translationSourceLanguage") ?? "auto"
         translationTargetLanguage = defaults.string(forKey: "translationTargetLanguage") ?? "English"
@@ -630,6 +637,9 @@ final class AppSettingsStore: ObservableObject {
         let resolvedOpenRouterKey = readSecret(Self.openRouterKeyAccount) ?? ""
         openRouterAPIKey = resolvedOpenRouterKey
         persistedOpenRouterKey = resolvedOpenRouterKey
+        let resolvedNousKey = readSecret(Self.nousKeyAccount) ?? ""
+        nousAPIKey = resolvedNousKey
+        persistedNousKey = resolvedNousKey
         let resolvedGroqKey = readSecret(Self.groqKeyAccount) ?? ""
         groqAPIKey = resolvedGroqKey
         persistedGroqKey = resolvedGroqKey
@@ -650,6 +660,7 @@ final class AppSettingsStore: ObservableObject {
     private var persistedAnthropicKey = ""
     private var persistedGoogleKey = ""
     private var persistedOpenRouterKey = ""
+    private var persistedNousKey = ""
     private var persistedGroqKey = ""
     private var persistedCerebrasKey = ""
 
@@ -690,16 +701,18 @@ final class AppSettingsStore: ObservableObject {
 
     func isModelReady(_ model: String) -> Bool {
         let provider = TranslationProvider.infer(from: model)
+        guard provider.modelValidationIssue(for: model) == nil else { return false }
         switch provider {
         case .local:
             return !localTranslationEndpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case .openai, .anthropic, .google, .openRouter, .groq, .cerebras:
+        case .openai, .anthropic, .google, .openRouter, .nous, .groq, .cerebras:
             return !translationAPIKey(for: provider).isEmpty
         }
     }
 
     func modelReadinessReason(_ model: String) -> String {
         let provider = TranslationProvider.infer(from: model)
+        if let issue = provider.modelValidationIssue(for: model) { return issue }
         if provider == .local {
             return "no local server URL is configured"
         }
@@ -712,11 +725,24 @@ final class AppSettingsStore: ObservableObject {
         case .anthropic: return anthropicAPIKey
         case .google: return googleAPIKey
         case .openRouter: return openRouterAPIKey
+        case .nous: return nousAPIKey
         case .groq: return groqAPIKey
         case .cerebras: return cerebrasAPIKey
         // Local servers need no API key.
         case .local: return ""
         }
+    }
+
+    /// Shared by the app and CLI. Select the key for the model being run,
+    /// which can differ from the global translation choice.
+    func translationCredentials(for model: String) -> TranslationCredentials {
+        let provider = TranslationProvider.infer(from: model)
+        return TranslationCredentials(
+            apiKey: translationAPIKey(for: provider),
+            prompt: translationPrompt,
+            provider: provider,
+            localEndpoint: localTranslationEndpoint
+        )
     }
 
     private func save() {
@@ -781,6 +807,13 @@ final class AppSettingsStore: ObservableObject {
                 persistedOpenRouterKey = openRouterAPIKey
             } else {
                 secretPersistenceError = "The OpenRouter API key could not be saved to Keychain. Cue will retry; the key may be lost if the app quits first."
+            }
+        }
+        if nousAPIKey != persistedNousKey {
+            if writeSecret(nousAPIKey, Self.nousKeyAccount) {
+                persistedNousKey = nousAPIKey
+            } else {
+                secretPersistenceError = "The Nous Portal API key could not be saved to Keychain. Cue will retry; the key may be lost if the app quits first."
             }
         }
         if googleAPIKey != persistedGoogleKey {

@@ -19,7 +19,13 @@ const LANGUAGES = [
 ];
 const TARGETS = ["English", "Vietnamese", "Japanese", "Chinese", "Korean", "Spanish", "French", "German",
   "Portuguese", "Brazilian Portuguese", "Italian", "Russian", "Thai", "Indonesian", "Arabic", "Hindi"];
-const MODELS = ["gpt-6.1-sol", "claude-sonnet-5", "gemini-3-flash", "openrouter/", "groq/", "cerebras/", "local/"];
+const MODELS = [
+  "gpt-6.2-sol", "gpt-6.2-astra",
+  "claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5",
+  "gemini-4-carbon", "gemini-4-neon", "gemini-4-argon", "gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.5-flash-lite",
+  "nous/Hermes-4.3-36B", "nous/Hermes-4-70B", "nous/Hermes-4-405B", "nous/",
+  "openrouter/", "groq/", "cerebras/", "local/",
+];
 
 const state = {
   jobs: new Map(),      // id -> summary

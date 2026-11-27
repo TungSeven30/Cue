@@ -528,6 +528,31 @@ mod tests {
     }
 
     #[test]
+    fn nous_prompt_asks_for_json_and_chat_replies_become_subtitles() {
+        let fake = Fake::new(|_, ids| reply(ids));
+        let options = TranslateOptions::new("nous/Hermes-4-70B", "KEY");
+        let out = Translator::new(&fake).translate(&source(2), &options, &[], &AtomicBool::new(false), &mut |_| {}, &mut |_| {}).unwrap();
+        assert_eq!(out.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(), ["T1", "T2"]);
+        let body: Value = serde_json::from_str(&fake.calls.lock().unwrap()[0].body).unwrap();
+        assert!(body["messages"][0]["content"].as_str().unwrap().contains("Return JSON only"));
+    }
+
+    #[test]
+    fn nous_rejects_chat_replies_with_the_wrong_ids() {
+        let fake = Fake::new(|_, _| reply(&[42]));
+        let options = TranslateOptions::new("nous/Hermes-4-70B", "KEY");
+        let result = Translator::new(&fake).with_backoff_unit(Duration::ZERO).translate(
+            &source(1),
+            &options,
+            &[],
+            &AtomicBool::new(false),
+            &mut |_| {},
+            &mut |_| {},
+        );
+        assert!(matches!(result, Err(TranslationError::ValidationFailed(_))));
+    }
+
+    #[test]
     fn missing_key_fails_before_any_request() {
         let fake = Fake::new(|_, ids| reply(ids));
         let o = TranslateOptions::new("gpt-6.1-sol", "");

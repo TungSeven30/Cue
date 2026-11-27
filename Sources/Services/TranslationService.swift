@@ -14,12 +14,18 @@ enum TranslationProvider: Equatable, Sendable {
     /// model-name prefix; the rest of the name is the catalog id
     /// (e.g. openrouter/qwen/qwen3.8-max).
     case openRouter
+    /// Nous Portal inference. The `nous/` prefix is routing-only; the
+    /// remainder is a case-sensitive native or routed catalog model ID.
+    case nous
     /// GroqCloud's OpenAI-compatible inference API. Selected by the "groq/"
     /// model-name prefix (e.g. groq/openai/gpt-oss-120b).
     case groq
     /// Cerebras Inference's OpenAI-compatible API. Selected by the
     /// "cerebras/" model-name prefix (e.g. cerebras/gpt-oss-120b).
     case cerebras
+
+    static let nousPrefix = "nous/"
+    static let nousExample = "nous/Hermes-4.3-36B"
 
     static func infer(from model: String) -> TranslationProvider {
         let normalized = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -34,6 +40,9 @@ enum TranslationProvider: Equatable, Sendable {
         }
         if normalized.hasPrefix("openrouter/") {
             return .openRouter
+        }
+        if normalized.hasPrefix(nousPrefix) {
+            return .nous
         }
         if normalized.hasPrefix("groq/") {
             return .groq
@@ -51,9 +60,17 @@ enum TranslationProvider: Equatable, Sendable {
         case .google: return "Google"
         case .local: return "Local server"
         case .openRouter: return "OpenRouter"
+        case .nous: return "Nous Portal"
         case .groq: return "Groq"
         case .cerebras: return "Cerebras"
         }
+    }
+
+    func modelValidationIssue(for model: String) -> String? {
+        guard self == .nous,
+            model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == Self.nousPrefix
+        else { return nil }
+        return "a \(label) model ID is required after the \(Self.nousPrefix) prefix"
     }
 }
 
@@ -638,8 +655,8 @@ struct TranslationService: Sendable {
         }
     }
 
-    /// Builds the provider-specific HTTP request. All providers receive
-    /// the same system prompt, user text, and JSON schema for the reply.
+    /// Builds a request with the system prompt and user text, plus a JSON
+    /// schema for providers that support structured output.
     /// Internal (not private) so the request building can be unit-tested.
     static func makeRequest(
         provider: TranslationProvider,
@@ -743,7 +760,7 @@ struct TranslationService: Sendable {
                 schema: schema,
                 maxTokens: outputBudget
             )
-        case .openRouter, .groq, .cerebras:
+        case .openRouter, .nous, .groq, .cerebras:
             let url: URL
             let prefix: String
             let example: String
@@ -758,6 +775,10 @@ struct TranslationService: Sendable {
                     ("HTTP-Referer", "https://github.com/TungSeven30/Cue"),
                     ("X-Title", "Cue"),
                 ]
+            } else if provider == .nous {
+                url = URL(string: "https://inference-api.nousresearch.com/v1/chat/completions")!
+                prefix = TranslationProvider.nousPrefix
+                example = TranslationProvider.nousExample
             } else if provider == .groq {
                 url = URL(string: "https://api.groq.com/openai/v1/chat/completions")!
                 prefix = "groq/"
@@ -786,7 +807,10 @@ struct TranslationService: Sendable {
                 userText: userText,
                 schemaName: schemaName,
                 schema: schema,
-                maxTokens: outputBudget
+                maxTokens: outputBudget,
+                // Native Hermes does not document response_format. Both
+                // prompts ask for JSON and we validate the reply locally.
+                includeResponseFormat: provider != .nous
             )
         }
         request.httpMethod = "POST"
@@ -803,7 +827,8 @@ struct TranslationService: Sendable {
         userText: String,
         schemaName: String,
         schema: JSONValue,
-        maxTokens: Int
+        maxTokens: Int,
+        includeResponseFormat: Bool = true
     ) throws -> Data {
         try JSONEncoder().encode(
             ChatCompletionsRequest(
@@ -812,10 +837,11 @@ struct TranslationService: Sendable {
                     .init(role: "system", content: systemPrompt),
                     .init(role: "user", content: userText),
                 ],
-                response_format: .init(
-                    type: "json_schema",
-                    json_schema: .init(name: schemaName, strict: true, schema: schema)
-                ),
+                response_format: includeResponseFormat
+                    ? .init(
+                        type: "json_schema",
+                        json_schema: .init(name: schemaName, strict: true, schema: schema)
+                    ) : nil,
                 max_tokens: maxTokens,
                 stream: false
             )
@@ -866,7 +892,7 @@ struct TranslationService: Sendable {
                 )
             }
             return decoded.outputText
-        case .local, .openRouter, .groq, .cerebras:
+        case .local, .openRouter, .nous, .groq, .cerebras:
             let decoded = try JSONDecoder().decode(ChatCompletionsEnvelope.self, from: data)
             guard let choice = decoded.choices?.first else {
                 // Some local servers (LM Studio among them) report errors as a
@@ -876,7 +902,7 @@ struct TranslationService: Sendable {
                 if let message = body?["error"] as? String
                     ?? (body?["error"] as? [String: Any])?["message"] as? String
                 {
-                    throw TranslationServiceError.apiError("Local server error: \(message)")
+                    throw TranslationServiceError.apiError("\(provider.label) error: \(message)")
                 }
                 throw TranslationServiceError.invalidResponse
             }
@@ -980,8 +1006,8 @@ struct TranslationService: Sendable {
             if sizeHints.contains(where: lowered.contains) {
                 return .responseTooLarge("\(name) rejected the request as too large (400): \(message ?? "request too large").")
             }
-            return .fatalAPIError(
-                "\(name) rejected the request (400): \(message ?? "invalid request"). Check the model in Settings supports structured JSON output.")
+            let advice = provider == .nous ? "" : " Check the model in Settings supports structured JSON output."
+            return .fatalAPIError("\(name) rejected the request (400): \(message ?? "invalid request").\(advice)")
         }
         if let message {
             return .apiError("\(name) error (\(statusCode)): \(message)")
@@ -1242,7 +1268,7 @@ private struct AnthropicResponseEnvelope: Decodable {
     }
 }
 
-// MARK: - Local OpenAI-compatible chat-completions types
+// MARK: - OpenAI-compatible chat-completions types
 
 private struct ChatCompletionsRequest: Encodable {
     struct Message: Encodable {
@@ -1261,7 +1287,7 @@ private struct ChatCompletionsRequest: Encodable {
 
     let model: String
     let messages: [Message]
-    let response_format: ResponseFormat
+    let response_format: ResponseFormat?
     let max_tokens: Int
     let stream: Bool
 }

@@ -140,6 +140,7 @@ struct SettingsPaneTests {
         #expect(ProviderModelPicker.label(for: "claude-opus-5") == "Anthropic model")
         #expect(ProviderModelPicker.label(for: "gemini-3-pro") == "Google model")
         #expect(ProviderModelPicker.label(for: "openrouter/qwen/qwen3.8-max") == "OpenRouter model")
+        #expect(ProviderModelPicker.label(for: "nous/Hermes-4.3-36B") == "Nous Portal model")
         #expect(ProviderModelPicker.label(for: "groq/openai/gpt-oss-120b") == "Groq model")
         #expect(ProviderModelPicker.label(for: "cerebras/gpt-oss-120b") == "Cerebras model")
         #expect(ProviderModelPicker.label(for: "local/qwen3-30b") == "Local server (LM Studio / Ollama)")

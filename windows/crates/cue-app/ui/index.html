@@ -121,7 +121,7 @@
         <fieldset>
           <legend>Translation</legend>
           <label>Model <input id="s-tmodel" list="translation-models"></label>
-          <p class="hint">The name picks the provider: claude-… is Anthropic, gemini-… is Google, openrouter/, groq/, cerebras/ and local/ route by prefix, anything else is OpenAI.</p>
+          <p class="hint">The model name picks the provider: claude-… is Anthropic, gemini-… is Google, and nous/… uses Nous Portal directly with a separate API key. openrouter/, groq/, cerebras/, and local/ route by prefix. Other names use OpenAI.</p>
           <label>Translate to <input id="s-target" list="target-languages"></label>
           <label>Source language <input id="s-tsource" placeholder="auto"></label>
           <label>Request size

@@ -44,6 +44,28 @@ struct CLIArgumentsTests {
         #expect(arguments.input == "clip.cue.json")
     }
 
+    @Test @MainActor func explicitNousModelUsesItsKeychainCredentialEvenWhenDefaultModelUsesOpenRouter() throws {
+        let model = "nous/Vendor/Hermes-4.3-36B"
+        let arguments = try #require(try CLIArguments.parse(["translate", "clip.cue.json", "--translation-model", model]))
+        let domain = "test-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let settings = AppSettingsStore(
+            defaults: defaults,
+            readSecret: { account in
+                ["nousAPIKey": "fixture-nous", "openRouterAPIKey": "fixture-openrouter"][account]
+            }, writeSecret: { _, _ in true })
+        settings.openAIModel = "openrouter/qwen/qwen3.8-max"
+
+        let runner = CLIRunner(arguments: arguments, settings: settings, console: CLIConsole(isJSON: false, isQuiet: true))
+        let snapshot = try runner.resolvedSnapshot()
+        #expect(snapshot.openAIModel == model)
+        let credentials = settings.translationCredentials(for: snapshot.openAIModel)
+        #expect(credentials.provider.label == "Nous Portal")
+        #expect(credentials.apiKey == "fixture-nous")
+        #expect(settings.currentTranslationAPIKey == "fixture-openrouter")
+    }
+
     @Test func optionAtTheEndWithoutAValueIsAUsageError() {
         #expect(throws: CLIArgumentError.missingValue("--to")) {
             _ = try CLIArguments.parse(["translate", "clip.cue.json", "--to"])

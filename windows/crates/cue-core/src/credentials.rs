@@ -23,6 +23,7 @@ fn env_names(provider: Provider) -> &'static [&'static str] {
         Provider::Anthropic => &["CUE_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"],
         Provider::Google => &["CUE_GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"],
         Provider::OpenRouter => &["CUE_OPENROUTER_API_KEY", "OPENROUTER_API_KEY"],
+        Provider::Nous => &["CUE_NOUS_API_KEY", "NOUS_API_KEY"],
         Provider::Groq => &["CUE_GROQ_API_KEY", "GROQ_API_KEY"],
         Provider::Cerebras => &["CUE_CEREBRAS_API_KEY", "CEREBRAS_API_KEY"],
         Provider::Local => &[],
@@ -150,6 +151,13 @@ mod tests {
         assert_eq!(lookup(Provider::Groq), Some(("cue".into(), KeySource::Environment("CUE_GROQ_API_KEY"))));
         std::env::remove_var("CUE_GROQ_API_KEY");
         std::env::remove_var("GROQ_API_KEY");
+    }
+
+    #[test]
+    fn nous_has_a_separate_credential_target_and_ordered_environment_names() {
+        let provider = Provider::infer("nous/Hermes-4-70B");
+        assert_eq!(target_name(provider), "Cue/nous");
+        assert_eq!(env_names(provider), &["CUE_NOUS_API_KEY", "NOUS_API_KEY"]);
     }
 
     #[test]

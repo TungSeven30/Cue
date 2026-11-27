@@ -236,15 +236,8 @@ struct ProviderModelPicker: View {
     }
 
     static func label(for model: String) -> String {
-        switch TranslationProvider.infer(from: model) {
-        case .openai: return "OpenAI model"
-        case .anthropic: return "Anthropic model"
-        case .google: return "Google model"
-        case .local: return "Local server (LM Studio / Ollama)"
-        case .openRouter: return "OpenRouter model"
-        case .groq: return "Groq model"
-        case .cerebras: return "Cerebras model"
-        }
+        let provider = TranslationProvider.infer(from: model)
+        return provider == .local ? "Local server (LM Studio / Ollama)" : "\(provider.label) model"
     }
 }
 

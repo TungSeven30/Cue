@@ -3,6 +3,15 @@
 Notable changes per release. `script/release.sh <version>` requires a section
 here for the version being released and uses it as the GitHub release notes.
 
+## Unreleased
+
+- Updated subtitle translation presets on macOS and Windows with GPT-6.2
+  Astra and Sol, Claude Fable 5.2 and the Claude 5.5 lineup, and Gemini 4
+  Carbon, Neon, Argon, and Hydrogen. GPT-6.2 Sol is the default for new
+  settings; existing selections are unchanged.
+- Added Hermes models through Nous Portal as a separate provider. Use a
+  `nous/…` model with a Nous Portal key, or keep using OpenRouter as before.
+
 ## 2.9.1 — 2026-10-30
 
 - **Current cloud models in the model picker.** OpenAI: GPT-6 Astra, GPT-6.1

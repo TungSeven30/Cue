@@ -237,6 +237,7 @@ final class AppModel: ObservableObject {
             self.settings.$anthropicAPIKey.dropFirst().removeDuplicates().map { _ in () },
             self.settings.$googleAPIKey.dropFirst().removeDuplicates().map { _ in () },
             self.settings.$openRouterAPIKey.dropFirst().removeDuplicates().map { _ in () },
+            self.settings.$nousAPIKey.dropFirst().removeDuplicates().map { _ in () },
             self.settings.$groqAPIKey.dropFirst().removeDuplicates().map { _ in () },
             self.settings.$cerebrasAPIKey.dropFirst().removeDuplicates().map { _ in () }
         )
@@ -2228,7 +2229,7 @@ final class AppModel: ObservableObject {
         let willTranslate = autoTranslate && settings.isModelReady(resolved.openAIModel)
         if willTranslate {
             // Fresh per run, never persisted onto the job.
-            let credentials = makeCredentials(for: resolved.openAIModel)
+            let credentials = settings.translationCredentials(for: resolved.openAIModel)
             let overlapAllowed = credentials.provider != .local
             drivers[jobID] = ProgressiveTranslationDriver(
                 chunkSize: resolved.translationChunkMode.chunkSize,
@@ -2512,7 +2513,7 @@ final class AppModel: ObservableObject {
                     segments: segments,
                     sourceLanguage: resolved.sourceLanguage,
                     settings: resolved,
-                    credentials: makeCredentials(for: resolved.openAIModel),
+                    credentials: settings.translationCredentials(for: resolved.openAIModel),
                     existingTranslations: existingTranslations
                 ) { [weak self] progress in
                     self?.updateProgress(progress, for: jobID)
@@ -3416,18 +3417,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Secrets + prompt matched to one explicit model. Built fresh per run;
-    /// never stored on the job.
-    private func makeCredentials(for model: String) -> TranslationCredentials {
-        let provider = TranslationProvider.infer(from: model)
-        return TranslationCredentials(
-            apiKey: settings.translationAPIKey(for: provider),
-            prompt: settings.translationPrompt,
-            provider: provider,
-            localEndpoint: settings.localTranslationEndpoint
-        )
-    }
-
     private func makeSummaryConfigurations() -> (
         primary: SummaryModelConfiguration,
         fallback: SummaryModelConfiguration?
@@ -3435,10 +3424,10 @@ final class AppModel: ObservableObject {
         let primaryModel = settings.resolvedSummaryModel
         let primary = SummaryModelConfiguration(
             model: primaryModel,
-            credentials: makeCredentials(for: primaryModel)
+            credentials: settings.translationCredentials(for: primaryModel)
         )
         let fallback = settings.resolvedSummaryFallbackModel.map { model in
-            SummaryModelConfiguration(model: model, credentials: makeCredentials(for: model))
+            SummaryModelConfiguration(model: model, credentials: settings.translationCredentials(for: model))
         }
         return (primary, fallback)
     }
